@@ -38,6 +38,8 @@
 
 Для живого примера того, как сейчас выглядит SDXL-папка на телефоне после деплоя, см. [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
 
+Для практических подводных камней и накопленных технических заметок см. [`SDXL/LESSONS_LEARNED.md`](SDXL/LESSONS_LEARNED.md) и русскую версию [`SDXL/LESSONS_LEARNED_RU.md`](SDXL/LESSONS_LEARNED_RU.md).
+
 ## Требования для текущего SDXL pipeline
 
 ### Телефон
@@ -97,6 +99,7 @@ python scripts/download_adb.py
 ### 2. Сборка pipeline
 
 > **Примечание:** `scripts/build_all.py` сейчас автоматизирует только ранние воспроизводимые шаги и специально **не** запускает вслепую все поздние QNN/deploy-стадии, пока они перепроверяются.
+> **Важно про набор скриптов:** не все файлы в `SDXL/` нужны для кратчайшего happy-path. Часть из них — это верификация, калибровка, профилирование и workaround'и для QAIRT/QNN.
 
 ```bash
 # Экспериментальный помощник для ранних SDXL-этапов
@@ -213,7 +216,8 @@ python SDXL/generate.py "cat on windowsill, masterpiece" --seed 42
 │   ├── assess_generated_image.py
 │   ├── verify_clip_vae_onnx.py
 │   ├── verify_e2e_onnx.py
-│   └── LESSONS_LEARNED.md    ← подводные камни и решения
+│   ├── LESSONS_LEARNED.md    ← подводные камни и решения
+│   └── LESSONS_LEARNED_RU.md ← русская версия lessons learned
 └── APK/                      ← Android-приложение
     ├── README.md
     └── app/src/main/

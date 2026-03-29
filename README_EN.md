@@ -38,6 +38,8 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 For a live example of what a deployed phone-side SDXL directory currently looks like, see [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
 
+For accumulated technical pitfalls and implementation notes, see [`SDXL/LESSONS_LEARNED.md`](SDXL/LESSONS_LEARNED.md) and the Russian counterpart [`SDXL/LESSONS_LEARNED_RU.md`](SDXL/LESSONS_LEARNED_RU.md).
+
 ## Requirements for the current SDXL pipeline
 
 ### Phone
@@ -97,6 +99,7 @@ python scripts/download_adb.py
 ### 2. Build pipeline
 
 > **Note:** `scripts/build_all.py` currently automates only the earlier repeatable stages and intentionally does **not** blindly run every later QNN/deploy step while those scripts are being re-validated.
+> **Script-scope note:** not every file under `SDXL/` is required for the shortest public happy-path. Some of them are verification, calibration, profiling, or QAIRT/QNN workaround helpers.
 
 ```bash
 # Experimental helper for the early SDXL stages
@@ -213,7 +216,8 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 │   ├── assess_generated_image.py
 │   ├── verify_clip_vae_onnx.py
 │   ├── verify_e2e_onnx.py
-│   └── LESSONS_LEARNED.md    ← Pitfalls and solutions
+│   ├── LESSONS_LEARNED.md    ← Pitfalls and solutions
+│   └── LESSONS_LEARNED_RU.md ← Russian lessons-learned counterpart
 └── APK/                      ← Android application
     ├── README.md
     └── app/src/main/
