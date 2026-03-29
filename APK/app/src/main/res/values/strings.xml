@@ -8,6 +8,8 @@
     <string name="seed_hint">Seed (пусто = случайный)</string>
     <string name="save">Сохранить в галерею</string>
     <string name="contrast_stretch">Коррекция яркости (VAE)</string>
+    <string name="live_preview">Live Preview (TAESD)</string>
+    <string name="status_preview" formatted="false">Preview step %d/%d…</string>
     <string name="status_idle">Готово к генерации</string>
     <string name="status_clip">CLIP encoding…</string>
     <string name="status_unet" formatted="false">UNet denoising (%d/%d)…</string>
@@ -22,5 +24,5 @@
     <string name="settings_verify">Проверить файлы</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_reset">Сброс</string>
-    <string name="settings_structure_info">Структура папки моделей:\n/context/\n  clip_l.serialized.bin.bin\n  clip_g.serialized.bin.bin\n  unet_encoder_fp16.serialized.bin.bin\n  unet_decoder_fp16.serialized.bin.bin\n  vae_decoder.serialized.bin.bin\n/phone_gen/\n  generate.py\n  tokenizer/vocab.json\n  tokenizer/merges.txt\n/lib/ (QNN runtime)\n/bin/ (qnn-net-run)</string>
+    <string name="settings_structure_info">Структура папки моделей:\n/context/\n  clip_l.serialized.bin.bin\n  clip_g.serialized.bin.bin\n  unet_encoder_fp16.serialized.bin.bin\n  unet_decoder_fp16.serialized.bin.bin\n  vae_decoder.serialized.bin.bin\n  taesd_decoder.serialized.bin.bin (optional, Live Preview)\n/phone_gen/\n  generate.py\n  tokenizer/vocab.json\n  tokenizer/merges.txt\n/lib/ (QNN runtime)\n/bin/ (qnn-net-run)</string>
 </resources>

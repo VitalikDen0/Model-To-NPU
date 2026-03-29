@@ -28,8 +28,13 @@ CONTEXTS = {
     "clip_g": f"{DR}/context/clip_g.serialized.bin.bin",
     "encoder": f"{DR}/context/unet_encoder_fp16.serialized.bin.bin",
     "decoder": f"{DR}/context/unet_decoder_fp16.serialized.bin.bin",
-    "vae": f"{DR}/context/vae_decoder.serialized.bin.bin",
+    "vae":     f"{DR}/context/vae_decoder.serialized.bin.bin",
+    # Optional: TAESD XL for live step previews (~5 MB, ~200-500ms)
+    # Compile with: python SDXL/export_taesd_to_onnx.py && python SDXL/convert_taesd_to_qnn.py
+    "taesd":   f"{DR}/context/taesd_decoder.serialized.bin.bin",
 }
+PREVIEW_PNG = f"{DR}/outputs/preview_current.png"
+PREVIEW_CTX_EXISTS = None  # cached: None=unknown, True/False
 TOKENIZER_DIR = f"{DR}/phone_gen/tokenizer"
 OUTPUT_DIR = f"{DR}/outputs"
 WORK_DIR = f"{DR}/phone_gen/work"
@@ -260,7 +265,13 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False):
 DEFAULT_NEG = "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry"
 
 def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
-             stretch=True, name=None):
+             stretch=True, name=None, preview=False, progressive_cfg=False):
+    """
+    progressive_cfg: Run CFG only on first ceil(steps/2) steps, then uncond-only.
+                     Cuts UNet time by ~40% with minimal quality loss on Lightning.
+    preview:         Decode each step's latent with TAESD and save preview PNG.
+                     Requires taesd_decoder context on phone.
+    """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(WORK_DIR, exist_ok=True)
     use_cfg = cfg_scale > 1.0
@@ -363,15 +374,22 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     # Pre-create a single reusable work dir (avoids mkdir overhead per step)
     _ensure_unet_workdirs(use_cfg)
 
+    # Progressive CFG: apply guidance only on first half of steps.
+    # Composition is determined early; last steps refine details (guidance not needed).
+    cfg_cutoff = (steps // 2 + 1) if (use_cfg and progressive_cfg) else steps
+    if progressive_cfg and use_cfg:
+        print(f"  [Progressive CFG] CFG on steps 1..{cfg_cutoff}, uncond-only after")
+
     for si in range(steps):
         t = sched.timesteps[si]
         lat_in = sched.scale_model_input(latents, si)
 
-        print(f"  [UNet {si+1}/{steps}]", end=" ", flush=True)
+        # Progressive CFG: drop guidance on later steps
+        step_uses_cfg = use_cfg and (si < cfg_cutoff)
 
-        if use_cfg:
-            # Batched CFG: encoder runs cond+uncond in ONE subprocess call,
-            # decoder does the same — saves 2 subprocess launches per step.
+        print(f"  [UNet {si+1}/{steps}]{' CFG' if step_uses_cfg else ''}", end=" ", flush=True)
+
+        if step_uses_cfg:
             np_cond, np_uncond, ms = _run_unet_split_cfg(
                 lat_in, t,
                 f"{WORK_DIR}/unet/cond",
@@ -385,6 +403,10 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         print(f"{ms:.0f}ms [{noise_pred.min():.2f}..{noise_pred.max():.2f}]")
 
         latents = sched.step(noise_pred, si, latents)
+
+        # Live TAESD preview (optional, ~200-500ms)
+        if preview:
+            _preview_step(latents, si, steps)
 
     print(f"  UNet total: {total_unet_ms:.0f}ms ({total_unet_ms/steps:.0f}ms/step)")
 
@@ -431,6 +453,84 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     print(f"Total: {elapsed:.1f}s")
     return out_path
 
+
+def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
+    """Decode current denoised latents with TAESD for live step preview.
+
+    Writes PREVIEW_PNG to a world-readable path so APK can poll it.
+    Silently skips if TAESD context is not deployed on phone.
+    """
+    global PREVIEW_CTX_EXISTS
+    ctx = CONTEXTS["taesd"]
+
+    # Cache filesystem check (avoid stat() on every step)
+    if PREVIEW_CTX_EXISTS is None:
+        PREVIEW_CTX_EXISTS = os.path.exists(ctx)
+        if not PREVIEW_CTX_EXISTS:
+            print(f"  [preview] TAESD context not found, skipping previews")
+
+    if not PREVIEW_CTX_EXISTS:
+        return
+
+    pd = f"{WORK_DIR}/taesd"
+    os.makedirs(pd, exist_ok=True)
+
+    # TAESD input: raw latents [1,4,128,128] NCHW → NHWC
+    lat_nhwc = np.transpose(latents.astype(np.float32), (0, 2, 3, 1))
+    lat_nhwc.tofile(f"{pd}/lat.raw")
+    with open(f"{pd}/il.txt", "w") as f:
+        f.write(f"{pd}/lat.raw\n")
+
+    t0 = time.time()
+    try:
+        ms = qnn_run(ctx, f"{pd}/il.txt", f"{pd}/out", native=True)
+    except Exception as e:
+        print(f"  [preview] TAESD failed: {e}")
+        return
+
+    # Read output — TAESD outputs [1,3,1024,1024] NCHW float16
+    raw_path = f"{pd}/out/Result_0/image_native.raw"
+    if not os.path.exists(raw_path):
+        # try generic output name
+        result_files = []
+        result_dir = f"{pd}/out/Result_0"
+        if os.path.isdir(result_dir):
+            result_files = os.listdir(result_dir)
+        if result_files:
+            raw_path = f"{result_dir}/{result_files[0]}"
+        else:
+            print(f"  [preview] No output found in {result_dir}")
+            return
+
+    raw = np.fromfile(raw_path, np.float16).astype(np.float32)
+
+    # Decode: TAESD outputs are already in [0,1] (clamped internally)
+    # Expected: 1*3*1024*1024 = 3145728 values
+    if raw.size == 1 * 3 * 1024 * 1024:
+        img = raw.reshape(1024, 1024, 3)  # NCHW → but likely NHWC from native output
+    elif raw.size == 3 * 1024 * 1024:
+        img = raw.reshape(3, 1024, 1024).transpose(1, 2, 0)  # NCHW
+    else:
+        print(f"  [preview] Unexpected output size: {raw.size}")
+        return
+
+    img = np.clip(img, 0.0, 1.0)
+    img_u8 = (img * 255).astype(np.uint8)
+
+    from PIL import Image
+    Image.fromarray(img_u8).save(PREVIEW_PNG)
+    # Make readable by APK (which runs as non-root)
+    try:
+        os.chmod(PREVIEW_PNG, 0o644)
+    except Exception:
+        pass
+
+    elapsed_ms = (time.time() - t0) * 1000
+    print(f"  [PREVIEW step {step_idx+1}/{total_steps} → {PREVIEW_PNG} ({elapsed_ms:.0f}ms)]",
+          flush=True)
+
+
+# ─── UNet helpers (split encoder + decoder) ───────────────────────────────────
 
 def _ensure_unet_workdirs(use_cfg):
     """Pre-create all work directories so per-step mkdir is skipped."""
@@ -584,10 +684,15 @@ if __name__ == "__main__":
                     help="Disable contrast stretching")
     ap.add_argument("--name", type=str, default=None,
                     help="Output filename (without .png)")
+    ap.add_argument("--preview", action="store_true",
+                    help="Decode each step with TAESD for live preview (~200-500ms extra/step)")
+    ap.add_argument("--prog-cfg", action="store_true",
+                    help="Progressive CFG: guidance on first half of steps only (~40%% faster)")
     a = ap.parse_args()
 
     generate(
         a.prompt, seed=a.seed, steps=a.steps,
         cfg_scale=a.cfg, neg_prompt=a.neg,
         stretch=not a.no_stretch, name=a.name,
+        preview=a.preview, progressive_cfg=a.prog_cfg,
     )

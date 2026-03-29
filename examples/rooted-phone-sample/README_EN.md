@@ -9,3 +9,5 @@ For the full description, see:
 - Russian version: [`README_RU.md`](README_RU.md)
 - rooted layout overview: [`../phone-sdxl-qnn-layout.md`](../phone-sdxl-qnn-layout.md)
 - rooted layout overview (RU): [`../phone-sdxl-qnn-layout_RU.md`](../phone-sdxl-qnn-layout_RU.md)
+
+This rooted sample now also includes the tiny optional TAESD preview context used by APK `v0.1.1` live preview.

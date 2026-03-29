@@ -105,14 +105,30 @@
                 android:progress="35" />
         </LinearLayout>
 
-        <!-- Contrast stretch -->
-        <CheckBox
-            android:id="@+id/contrastStretch"
-            android:layout_width="wrap_content"
+        <!-- Contrast stretch + Live preview row -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/contrast_stretch"
-            android:checked="true" />
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <CheckBox
+                android:id="@+id/contrastStretch"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/contrast_stretch"
+                android:checked="true" />
+
+            <CheckBox
+                android:id="@+id/livePreview"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/live_preview"
+                android:checked="false" />
+
+        </LinearLayout>
 
         <!-- Generate / Stop buttons -->
         <LinearLayout

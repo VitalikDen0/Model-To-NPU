@@ -5,6 +5,7 @@
 *.onnx_data
 *.so
 *.serialized.bin.bin
+!examples/rooted-phone-sample/context/taesd_decoder.serialized.bin.bin
 diffusers_pipeline/
 unet_lightning8step_merged/
 

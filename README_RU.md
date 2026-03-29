@@ -26,6 +26,8 @@
 
 **Текущее протестированное сочетание:** [WAI Illustrious SDXL v1.60](https://civitai.com/models/827184/wai-illustrious-sdxl?modelVersionId=2514310) + [SDXL-Lightning 8-step LoRA](https://huggingface.co/ByteDance/SDXL-Lightning) (ByteDance)
 
+> **Важно по скорости:** публичные тайминги, APK-скриншоты и примеры изображений в этом репозитории предполагают, что **Lightning LoRA уже замержена в UNet**. Это не просто косметический шаг: именно так устроен практический быстрый путь здесь. Если запускать базовую ветку SDXL без merge Lightning LoRA, на телефоне всё получается заметно медленнее, и сравнивать такие прогоны с цифрами ниже уже некорректно.
+> **Важно по разрешению:** текущие экспорты, context binaries, preview и примеры в документации рассчитаны именно на **1024×1024**.
 > **Важно:** структура репозитория уже делается шире SDXL, но фактически проверенный pipeline здесь пока SDXL-first.
 
 ## Текущий статус
@@ -140,6 +142,19 @@ python SDXL/convert_lightning_to_qnn.py
 python SDXL/build_android_model_lib_windows.py
 ```
 
+Дополнительный путь для live preview в APK / phone runtime:
+
+```bash
+# Экспорт tiny TAESD XL preview decoder
+python SDXL/export_taesd_to_onnx.py --validate
+
+# Конвертация в QNN / Android-артефакты
+python SDXL/convert_taesd_to_qnn.py
+
+# Затем выполнить напечатанный phone-side ctxgen-шаг и задеплоить
+# taesd_decoder.serialized.bin.bin рядом с основными SDXL context binaries.
+```
+
 ### 3. Деплой на телефон
 
 ```bash
@@ -178,6 +193,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, сохранение в галерею.  
+В `v0.1.1` APK также появился опциональный переключатель **Live Preview (TAESD)**, который показывает промежуточные preview во время денойзинга, если на телефоне задеплоен `taesd_decoder.serialized.bin.bin`.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)
@@ -225,6 +241,8 @@ python SDXL/generate.py "cat on windowsill, masterpiece" --seed 42
 │   ├── export_sdxl_to_onnx.py
 │   ├── convert_clip_vae_to_qnn.py
 │   ├── convert_lightning_to_qnn.py
+│   ├── export_taesd_to_onnx.py
+│   ├── convert_taesd_to_qnn.py
 │   ├── build_android_model_lib_windows.py
 │   ├── assess_generated_image.py
 │   ├── verify_clip_vae_onnx.py
@@ -269,7 +287,8 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   └── vae_decoder.serialized.bin.bin     (~151 MB)
+│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
+│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, опциональный live preview)
 ├── phone_gen/
 │   ├── generate.py                        (standalone генератор)
 │   └── tokenizer/
@@ -285,7 +304,9 @@ Prompt ──▶│ CLIP-L ──┐                                            
 ## Ограничения
 
 - **Разрешение фиксировано** 1024×1024 — другие размеры требуют полной переконвертации
+- **Быстрый документированный путь предполагает, что Lightning LoRA уже замержена в UNet** — без этого merge вы фактически уходите в сильно более медленный базовый SDXL path, и тайминги/примеры из репозитория перестают быть репрезентативными
 - **VAE FP16** слегка сжимает цветовой диапазон -> применяется percentile contrast stretching
+- **TAESD live preview опционален** — он нужен только для промежуточных preview и требует отдельный маленький decoder context на телефоне
 - **CFG > 1.0 здесь дорогой** — нужны и conditional, и unconditional предсказания; поскольку runtime использует split UNet (`encoder` + `decoder`), наивный CFG превращает каждый шаг в четыре phone-side запуска UNet-подпроцессов. Текущий runtime уже батчит часть этой работы лучше, чем раньше, но по wall-clock времени это всё равно почти 2× относительно no-CFG пути.
 - **Termux обязателен** — Python runtime для `phone_generate.py`
 - **Для APK на Android 11+ может понадобиться доступ ко всем файлам** — чтобы читать `/sdcard/Download/sdxl_qnn`
