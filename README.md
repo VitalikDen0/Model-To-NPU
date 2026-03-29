@@ -51,7 +51,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 <p align="center">
   <img width="1024" height="1024" alt="SDXL on phone sample 3" src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" width="49%">
 
-  <img width="1024" height="1024" alt="SDXL on phone sample 4" src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" width="49%"><
+  <img width="1024" height="1024" alt="SDXL on phone sample 4" src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" width="49%">
 
 </p>
 
