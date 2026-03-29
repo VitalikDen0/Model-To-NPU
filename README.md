@@ -44,14 +44,14 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 ## Gallery
 
 <p align="center">
-  <img width="1024" height="1024" alt="SDXL on phone sample 1" src="https://github.com/user-attachments/assets/915ef71e-d72b-4fa0-823d-b316289f2041" width="49%">
+  <img width="512" height="512" alt="SDXL on phone sample 1" src="https://github.com/user-attachments/assets/915ef71e-d72b-4fa0-823d-b316289f2041" width="49%">
 
-  <img width="1024" height="1024" alt="SDXL on phone sample 2" src="https://github.com/user-attachments/assets/4bc1ac51-a98e-4931-a3e9-247327e0bbe5" width="49%">
+  <img width="512" height="512" alt="SDXL on phone sample 2" src="https://github.com/user-attachments/assets/4bc1ac51-a98e-4931-a3e9-247327e0bbe5" width="49%">
 </p>
 <p align="center">
-  <img width="1024" height="1024" alt="SDXL on phone sample 3" src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" width="49%">
+  <img width="512" height="512" alt="SDXL on phone sample 3" src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" width="49%">
 
-  <img width="1024" height="1024" alt="SDXL on phone sample 4" src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" width="49%"><
+  <img width="512" height="512" alt="SDXL on phone sample 4" src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" width="49%"><
 
 </p>
 
