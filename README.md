@@ -44,18 +44,22 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 ## Gallery
 
 <p align="center">
-  <img src="1.png" alt="SDXL on phone sample 1" width="49%">
-  <img src="2.png" alt="SDXL on phone sample 2" width="49%">
+  <img width="1024" height="1024" alt="SDXL on phone sample 1" src="https://github.com/user-attachments/assets/915ef71e-d72b-4fa0-823d-b316289f2041" width="49%">
+
+  <img width="1024" height="1024" alt="SDXL on phone sample 2" src="https://github.com/user-attachments/assets/4bc1ac51-a98e-4931-a3e9-247327e0bbe5" width="49%">
 </p>
 <p align="center">
-  <img src="3.png" alt="SDXL on phone sample 3" width="49%">
-  <img src="4.png" alt="SDXL on phone sample 4" width="49%">
+  <img width="1024" height="1024" alt="SDXL on phone sample 3" src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" width="49%">
+
+  <img width="1024" height="1024" alt="SDXL on phone sample 4" src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" width="49%"><
+
 </p>
 
 ## Proof that it actually runs on-device
 
 <p align="center">
-  <img src="5.png" alt="Phone-side proof screenshot" width="88%">
+  <img width="582" height="1280" alt="Phone-side proof screenshot" src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" width="88%">
+
 </p>
 
 ## Why CFG is much slower here
