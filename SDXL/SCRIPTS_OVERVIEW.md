@@ -50,11 +50,13 @@ If you want the shortest useful route through the repository, start with:
 2. `bake_lora_into_unet.py`
 3. `export_clip_vae_to_onnx.py`
 4. `export_sdxl_to_onnx.py`
-5. `scripts/build_all.py`
-6. `scripts/deploy_to_phone.py`
-7. `phone_generate.py`
-8. `README_EN.md`
-9. `SDXL/LESSONS_LEARNED.md`
+5. `export_taesd_to_onnx.py` *(optional live-preview branch)*
+6. `convert_taesd_to_qnn.py` *(optional live-preview branch)*
+7. `scripts/build_all.py`
+8. `scripts/deploy_to_phone.py`
+9. `phone_generate.py`
+10. `README_EN.md`
+11. `SDXL/LESSONS_LEARNED.md`
 
 ## Full Python inventory
 
@@ -68,6 +70,8 @@ If you want the shortest useful route through the repository, start with:
 | `export_sdxl_to_onnx.py` | Exports the UNet and related SDXL components to ONNX. | ✅ Main step |
 | `convert_clip_vae_to_qnn.py` | Converts CLIP/VAE ONNX models into QNN artifacts. | ⚠️ Main but dev/layout-sensitive |
 | `convert_lightning_to_qnn.py` | Converts the Lightning UNet into the QNN model pipeline. | ⚠️ Main but still experimental |
+| `export_taesd_to_onnx.py` | Exports the tiny TAESD XL decoder used for optional live previews on phone / in the APK. | ✅ Optional preview path |
+| `convert_taesd_to_qnn.py` | Converts the TAESD ONNX decoder into QNN / Android artifacts and prints the phone-side ctxgen step. | ✅ Optional preview path |
 | `quantize_unet.py` | Quantizes the UNet (W8A16 / INT8) from calibration data. | ✅ Main technical step |
 | `generate.py` | Host-side generator/orchestrator that drives parts of the pipeline over ADB. | ⚠️ Useful, but not the simplest public entry |
 
@@ -143,6 +147,7 @@ They are not Python, but they matter when reading the full story:
 - `scripts/deploy_to_phone.py`
 - tokenizer + context binaries
 - APK
+- optional TAESD preview decoder/context for `Live Preview (TAESD)`
 
 ### Not the final user-facing path, but active lab infrastructure
 

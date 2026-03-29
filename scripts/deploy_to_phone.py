@@ -24,6 +24,8 @@ CONTEXT_FILES = [
     "clip_l.serialized.bin.bin",
     "clip_g.serialized.bin.bin",
     "vae_decoder.serialized.bin.bin",
+    # Optional tiny preview decoder for APK live previews
+    "taesd_decoder.serialized.bin.bin",
     # Split UNet (FP16)
     "unet_encoder_fp16.serialized.bin.bin",
     "unet_decoder_fp16.serialized.bin.bin",

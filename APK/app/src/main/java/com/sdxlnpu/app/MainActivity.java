@@ -65,6 +65,7 @@ public class MainActivity extends AppCompatActivity {
     private SeekBar cfgSeekBar;
     private TextView cfgLabel;
     private CheckBox contrastStretch;
+    private CheckBox livePreview;
     private MaterialButton generateButton;
     private MaterialButton saveButton;
     private MaterialButton stopButton;
@@ -77,11 +78,14 @@ public class MainActivity extends AppCompatActivity {
     private Handler mainHandler;
     private Bitmap currentBitmap;
     private volatile Process currentProcess;
+    private volatile boolean isGenerating = false;
+    private static final String PREVIEW_PNG_NAME = "preview_current.png";
 
     // Patterns for parsing generate.py stdout
-    private static final Pattern PAT_CLIP = Pattern.compile("\\[CLIP (cond|uncond)\\].*?L=(\\d+)ms G=(\\d+)ms");
-    private static final Pattern PAT_UNET = Pattern.compile("\\[UNet (\\d+)/(\\d+)\\]\\s+(\\d+)ms");
-    private static final Pattern PAT_VAE = Pattern.compile("\\[VAE\\]\\s+(\\d+)ms");
+    private static final Pattern PAT_CLIP  = Pattern.compile("\\[CLIP (cond|uncond)\\].*?L=(\\d+)ms G=(\\d+)ms");
+    private static final Pattern PAT_UNET  = Pattern.compile("\\[UNet (\\d+)/(\\d+)\\].*?(\\d+)ms");
+    private static final Pattern PAT_PREV  = Pattern.compile("\\[PREVIEW step (\\d+)/(\\d+)");
+    private static final Pattern PAT_VAE   = Pattern.compile("\\[VAE\\]\\s+(\\d+)ms");
     private static final Pattern PAT_SAVED = Pattern.compile("Saved:\\s+(.+\\.png)");
     private static final Pattern PAT_TOTAL = Pattern.compile("Total:\\s+([\\d.]+)s");
 
@@ -98,7 +102,8 @@ public class MainActivity extends AppCompatActivity {
         cfgSeekBar = findViewById(R.id.cfgSeekBar);
         cfgLabel = findViewById(R.id.cfgLabel);
         contrastStretch = findViewById(R.id.contrastStretch);
-        generateButton = findViewById(R.id.generateButton);
+        livePreview     = findViewById(R.id.livePreview);
+        generateButton  = findViewById(R.id.generateButton);
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
         progressBar = findViewById(R.id.progressBar);
@@ -210,6 +215,7 @@ public class MainActivity extends AppCompatActivity {
         float cfg = cfgSeekBar.getProgress() / 10f;
         String neg = negPromptInput.getText().toString().trim();
         boolean stretch = contrastStretch.isChecked();
+        boolean preview = livePreview.isChecked();
 
         // Build output name
         String outName = "apk_s" + seed;
@@ -224,7 +230,7 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                runPipeline(prompt, seed, steps, cfg, neg, stretch, outName);
+                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, outName);
             } catch (Exception e) {
                 mainHandler.post(() -> {
                     statusText.setText("Ошибка: " + e.getMessage());
@@ -242,6 +248,7 @@ public class MainActivity extends AppCompatActivity {
             p.destroyForcibly();
             currentProcess = null;
         }
+        isGenerating = false;
         mainHandler.post(() -> {
             statusText.setText("Остановлено");
             generateButton.setEnabled(true);
@@ -259,7 +266,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void runPipeline(String prompt, long seed, int steps,
                              float cfg, String neg, boolean stretch,
-                             String outName) throws IOException, InterruptedException {
+                             boolean preview, String outName)
+            throws IOException, InterruptedException {
         boolean useRootShell = shouldUseRootShell();
         if (!useRootShell && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             throw new IOException("Нет доступа к общей папке Downloads. Выдайте приложению доступ ко всем файлам.");
@@ -290,6 +298,9 @@ public class MainActivity extends AppCompatActivity {
         if (!stretch) {
             script.append(" --no-stretch");
         }
+        if (preview) {
+            script.append(" --preview");
+        }
         script.append(" 2>&1\n");
 
         updateStatus("Запуск...", 2);
@@ -314,6 +325,33 @@ public class MainActivity extends AppCompatActivity {
         StringBuilder rawLog = new StringBuilder();
         String savedPath = null;
         int clipDone = 0;
+
+        // Live preview polling: check for preview_current.png every 2 seconds
+        final String previewPath = OUTPUT_DIR + "/" + PREVIEW_PNG_NAME;
+        final long[] previewLastModified = {0};
+        final Runnable previewPoller = new Runnable() {
+            @Override
+            public void run() {
+                if (!isGenerating) return;
+                File previewFile = new File(previewPath);
+                if (previewFile.exists() && previewFile.lastModified() != previewLastModified[0]) {
+                    previewLastModified[0] = previewFile.lastModified();
+                    Bitmap bm = BitmapFactory.decodeFile(previewPath);
+                    if (bm != null) {
+                        mainHandler.post(() -> imagePreview.setImageBitmap(bm));
+                    }
+                }
+                if (isGenerating) {
+                    mainHandler.postDelayed(this, 2000);
+                }
+            }
+        };
+        isGenerating = true;
+        if (preview) {
+            // Delete stale preview from last run
+            new File(previewPath).delete();
+            mainHandler.postDelayed(previewPoller, 2000);
+        }
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(process.getInputStream()))) {
@@ -382,6 +420,7 @@ public class MainActivity extends AppCompatActivity {
 
         int exitCode = process.waitFor();
         currentProcess = null;
+        isGenerating = false;  // stop preview poller
 
         if (exitCode != 0 && savedPath == null) {
             String hint;

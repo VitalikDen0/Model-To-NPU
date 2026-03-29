@@ -11,6 +11,7 @@ It is meant for **reference, exploration, and educational use** when someone wan
 This sample intentionally includes only **lightweight and illustrative** files:
 
 - selected generated PNG outputs;
+- the tiny optional TAESD preview context: `context/taesd_decoder.serialized.bin.bin`;
 - HTP backend JSON configs;
 - helper shell scripts used during rooted experiments;
 - `phone_gen/generate.py` from the rooted phone-side runtime;
@@ -27,6 +28,8 @@ This folder does **not** redistribute the heavy or sensitive runtime payload:
 - any complete proprietary SDK packages.
 
 Those files are either too large, too environment-specific, or not appropriate to redistribute here.
+
+The only exception is the tiny TAESD preview context, which is small enough to keep as a reference artifact because it powers APK `v0.1.1` live previews.
 
 ## Source model reference
 

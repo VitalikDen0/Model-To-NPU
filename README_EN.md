@@ -26,6 +26,8 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 **Current tested model combination:** [WAI Illustrious SDXL v1.60](https://civitai.com/models/827184/wai-illustrious-sdxl?modelVersionId=2514310) + [SDXL-Lightning 8-step LoRA](https://huggingface.co/ByteDance/SDXL-Lightning) (ByteDance)
 
+> **Performance note:** the public beta timings, APK screenshots, and example outputs in this repository assume the **Lightning LoRA is already baked into the UNet**. That merge is not just a convenience step — it is the practical speed path used here. Running the plain base SDXL branch without the Lightning merge is dramatically slower on-device and should not be compared against the numbers shown below.
+> **Resolution note:** the currently documented exports, context binaries, previews, and example images are built specifically for **1024×1024**.
 > **Scope note:** the repo structure is broader than SDXL, but the actually validated pipeline in this repo is still SDXL-first.
 
 ## Current status
@@ -140,6 +142,19 @@ python SDXL/convert_lightning_to_qnn.py
 python SDXL/build_android_model_lib_windows.py
 ```
 
+Optional live-preview path for the APK / phone runtime:
+
+```bash
+# Export the tiny TAESD XL preview decoder
+python SDXL/export_taesd_to_onnx.py --validate
+
+# Convert it to QNN / Android artifacts
+python SDXL/convert_taesd_to_qnn.py
+
+# Then run the printed phone-side ctxgen step and deploy
+# taesd_decoder.serialized.bin.bin alongside the main SDXL contexts.
+```
+
 ### 3. Deploy to phone
 
 ```bash
@@ -178,6 +193,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, save to gallery.  
+APK `v0.1.1` also adds an optional **Live Preview (TAESD)** toggle that decodes step previews while denoising, as long as `taesd_decoder.serialized.bin.bin` is deployed on the phone.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)
@@ -225,6 +241,8 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 │   ├── export_sdxl_to_onnx.py
 │   ├── convert_clip_vae_to_qnn.py
 │   ├── convert_lightning_to_qnn.py
+│   ├── export_taesd_to_onnx.py
+│   ├── convert_taesd_to_qnn.py
 │   ├── build_android_model_lib_windows.py
 │   ├── assess_generated_image.py
 │   ├── verify_clip_vae_onnx.py
@@ -269,7 +287,8 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   └── vae_decoder.serialized.bin.bin     (~151 MB)
+│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
+│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, optional live preview)
 ├── phone_gen/
 │   ├── generate.py                        (standalone generator)
 │   └── tokenizer/
@@ -285,7 +304,9 @@ Prompt ──▶│ CLIP-L ──┐                                            
 ## Limitations
 
 - **Resolution is fixed** at 1024×1024 — others need full re-conversion
+- **The documented speed path assumes the Lightning LoRA has been baked into the UNet** — skipping that merge means a much slower baseline SDXL path and the repository timings/examples stop being representative
 - **VAE FP16** slightly compresses color range -> percentile contrast stretching is applied
+- **TAESD live preview is optional** — it is only used for intermediate previews and requires an extra tiny decoder context on the phone
 - **CFG > 1.0 is expensive here** — conditional + unconditional predictions are both needed; because the runtime uses a split UNet (`encoder` + `decoder`), naive CFG means four phone-side UNet subprocess calls per step. The current runtime batches part of that work better than before, but wall-clock time is still close to 2× versus the no-CFG path.
 - **Termux required** — Python runtime for `phone_generate.py`
 - **Android shared-storage access may need manual confirmation** — especially for APK use on Android 11+
