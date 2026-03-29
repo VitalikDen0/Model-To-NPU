@@ -1,0 +1,289 @@
+# Model-to-NPU Pipeline for Snapdragon
+
+**Языки:** [English](README_EN.md) | [Русский](README_RU.md)
+
+> [!WARNING]
+> Репозиторий сейчас проходит повторную end-to-end проверку.
+> Структура и команды ниже отражают последнее известное рабочее состояние, но полный прогон «с чистого ПК до финальной генерации на телефоне» ещё перепроверяется.
+
+<p align="center">
+  <b>Репозиторий для model-to-NPU pipeline'ов на Qualcomm Snapdragon</b><br>
+  Текущий реализованный pipeline: <b>SDXL на Qualcomm Hexagon NPU</b>.
+</p>
+
+---
+
+## Что это?
+
+Этот репозиторий задуман как общее место для нескольких **model-specific pipeline'ов**, нацеленных на Qualcomm Snapdragon NPU.
+
+- для каждой семьи моделей предполагается своя папка;
+- **текущая реализованная папка** — `SDXL/`;
+- **текущее Android-приложение** лежит в `APK/`;
+- общие deploy-скрипты и вспомогательные файлы живут в `scripts/`, `tokenizer/` и в корне.
+
+Сейчас реально реализованный и задокументированный путь — это **Stable Diffusion XL**, работающий **нативно на NPU телефона** (Hexagon HTP). Текущий SDXL pipeline использует CLIP-L, CLIP-G, Split UNet (encoder + decoder) и VAE прямо на устройстве.
+
+**Текущее протестированное сочетание:** [WAI Illustrious SDXL v1.60](https://civitai.com/models/795765/wai-illustrious-sdxl) + [SDXL-Lightning 8-step LoRA](https://huggingface.co/ByteDance/SDXL-Lightning) (ByteDance)
+
+> **Важно:** структура репозитория уже делается шире SDXL, но фактически проверенный pipeline здесь пока SDXL-first.
+
+## Текущий статус
+
+- **Направление репозитория:** multi-model pipeline'ы под Snapdragon NPU
+- **Сейчас реализованная семья:** `SDXL/`
+- **Текущая цель APK:** SDXL
+- **Статус скриптов:** повторная проверка полной воспроизводимости
+- **Статус документации:** обновлена под текущую известную структуру
+
+Для живого примера того, как сейчас выглядит SDXL-папка на телефоне после деплоя, см. [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
+
+## Требования для текущего SDXL pipeline
+
+### Телефон
+
+| Компонент | Требование |
+|-----------|------------|
+| **SoC** | Qualcomm Snapdragon 8 Elite (SM8750) или совместимый с QNN HTP |
+| **RAM** | 16 GB (пик ~12 GB, свободно >= 6 GB) |
+| **Хранилище** | ~10 GB для моделей и context binary |
+| **Root** | Magisk (для `su --mount-master` и доступа к QNN runtime) |
+| **Termux** | Python 3.13+, numpy, Pillow |
+
+### ПК (для сборки текущего pipeline)
+
+| Компонент | Версия |
+|-----------|--------|
+| Python | 3.10.x (именно 3.10, не 3.11+) |
+| QAIRT SDK | 2.31+ (Qualcomm AI Engine Direct) |
+| Android NDK | r26+ (для сборки `.so`) |
+| PyTorch | 2.x |
+| Windows | 10/11 |
+
+## Производительность
+
+Замерено на OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
+
+| Этап | Время | Формат |
+|------|-------|--------|
+| CLIP-L | ~375 мс | FP16 |
+| CLIP-G | ~1500 мс | FP16 |
+| UNet encoder (1 шаг) | ~7.1 с | FP16 |
+| UNet decoder (1 шаг) | ~7.1 с | FP16 |
+| UNet (8 шагов, без CFG) | ~113 с | FP16 |
+| UNet (8 шагов, CFG=3.5) | ~236 с | FP16 |
+| VAE decoder | ~10 с | FP16 |
+| **Итого (без CFG)** | **~126 с** | |
+| **Итого (CFG=3.5)** | **~251 с** | |
+
+Пик RAM: **~12 GB** из 16 GB  
+Разрешение: **1024×1024** (фиксированное)
+
+## Быстрый старт
+
+### 1. Подготовка окружения (ПК)
+
+```bash
+# Установить зависимости Python 3.10
+pip install torch diffusers transformers safetensors onnx onnxruntime Pillow numpy
+
+# Скачать QAIRT SDK
+python scripts/download_qualcomm_sdk.py
+
+# Скачать ADB (если ещё нет)
+python scripts/download_adb.py
+```
+
+### 2. Сборка pipeline
+
+> **Примечание:** `scripts/build_all.py` сейчас автоматизирует только ранние воспроизводимые шаги и специально **не** запускает вслепую все поздние QNN/deploy-стадии, пока они перепроверяются.
+
+```bash
+# Экспериментальный помощник для ранних SDXL-этапов
+python scripts/build_all.py --checkpoint path/to/model.safetensors
+```
+
+Или пошагово:
+
+```bash
+# 1. Скачать модель WAI Illustrious SDXL v1.60 и SDXL-Lightning LoRA
+
+# 2. Конвертировать checkpoint в diffusers формат
+python SDXL/convert_sdxl_checkpoint_to_diffusers.py
+
+# 3. Замержить Lightning LoRA в UNet
+python SDXL/bake_lora_into_unet.py
+
+# 4. Экспортировать все компоненты в ONNX
+python SDXL/export_clip_vae_to_onnx.py
+python SDXL/export_sdxl_to_onnx.py
+
+# 5. Конвертировать в QNN
+python SDXL/convert_clip_vae_to_qnn.py
+python SDXL/convert_lightning_to_qnn.py
+
+# 6. Собрать Android model libraries (.so)
+python SDXL/build_android_model_lib_windows.py
+```
+
+### 3. Деплой на телефон
+
+```bash
+python scripts/deploy_to_phone.py \
+  --contexts-dir /path/to/context_binaries \
+  --qnn-lib-dir /path/to/qnn_sdk/lib/aarch64-android \
+  --qnn-bin-dir /path/to/qnn_sdk/bin/aarch64-android
+```
+
+### 4. Подготовка Termux (на телефоне)
+
+```bash
+pkg install python python-numpy python-pillow
+```
+
+### 5. Генерация
+
+#### Standalone (в Termux на телефоне)
+
+```bash
+su --mount-master
+export PATH=/data/data/com.termux/files/usr/bin:$PATH
+python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "1girl, anime, cherry blossoms"
+python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "dark castle" --cfg 2.0 --neg "blurry"
+python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "landscape" --seed 777 --steps 8
+```
+
+#### Через APK
+
+```bash
+cd APK
+./gradlew assembleDebug
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, сохранение в галерею.  
+Через ⚙️ Settings можно указать кастомные пути к моделям.
+
+#### Host-side (с ПК через ADB)
+
+```bash
+python SDXL/generate.py "cat on windowsill, masterpiece" --seed 42
+```
+
+## Что реально лежит на телефоне сейчас?
+
+Минимальная обязательная структура для генерации остаётся той, что использует APK и deploy-скрипт, но живой слепок с телефона сейчас содержит более богатый SDXL-деплой: дополнительные model libs, служебные скрипты и QNN JSON-конфиги.
+
+- минимально необходимая структура — ниже;
+- живая наблюдаемая структура — в [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
+
+## Структура проекта
+
+```text
+├── README.md                 ← стартовая страница с выбором языка
+├── README_RU.md              ← вы здесь
+├── README_EN.md              ← English version
+├── LICENSE                   ← Apache 2.0
+├── .gitattributes
+├── .gitignore
+├── phone_generate.py         ← standalone-генератор для телефона
+├── tokenizer/                ← BPE токенизатор (CLIP)
+│   ├── vocab.json
+│   └── merges.txt
+├── examples/
+│   └── phone-sdxl-qnn-layout.md ← живой пример раскладки на телефоне
+├── .github/
+│   └── ISSUE_TEMPLATE/
+│       └── bug_report.md
+├── scripts/
+│   ├── deploy_to_phone.py    ← деплой на телефон через ADB
+│   ├── download_qualcomm_sdk.py
+│   ├── download_adb.py
+│   └── build_all.py          ← ранний SDXL helper (поздние шаги перепроверяются)
+├── SDXL/                     ← текущие SDXL-специфичные скрипты конвертации и сборки
+│   ├── generate.py           ← host-side генератор (с ПК)
+│   ├── bake_lora_into_unet.py
+│   ├── export_clip_vae_to_onnx.py
+│   ├── export_sdxl_to_onnx.py
+│   ├── convert_clip_vae_to_qnn.py
+│   ├── convert_lightning_to_qnn.py
+│   ├── build_android_model_lib_windows.py
+│   ├── assess_generated_image.py
+│   ├── verify_clip_vae_onnx.py
+│   ├── verify_e2e_onnx.py
+│   └── LESSONS_LEARNED.md    ← подводные камни и решения
+└── APK/                      ← Android-приложение
+    ├── README.md
+    └── app/src/main/
+        ├── AndroidManifest.xml
+        └── java/com/sdxlnpu/app/
+            ├── MainActivity.java
+            └── SettingsActivity.java
+```
+
+## Архитектура
+
+```text
+          ┌──────────────────────────────────────────────────────────────┐
+          │                    Телефон (NPU)                            │
+          │                                                             │
+Prompt ──▶│ CLIP-L ──┐                                                  │
+          │ (FP16)   ├──▶ concat [1,77,2048] ──▶ Split UNet ──▶ VAE ──▶│──▶ PNG
+          │ CLIP-G ──┘    + pooled [1,1280]      encoder FP16   FP16   │
+          │ (FP16)        + time_ids [1,6]       decoder FP16          │
+          │                                      × 8 шагов             │
+          └──────────────────────────────────────────────────────────────┘
+```
+
+**Split UNet:** Полный FP16 UNet (~5 GB) превышает лимит HTP (~3.5 GB), поэтому он разделяется на encoder (conv_in + down_blocks + mid_block, 2.52 GB) и decoder (up_blocks + conv_out, 2.69 GB). Encoder передаёт decoder 11 skip-connections + mid + temb.
+
+**Scheduler:** EulerDiscrete, trailing spacing (требование Lightning), pure numpy.
+
+**Tokenizer:** Pure Python BPE (без HuggingFace/transformers), идентичный CLIP tokenizer.
+
+## Минимальная структура файлов на телефоне
+
+```text
+/data/local/tmp/sdxl_qnn/
+├── context/                               (QNN context binaries)
+│   ├── clip_l.serialized.bin.bin          (~223 MB)
+│   ├── clip_g.serialized.bin.bin          (~1.3 GB)
+│   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
+│   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
+│   └── vae_decoder.serialized.bin.bin     (~151 MB)
+├── phone_gen/
+│   ├── generate.py                        (standalone генератор)
+│   └── tokenizer/
+│       ├── vocab.json                     (CLIP BPE vocabulary)
+│       └── merges.txt                     (BPE merge rules)
+├── lib/                                   (QNN runtime библиотеки)
+├── model/                                 (опционально: дополнительные model libs для некоторых сценариев)
+├── bin/
+│   └── qnn-net-run                        (QNN inference runner)
+└── outputs/                               (PNG результаты)
+```
+
+## Ограничения
+
+- **Разрешение фиксировано** 1024×1024 — другие размеры требуют полной переконвертации
+- **VAE FP16** слегка сжимает цветовой диапазон -> применяется percentile contrast stretching
+- **CFG удваивает время** — UNet запускается дважды (cond + uncond) на каждом шаге
+- **Root обязателен** — для доступа к QNN runtime
+- **Termux обязателен** — Python runtime для `phone_generate.py`
+- Тестировалось только на **OnePlus 13 (SM8750)**
+
+## Known issues
+
+- Первый запуск каждого компонента медленнее (загрузка context binary в NPU)
+- При низком RAM телефон может убить процесс — закройте другие приложения
+- `su --mount-master` обязателен при вызове из APK (mount namespace isolation)
+- numpy и torch используют разные RNG — одинаковый seed даёт разные, но валидные изображения
+
+## Лицензия
+
+Apache 2.0 — см. [LICENSE](LICENSE)
+
+Зависимости:
+- Qualcomm QAIRT SDK — проприетарная лицензия Qualcomm
+- SDXL-Lightning LoRA (ByteDance) — Apache 2.0
+- Stable Diffusion XL — CreativeML Open RAIL-M

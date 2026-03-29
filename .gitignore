@@ -1,0 +1,48 @@
+# Models & weights (too large for git)
+*.safetensors
+*.bin
+*.onnx
+*.onnx_data
+*.so
+*.serialized.bin.bin
+diffusers_pipeline/
+unet_lightning8step_merged/
+
+# Build artifacts
+*.o
+*.obj
+__pycache__/
+*.pyc
+.venv*/
+*.egg-info/
+
+# APK build outputs
+APK/app/build/
+APK/build/
+APK/.gradle/
+APK/local.properties
+
+# Runtime data
+outputs/
+runtime_work*/
+calibration_data/
+calibration_images/
+*.raw
+*.npz
+
+# QNN intermediate
+qnn_*/
+onnx_*/
+groupnorm_probe/
+subgraph_probes/
+
+# IDE
+.vscode/
+.idea/
+
+# Local Copilot / agent notes
+.github/copilot-instructions.md
+
+# OS
+.DS_Store
+Thumbs.db

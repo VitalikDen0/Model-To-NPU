@@ -1,0 +1,9 @@
+{
+    "graphs": [
+        {
+            "graph_names": ["model"],
+            "vtcm_mb": 8,
+            "hvx_threads": 4
+        }
+    ]
+}

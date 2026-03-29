@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SDXL NPU</string>
+    <string name="generate">Генерировать</string>
+    <string name="stop">Стоп</string>
+    <string name="prompt_hint">Промпт</string>
+    <string name="neg_prompt_hint">Негативный промпт (для CFG > 1.0)</string>
+    <string name="seed_hint">Seed (пусто = случайный)</string>
+    <string name="save">Сохранить в галерею</string>
+    <string name="contrast_stretch">Коррекция яркости (VAE)</string>
+    <string name="status_idle">Готово к генерации</string>
+    <string name="status_clip">CLIP encoding…</string>
+    <string name="status_unet" formatted="false">UNet denoising (%d/%d)…</string>
+    <string name="status_vae">VAE decoding…</string>
+    <string name="status_done" formatted="false">Готово! %s</string>
+    <string name="image_desc">Сгенерированное изображение</string>
+    <string name="settings">Настройки</string>
+    <string name="settings_title">Настройки моделей</string>
+    <string name="settings_desc">Укажите путь к папке с моделями на телефоне.\nМодели можно задеплоить через scripts/deploy_to_phone.py\nили скопировать вручную.</string>
+    <string name="settings_base_dir_hint">Путь к папке моделей на телефоне</string>
+    <string name="settings_python_hint">Путь к Python3 (Termux)</string>
+    <string name="settings_verify">Проверить файлы</string>
+    <string name="settings_save">Сохранить</string>
+    <string name="settings_reset">Сброс</string>
+    <string name="settings_structure_info">Структура папки моделей:\n/context/\n  clip_l.serialized.bin.bin\n  clip_g.serialized.bin.bin\n  unet_encoder_fp16.serialized.bin.bin\n  unet_decoder_fp16.serialized.bin.bin\n  vae_decoder.serialized.bin.bin\n/phone_gen/\n  generate.py\n  tokenizer/vocab.json\n  tokenizer/merges.txt\n/lib/ (QNN runtime)\n/bin/ (qnn-net-run)</string>
+</resources>
