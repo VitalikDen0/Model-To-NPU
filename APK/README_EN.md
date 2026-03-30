@@ -90,8 +90,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - prompt and negative prompt input;
 - steps control (1–20);
 - CFG control (1.0–7.0);
+- half-CFG toggle — guidance only on the first `ceil(steps / 2)` denoising steps;
 - reproducible seed handling;
 - percentile-based contrast stretching;
+- Live Preview (TAESD) toggle;
 - save-to-gallery support;
 - stop button for ongoing generation;
 - progress bar for CLIP → UNet → VAE stages;
@@ -145,6 +147,7 @@ Through ⚙️ in the ActionBar you can:
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
 - Live Preview uses `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime`; the old `taesd_decoder.serialized.bin.bin` preview path is no longer required for the current flow;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
+- the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;
 - stdout is parsed in real time to display progress;
 - the resulting PNG is loaded through `BitmapFactory.decodeFile()`;
 - gallery saving uses the Android `MediaStore` API.

@@ -66,6 +66,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView cfgLabel;
     private CheckBox contrastStretch;
     private CheckBox livePreview;
+    private CheckBox progressiveCfg;
     private MaterialButton generateButton;
     private MaterialButton saveButton;
     private MaterialButton stopButton;
@@ -103,6 +104,7 @@ public class MainActivity extends AppCompatActivity {
         cfgLabel = findViewById(R.id.cfgLabel);
         contrastStretch = findViewById(R.id.contrastStretch);
         livePreview     = findViewById(R.id.livePreview);
+        progressiveCfg  = findViewById(R.id.progressiveCfg);
         generateButton  = findViewById(R.id.generateButton);
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
@@ -216,6 +218,7 @@ public class MainActivity extends AppCompatActivity {
         String neg = negPromptInput.getText().toString().trim();
         boolean stretch = contrastStretch.isChecked();
         boolean preview = livePreview.isChecked();
+        boolean progCfg = progressiveCfg.isChecked();
 
         // Build output name
         String outName = "apk_s" + seed;
@@ -230,7 +233,7 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, outName);
+                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName);
             } catch (Exception e) {
                 mainHandler.post(() -> {
                     statusText.setText("Ошибка: " + e.getMessage());
@@ -266,7 +269,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void runPipeline(String prompt, long seed, int steps,
                              float cfg, String neg, boolean stretch,
-                             boolean preview, String outName)
+                             boolean preview, boolean progCfg, String outName)
             throws IOException, InterruptedException {
         boolean useRootShell = shouldUseRootShell();
         if (!useRootShell && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
@@ -300,6 +303,9 @@ public class MainActivity extends AppCompatActivity {
         }
         if (preview) {
             script.append(" --preview");
+        }
+        if (progCfg && cfg > 1.0f) {
+            script.append(" --prog-cfg");
         }
         script.append(" 2>&1\n");
 

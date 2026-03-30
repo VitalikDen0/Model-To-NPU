@@ -9,6 +9,7 @@
     <string name="save">Сохранить в галерею</string>
     <string name="contrast_stretch">Коррекция яркости (VAE)</string>
     <string name="live_preview">Live Preview (TAESD)</string>
+    <string name="progressive_cfg">½ CFG только на первой половине шагов (с округлением вверх)</string>
     <string name="status_preview" formatted="false">Preview step %d/%d…</string>
     <string name="status_idle">Готово к генерации</string>
     <string name="status_clip">CLIP encoding…</string>

@@ -31,6 +31,16 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - [SDXL script map (EN)](SDXL/SCRIPTS_OVERVIEW.md)
 - [SDXL script map (RU)](SDXL/SCRIPTS_OVERVIEW_RU.md)
 - [Current lessons learned](SDXL/LESSONS_LEARNED.md)
+- [UNet quantization review (EN)](SDXL/UNET_QUANTIZATION_REVIEW.md)
+- [UNet quantization review (RU)](SDXL/UNET_QUANTIZATION_REVIEW_RU.md)
+
+## Changelog
+
+- **0.1.2-beta** — APK now exposes a **½-CFG** toggle that applies guidance only to the first `ceil(steps / 2)` denoising steps; added a dedicated UNet quantization review with per-block risk notes and safer experiment boundaries.
+- **0.1.2** — APK gained optional **Live Preview (TAESD)** using `phone_gen/taesd_decoder.onnx` + `onnxruntime` on the phone.
+- **Runtime / preview fixes** — TAESD preview path was repaired end-to-end, including export, phone runtime wiring, and deployment docs.
+- **APK log parsing fixes** — timing parsing and progress extraction were cleaned up so CLIP / UNet / VAE status reporting no longer drifts on mixed log lines.
+- **Docs / sample sync** — rooted phone sample and the live phone layout docs were synchronized with the current shared-path runtime structure.
 
 ## What this repo already demonstrates
 
