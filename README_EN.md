@@ -194,7 +194,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, save to gallery.  
-APK `v0.1.1` also adds an optional **Live Preview (TAESD)** toggle that decodes step previews while denoising, as long as `phone_gen/taesd_decoder.onnx` is deployed on the phone and `onnxruntime` is available in Termux.  
+APK `v0.1.2` includes the optional **Live Preview (TAESD)** toggle that decodes step previews while denoising, as long as `phone_gen/taesd_decoder.onnx` is deployed on the phone and `onnxruntime` is available in Termux.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)

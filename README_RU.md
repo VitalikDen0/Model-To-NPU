@@ -194,7 +194,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, сохранение в галерею.  
-В `v0.1.1` APK также появился опциональный переключатель **Live Preview (TAESD)**, который показывает промежуточные preview во время денойзинга, если на телефоне задеплоен `phone_gen/taesd_decoder.onnx`, а в Termux доступен `onnxruntime`.  
+В `v0.1.2` APK доступен опциональный переключатель **Live Preview (TAESD)**, который показывает промежуточные preview во время денойзинга, если на телефоне задеплоен `phone_gen/taesd_decoder.onnx`, а в Termux доступен `onnxruntime`.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)
