@@ -11,7 +11,7 @@
 Здесь специально оставлены только **лёгкие и показательные** файлы:
 
 - несколько реально сгенерированных PNG-картинок;
-- маленький опциональный TAESD preview context: `context/taesd_decoder.serialized.bin.bin`;
+- текущая маленькая TAESD preview-модель: `phone_gen/taesd_decoder.onnx`;
 - HTP backend JSON-конфиги;
 - helper shell scripts из rooted-экспериментов;
 - `phone_gen/generate.py` из реального phone-side runtime;
@@ -22,14 +22,16 @@
 
 Эта папка **не** раздаёт тяжёлую или чувствительную часть runtime-набора:
 
-- context binaries из `context/`;
+- основные context binaries из `context/` (`clip_*`, `unet_*`, `vae_*`);
 - QNN runtime libraries из `lib/`;
 - скомпилированные model libraries из `model/`;
 - полные проприетарные SDK-наборы.
 
 Причины простые: они слишком большие, завязаны на конкретную среду или просто не подходят для такого распространения.
 
-Единственное исключение — маленький TAESD preview context, который достаточно компактен, чтобы оставить его как референсный артефакт для live preview в APK `v0.1.1`.
+Почему их нет: обычный GitHub-репозиторий не принимает multi-hundred-megabyte / multi-gigabyte model payload'ы. Одни только split UNet/CLIP context'ы заметно превышают лимит на файл, поэтому в sample-наборе лежат только лёгкие куски, которые реально имеет смысл версионировать.
+
+Текущее исключение для live preview — маленький TAESD ONNX decoder, который достаточно компактен, чтобы оставить его как референсный артефакт для APK `v0.1.1`. Старый `context/taesd_decoder.serialized.bin.bin` может встречаться только в более ранних rooted-снимках, но текущему runtime он уже не нужен.
 
 ## Ссылка на исходную модель
 

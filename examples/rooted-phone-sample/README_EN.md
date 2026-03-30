@@ -10,4 +10,4 @@ For the full description, see:
 - rooted layout overview: [`../phone-sdxl-qnn-layout.md`](../phone-sdxl-qnn-layout.md)
 - rooted layout overview (RU): [`../phone-sdxl-qnn-layout_RU.md`](../phone-sdxl-qnn-layout_RU.md)
 
-This rooted sample now also includes the tiny optional TAESD preview context used by APK `v0.1.1` live preview.
+This rooted sample now also includes the tiny TAESD ONNX preview decoder used by the current APK `v0.1.1` live preview path.

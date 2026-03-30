@@ -148,11 +148,11 @@ Optional live-preview path for the APK / phone runtime:
 # Export the tiny TAESD XL preview decoder
 python SDXL/export_taesd_to_onnx.py --validate
 
-# Convert it to QNN / Android artifacts
-python SDXL/convert_taesd_to_qnn.py
+# Deploy the single-file ONNX to the phone runtime
+adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
 
-# Then run the printed phone-side ctxgen step and deploy
-# taesd_decoder.serialized.bin.bin alongside the main SDXL contexts.
+# Optional (only if you want live preview in Termux / APK)
+python -m pip install onnxruntime
 ```
 
 ### 3. Deploy to phone
@@ -169,6 +169,7 @@ python scripts/deploy_to_phone.py \
 
 ```bash
 pkg install python python-numpy python-pillow
+python -m pip install onnxruntime   # optional, only for TAESD live preview
 termux-setup-storage
 ```
 
@@ -193,7 +194,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, save to gallery.  
-APK `v0.1.1` also adds an optional **Live Preview (TAESD)** toggle that decodes step previews while denoising, as long as `taesd_decoder.serialized.bin.bin` is deployed on the phone.  
+APK `v0.1.1` also adds an optional **Live Preview (TAESD)** toggle that decodes step previews while denoising, as long as `phone_gen/taesd_decoder.onnx` is deployed on the phone and `onnxruntime` is available in Termux.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)
@@ -287,10 +288,10 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
-│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, optional live preview)
+│   └── vae_decoder.serialized.bin.bin     (~151 MB)
 ├── phone_gen/
 │   ├── generate.py                        (standalone generator)
+│   ├── taesd_decoder.onnx                 (~5 MB, optional live preview)
 │   └── tokenizer/
 │       ├── vocab.json                     (CLIP BPE vocabulary)
 │       └── merges.txt                     (BPE merge rules)
@@ -306,7 +307,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 - **Resolution is fixed** at 1024×1024 — others need full re-conversion
 - **The documented speed path assumes the Lightning LoRA has been baked into the UNet** — skipping that merge means a much slower baseline SDXL path and the repository timings/examples stop being representative
 - **VAE FP16** slightly compresses color range -> percentile contrast stretching is applied
-- **TAESD live preview is optional** — it is only used for intermediate previews and requires an extra tiny decoder context on the phone
+- **TAESD live preview is optional** — it is only used for intermediate previews and now relies on a tiny ONNX decoder (`phone_gen/taesd_decoder.onnx`) plus `onnxruntime`, not on a QNN preview context
 - **CFG > 1.0 is expensive here** — conditional + unconditional predictions are both needed; because the runtime uses a split UNet (`encoder` + `decoder`), naive CFG means four phone-side UNet subprocess calls per step. The current runtime batches part of that work better than before, but wall-clock time is still close to 2× versus the no-CFG path.
 - **Termux required** — Python runtime for `phone_generate.py`
 - **Android shared-storage access may need manual confirmation** — especially for APK use on Android 11+

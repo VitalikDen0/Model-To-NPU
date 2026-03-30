@@ -148,11 +148,11 @@ python SDXL/build_android_model_lib_windows.py
 # Экспорт tiny TAESD XL preview decoder
 python SDXL/export_taesd_to_onnx.py --validate
 
-# Конвертация в QNN / Android-артефакты
-python SDXL/convert_taesd_to_qnn.py
+# Деплой одного ONNX-файла в phone runtime
+adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
 
-# Затем выполнить напечатанный phone-side ctxgen-шаг и задеплоить
-# taesd_decoder.serialized.bin.bin рядом с основными SDXL context binaries.
+# Опционально (только если нужен live preview в Termux / APK)
+python -m pip install onnxruntime
 ```
 
 ### 3. Деплой на телефон
@@ -169,6 +169,7 @@ python scripts/deploy_to_phone.py \
 
 ```bash
 pkg install python python-numpy python-pillow
+python -m pip install onnxruntime   # опционально, только для TAESD live preview
 termux-setup-storage
 ```
 
@@ -193,7 +194,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, сохранение в галерею.  
-В `v0.1.1` APK также появился опциональный переключатель **Live Preview (TAESD)**, который показывает промежуточные preview во время денойзинга, если на телефоне задеплоен `taesd_decoder.serialized.bin.bin`.  
+В `v0.1.1` APK также появился опциональный переключатель **Live Preview (TAESD)**, который показывает промежуточные preview во время денойзинга, если на телефоне задеплоен `phone_gen/taesd_decoder.onnx`, а в Termux доступен `onnxruntime`.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)
@@ -287,10 +288,10 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
-│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, опциональный live preview)
+│   └── vae_decoder.serialized.bin.bin     (~151 MB)
 ├── phone_gen/
 │   ├── generate.py                        (standalone генератор)
+│   ├── taesd_decoder.onnx                 (~5 MB, опциональный live preview)
 │   └── tokenizer/
 │       ├── vocab.json                     (CLIP BPE vocabulary)
 │       └── merges.txt                     (BPE merge rules)
@@ -306,7 +307,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 - **Разрешение фиксировано** 1024×1024 — другие размеры требуют полной переконвертации
 - **Быстрый документированный путь предполагает, что Lightning LoRA уже замержена в UNet** — без этого merge вы фактически уходите в сильно более медленный базовый SDXL path, и тайминги/примеры из репозитория перестают быть репрезентативными
 - **VAE FP16** слегка сжимает цветовой диапазон -> применяется percentile contrast stretching
-- **TAESD live preview опционален** — он нужен только для промежуточных preview и требует отдельный маленький decoder context на телефоне
+- **TAESD live preview опционален** — он нужен только для промежуточных preview и теперь использует маленький ONNX-декодер (`phone_gen/taesd_decoder.onnx`) плюс `onnxruntime`, а не QNN preview-context
 - **CFG > 1.0 здесь дорогой** — нужны и conditional, и unconditional предсказания; поскольку runtime использует split UNet (`encoder` + `decoder`), наивный CFG превращает каждый шаг в четыре phone-side запуска UNet-подпроцессов. Текущий runtime уже батчит часть этой работы лучше, чем раньше, но по wall-clock времени это всё равно почти 2× относительно no-CFG пути.
 - **Termux обязателен** — Python runtime для `phone_generate.py`
 - **Для APK на Android 11+ может понадобиться доступ ко всем файлам** — чтобы читать `/sdcard/Download/sdxl_qnn`

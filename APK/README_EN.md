@@ -13,13 +13,6 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-**v0.1.1** (current):
-
-- optional **Live Preview (TAESD)** checkbox in the APK UI;
-- requires `taesd_decoder.serialized.bin.bin` to be deployed on the phone.
-
-**v0.1.0**: CFG, negative prompt, seed, steps, save-to-gallery, stop button
-
 ## Architecture
 
 ```text
@@ -60,6 +53,7 @@ After the model files are deployed, the workflow is intended to be **fully stand
 - **Phone**: Snapdragon 8 Elite (SM8750) or another device with a compatible Qualcomm NPU
 - **Root**: not required for the current default path layout
 - **Termux**: Python 3.13+, numpy, Pillow, `termux-setup-storage`
+- **TAESD live preview (optional)**: `onnxruntime` in Termux + `phone_gen/taesd_decoder.onnx`
 - **Android 11+**: shared Downloads access may require “all files access”
 - **QNN**: context binaries must already be deployed (see `scripts/deploy_to_phone.py`)
 
@@ -69,6 +63,7 @@ After the model files are deployed, the workflow is intended to be **fully stand
 
 ```bash
 pkg install python python-numpy python-pillow
+python -m pip install onnxruntime   # optional, only for Live Preview
 termux-setup-storage
 ```
 
@@ -97,13 +92,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - CFG control (1.0–7.0);
 - reproducible seed handling;
 - percentile-based contrast stretching;
-- optional **Live Preview (TAESD)** during denoising;
 - save-to-gallery support;
 - stop button for ongoing generation;
 - progress bar for CLIP → UNet → VAE stages;
 - configurable paths through ⚙️ Settings.
-
-> **Important:** the current APK and all public examples in this repository are built specifically for **1024×1024**. The shown timings/examples also assume the **Lightning LoRA has already been baked into the UNet**; without that merge, the plain base SDXL path is much slower and the published numbers stop being representative.
 
 ## Model settings
 
@@ -135,9 +127,9 @@ Through ⚙️ in the ActionBar you can:
 │   ├── unet_encoder_fp16.serialized.bin.bin
 │   ├── unet_decoder_fp16.serialized.bin.bin
 │   └── vae_decoder.serialized.bin.bin
-│   └── taesd_decoder.serialized.bin.bin   (optional, for Live Preview)
 ├── phone_gen/
 │   ├── generate.py
+│   ├── taesd_decoder.onnx
 │   └── tokenizer/
 │       ├── vocab.json
 │       └── merges.txt
@@ -151,9 +143,8 @@ Through ⚙️ in the ActionBar you can:
 
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
-- `phone_generate.py` already supports `--prog-cfg`, but the current APK UI in `v0.1.1` exposes the `--preview` path rather than a separate Progressive CFG toggle;
+- Live Preview uses `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime`; the old `taesd_decoder.serialized.bin.bin` preview path is no longer required for the current flow;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
-- TAESD is only used for intermediate preview decoding and does not replace the main VAE decode for the final image;
 - stdout is parsed in real time to display progress;
 - the resulting PNG is loaded through `BitmapFactory.decodeFile()`;
 - gallery saving uses the Android `MediaStore` API.

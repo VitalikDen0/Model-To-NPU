@@ -11,35 +11,154 @@ Usage (in Termux):
 """
 import argparse
 import json
+import importlib
 import math
 import os
 import re
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 import numpy as np
 
 # ─── Paths ───
-DR = "/data/local/tmp/sdxl_qnn"
+DEFAULT_BASE_DIR = "/sdcard/Download/sdxl_qnn"
+LEGACY_BASE_DIR = "/data/local/tmp/sdxl_qnn"
+
+
+def _resolve_base_dir():
+    override = os.environ.get("SDXL_QNN_BASE")
+    if override:
+        return override
+
+    candidates = [
+        DEFAULT_BASE_DIR,
+        "/storage/emulated/0/Download/sdxl_qnn",
+        LEGACY_BASE_DIR,
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return DEFAULT_BASE_DIR
+
+
+DR = _resolve_base_dir()
 CONTEXTS = {
     "clip_l": f"{DR}/context/clip_l.serialized.bin.bin",
     "clip_g": f"{DR}/context/clip_g.serialized.bin.bin",
     "encoder": f"{DR}/context/unet_encoder_fp16.serialized.bin.bin",
     "decoder": f"{DR}/context/unet_decoder_fp16.serialized.bin.bin",
-    "vae":     f"{DR}/context/vae_decoder.serialized.bin.bin",
-    # Optional: TAESD XL for live step previews (~5 MB, ~200-500ms)
-    # Compile with: python SDXL/export_taesd_to_onnx.py && python SDXL/convert_taesd_to_qnn.py
-    "taesd":   f"{DR}/context/taesd_decoder.serialized.bin.bin",
+    "vae": f"{DR}/context/vae_decoder.serialized.bin.bin",
 }
-PREVIEW_PNG = f"{DR}/outputs/preview_current.png"
-PREVIEW_CTX_EXISTS = None  # cached: None=unknown, True/False
 TOKENIZER_DIR = f"{DR}/phone_gen/tokenizer"
-OUTPUT_DIR = f"{DR}/outputs"
-WORK_DIR = f"{DR}/phone_gen/work"
-QNN_NET_RUN = f"{DR}/bin/qnn-net-run"
-QNN_LIB = f"{DR}/lib"
+OUTPUT_DIR = os.environ.get("SDXL_QNN_OUTPUT_DIR", f"{DR}/outputs")
+WORK_DIR = os.environ.get("SDXL_QNN_WORK_DIR", f"{DR}/phone_gen/work")
+QNN_NET_RUN = os.environ.get("SDXL_QNN_NET_RUN", f"{DR}/bin/qnn-net-run")
+QNN_BIN_DIR = os.environ.get("SDXL_QNN_BIN_DIR", os.path.dirname(QNN_NET_RUN))
+QNN_LIB = os.environ.get("SDXL_QNN_LIB_DIR", f"{DR}/lib")
+QNN_MODEL_DIR = os.environ.get("SDXL_QNN_MODEL_DIR", f"{DR}/model")
+PREVIEW_PNG = os.environ.get("SDXL_QNN_PREVIEW_PNG", f"{OUTPUT_DIR}/preview_current.png")
+TAESD_ONNX = os.environ.get("SDXL_QNN_TAESD_ONNX", f"{DR}/phone_gen/taesd_decoder.onnx")
+
+# ─── Cached helpers / cross-thread logging ───
+
+_QNN_ENV: dict = {}
+_PRINT_LOCK = threading.Lock()
+_ort_session = None
+_ort_avail: bool | None = None
+_preview_thread: threading.Thread | None = None
+SHOW_TEMP = os.environ.get("SDXL_SHOW_TEMP", "0") == "1"
+
+
+def _log(line: str = "") -> None:
+    with _PRINT_LOCK:
+        print(line, flush=True)
+
+
+def _get_qnn_env() -> dict:
+    if not _QNN_ENV:
+        _QNN_ENV.update(os.environ)
+        existing_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        _QNN_ENV["LD_LIBRARY_PATH"] = (
+            f"{QNN_LIB}:{QNN_BIN_DIR}:{QNN_MODEL_DIR}"
+            + (f":{existing_ld}" if existing_ld else "")
+        )
+        _QNN_ENV["ADSP_LIBRARY_PATH"] = (
+            f"{QNN_LIB};/vendor/lib64/rfs/dsp;"
+            f"/vendor/lib/rfsa/adsp;/vendor/dsp"
+        )
+    return _QNN_ENV
+
+
+def _get_ort_session():
+    global _ort_session, _ort_avail
+    if _ort_avail is False:
+        return None
+    if _ort_session is not None:
+        return _ort_session
+
+    if not os.path.exists(TAESD_ONNX):
+        _ort_avail = False
+        _log(f"  [TAESD] ONNX not found: {TAESD_ONNX}")
+        _log("  [TAESD] Export: python SDXL/export_taesd_to_onnx.py --validate")
+        return None
+
+    try:
+        ort = importlib.import_module("onnxruntime")
+    except ImportError:
+        _ort_avail = False
+        _log("  [TAESD] onnxruntime not found — run in Termux: pip install onnxruntime")
+        return None
+
+    try:
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 4
+        _ort_session = ort.InferenceSession(
+            TAESD_ONNX,
+            sess_options=opts,
+            providers=["CPUExecutionProvider"],
+        )
+        _ort_avail = True
+        _log("  [TAESD] onnxruntime session ready (CPU)")
+    except Exception as e:
+        _ort_avail = False
+        _log(f"  [TAESD] ort session failed: {e}")
+    return _ort_session
+
+
+def _prime_ctx_bg(paths: list[str]) -> list[threading.Thread]:
+    def _read(path: str):
+        try:
+            with open(path, "rb") as f:
+                while f.read(8 * 1024 * 1024):
+                    pass
+        except Exception:
+            pass
+
+    threads = [
+        threading.Thread(target=_read, args=(p,), daemon=True)
+        for p in paths if os.path.exists(p)
+    ]
+    for t in threads:
+        t.start()
+    return threads
+
+
+def _phone_temp() -> tuple[float | None, str | None]:
+    keywords = ("cpu", "npu", "dsp", "soc", "thermal")
+    for zone in range(20):
+        try:
+            tp = f"/sys/class/thermal/thermal_zone{zone}/type"
+            with open(tp, "r", encoding="utf-8") as f:
+                ztype = f.read().strip().lower()
+            if any(k in ztype for k in keywords):
+                with open(f"/sys/class/thermal/thermal_zone{zone}/temp", "r", encoding="utf-8") as f:
+                    return int(f.read().strip()) / 1000.0, ztype
+        except Exception:
+            continue
+    return None, None
 
 # ─── CLIP BPE Tokenizer (pure Python, no dependencies) ───
 
@@ -188,8 +307,8 @@ class EulerDiscreteScheduler:
         # Precompute sigmas for all timesteps
         self._all_sigmas = ((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5
 
-        self.timesteps = None
-        self.sigmas = None
+        self.timesteps = np.array([], dtype=np.int64)
+        self.sigmas = np.array([], dtype=np.float32)
         self.init_noise_sigma = 1.0
 
     def set_timesteps(self, num_steps):
@@ -233,24 +352,21 @@ class EulerDiscreteScheduler:
 def qnn_run(ctx_path, input_list_path, output_dir, native=False):
     """Run QNN context on NPU via qnn-net-run."""
     os.makedirs(output_dir, exist_ok=True)
-    nf = "--use_native_output_files " if native else ""
-    env = (
-        f"export LD_LIBRARY_PATH={QNN_LIB}:{DR}/bin:{DR}/model:$LD_LIBRARY_PATH && "
-        f"export ADSP_LIBRARY_PATH='{QNN_LIB};/vendor/lib64/rfs/dsp;"
-        f"/vendor/lib/rfsa/adsp;/vendor/dsp' && "
-    )
-    cmd = (
-        f"{env}"
-        f"{QNN_NET_RUN} "
-        f"--retrieve_context {ctx_path} "
-        f"--backend {QNN_LIB}/libQnnHtp.so "
-        f"--input_list {input_list_path} "
-        f"--output_dir {output_dir} "
-        f"{nf}--perf_profile burst --log_level warn"
-    )
+    cmd = [
+        QNN_NET_RUN,
+        "--retrieve_context", ctx_path,
+        "--backend", f"{QNN_LIB}/libQnnHtp.so",
+        "--input_list", input_list_path,
+        "--output_dir", output_dir,
+        "--perf_profile", "burst",
+        "--log_level", "warn",
+    ]
+    if native:
+        cmd.append("--use_native_output_files")
     t0 = time.time()
     result = subprocess.run(
-        ["sh", "-c", cmd],
+        cmd,
+        env=_get_qnn_env(),
         capture_output=True, text=True, timeout=120
     )
     elapsed = (time.time() - t0) * 1000
@@ -266,22 +382,22 @@ DEFAULT_NEG = "lowres, bad anatomy, bad hands, text, error, worst quality, low q
 
 def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
              stretch=True, name=None, preview=False, progressive_cfg=False):
-    """
-    progressive_cfg: Run CFG only on first ceil(steps/2) steps, then uncond-only.
-                     Cuts UNet time by ~40% with minimal quality loss on Lightning.
-    preview:         Decode each step's latent with TAESD and save preview PNG.
-                     Requires taesd_decoder context on phone.
-    """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(WORK_DIR, exist_ok=True)
     use_cfg = cfg_scale > 1.0
     if neg_prompt is None:
         neg_prompt = DEFAULT_NEG if use_cfg else ""
 
-    print(f"Prompt: {prompt}")
+    ctx_prime_threads = _prime_ctx_bg([
+        CONTEXTS["encoder"],
+        CONTEXTS["decoder"],
+    ])
+
+    _log(f"Prompt: {prompt}")
+    _log(f"Base:   {DR}")
     if use_cfg:
-        print(f"Neg:    {neg_prompt[:80]}{'...' if len(neg_prompt) > 80 else ''}")
-    print(f"Seed: {seed}, Steps: {steps}, CFG: {cfg_scale}")
+        _log(f"Neg:    {neg_prompt[:80]}{'...' if len(neg_prompt) > 80 else ''}")
+    _log(f"Seed: {seed}, Steps: {steps}, CFG: {cfg_scale}")
     t_total = time.time()
 
     # ── Load tokenizers ──
@@ -332,16 +448,22 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         pe = np.concatenate([cl, cg], axis=-1)  # [1, 77, 2048]
         return pe, te, ms_l, ms_g
 
-    print("[CLIP cond]", end=" ", flush=True)
     pe_cond, te_cond, ms_l, ms_g = run_clip(prompt, "cond")
-    print(f"L={ms_l:.0f}ms G={ms_g:.0f}ms")
+    _log(f"[CLIP cond] L={ms_l:.0f}ms G={ms_g:.0f}ms")
     ms_clip = ms_l + ms_g
+    pe_uncond = None
+    te_uncond = None
 
     if use_cfg:
-        print("[CLIP uncond]", end=" ", flush=True)
         pe_uncond, te_uncond, ms_l2, ms_g2 = run_clip(neg_prompt, "uncond")
-        print(f"L={ms_l2:.0f}ms G={ms_g2:.0f}ms")
+        _log(f"[CLIP uncond] L={ms_l2:.0f}ms G={ms_g2:.0f}ms")
         ms_clip += ms_l2 + ms_g2
+
+    for t in ctx_prime_threads:
+        t.join(timeout=0.5)
+
+    if preview:
+        _get_ort_session()
 
     # ── 2. Prepare UNet inputs ──
     def push_unet_data(pe, te, tag):
@@ -362,6 +484,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     push_unet_data(pe_cond, te_cond, "cond")
     if use_cfg:
+        assert pe_uncond is not None and te_uncond is not None
         push_unet_data(pe_uncond, te_uncond, "uncond")
 
     # ── 3. Denoise loop ──
@@ -374,22 +497,19 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     # Pre-create a single reusable work dir (avoids mkdir overhead per step)
     _ensure_unet_workdirs(use_cfg)
 
-    # Progressive CFG: apply guidance only on first half of steps.
-    # Composition is determined early; last steps refine details (guidance not needed).
     cfg_cutoff = (steps // 2 + 1) if (use_cfg and progressive_cfg) else steps
     if progressive_cfg and use_cfg:
-        print(f"  [Progressive CFG] CFG on steps 1..{cfg_cutoff}, uncond-only after")
+        _log(f"  [Progressive CFG] CFG on steps 1..{cfg_cutoff}, uncond-only after")
 
     for si in range(steps):
         t = sched.timesteps[si]
         lat_in = sched.scale_model_input(latents, si)
 
-        # Progressive CFG: drop guidance on later steps
         step_uses_cfg = use_cfg and (si < cfg_cutoff)
 
-        print(f"  [UNet {si+1}/{steps}]{' CFG' if step_uses_cfg else ''}", end=" ", flush=True)
-
         if step_uses_cfg:
+            # Batched CFG: encoder runs cond+uncond in ONE subprocess call,
+            # decoder does the same — saves 2 subprocess launches per step.
             np_cond, np_uncond, ms = _run_unet_split_cfg(
                 lat_in, t,
                 f"{WORK_DIR}/unet/cond",
@@ -400,18 +520,30 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
             noise_pred, ms = _run_unet_split(lat_in, t, 0, "cond")
 
         total_unet_ms += ms
-        print(f"{ms:.0f}ms [{noise_pred.min():.2f}..{noise_pred.max():.2f}]")
+
+        temp_str = ""
+        if SHOW_TEMP:
+            temp, zone = _phone_temp()
+            if temp is not None and zone is not None:
+                temp_str = f" [{temp:.1f}°C {zone}]"
+
+        cfg_str = " CFG" if step_uses_cfg else ""
+        _log(
+            f"  [UNet {si+1}/{steps}]{cfg_str}{temp_str} "
+            f"{ms:.0f}ms [{noise_pred.min():.2f}..{noise_pred.max():.2f}]"
+        )
 
         latents = sched.step(noise_pred, si, latents)
 
-        # Live TAESD preview (optional, ~200-500ms)
         if preview:
-            _preview_step(latents, si, steps)
+            _start_bg_preview(latents.copy(), si, steps)
 
-    print(f"  UNet total: {total_unet_ms:.0f}ms ({total_unet_ms/steps:.0f}ms/step)")
+    if preview:
+        _join_preview_thread()
+
+    _log(f"  UNet total: {total_unet_ms:.0f}ms ({total_unet_ms/steps:.0f}ms/step)")
 
     # ── 4. VAE decode ──
-    print("[VAE]", end=" ", flush=True)
     scaling_factor = 0.13025
     lat_sc = latents / scaling_factor
 
@@ -424,7 +556,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         f.write(f"{vd}/lat.raw\n")
 
     ms_vae = qnn_run(CONTEXTS["vae"], f"{vd}/il.txt", f"{vd}/out", native=True)
-    print(f"{ms_vae:.0f}ms")
+    _log(f"[VAE] {ms_vae:.0f}ms")
 
     raw = np.fromfile(f"{vd}/out/Result_0/image_native.raw", np.float16).astype(np.float32)
     expected = 1024 * 1024 * 3
@@ -447,90 +579,63 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     Image.fromarray(img_u8).save(out_path)
 
     elapsed = time.time() - t_total
-    print(f"\n{'=' * 40}")
-    print(f"Saved: {out_path}")
-    print(f"CLIP: {ms_clip:.0f}ms | UNet: {total_unet_ms:.0f}ms | VAE: {ms_vae:.0f}ms")
-    print(f"Total: {elapsed:.1f}s")
+    _log(f"\n{'=' * 40}")
+    _log(f"Saved: {out_path}")
+    _log(f"CLIP: {ms_clip:.0f}ms | UNet: {total_unet_ms:.0f}ms | VAE: {ms_vae:.0f}ms")
+    _log(f"Total: {elapsed:.1f}s")
     return out_path
 
 
 def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
-    """Decode current denoised latents with TAESD for live step preview.
-
-    Writes PREVIEW_PNG to a world-readable path so APK can poll it.
-    Silently skips if TAESD context is not deployed on phone.
-    """
-    global PREVIEW_CTX_EXISTS
-    ctx = CONTEXTS["taesd"]
-
-    # Cache filesystem check (avoid stat() on every step)
-    if PREVIEW_CTX_EXISTS is None:
-        PREVIEW_CTX_EXISTS = os.path.exists(ctx)
-        if not PREVIEW_CTX_EXISTS:
-            print(f"  [preview] TAESD context not found, skipping previews")
-
-    if not PREVIEW_CTX_EXISTS:
+    sess = _get_ort_session()
+    if sess is None:
         return
-
-    pd = f"{WORK_DIR}/taesd"
-    os.makedirs(pd, exist_ok=True)
-
-    # TAESD input: raw latents [1,4,128,128] NCHW → NHWC
-    lat_nhwc = np.transpose(latents.astype(np.float32), (0, 2, 3, 1))
-    lat_nhwc.tofile(f"{pd}/lat.raw")
-    with open(f"{pd}/il.txt", "w") as f:
-        f.write(f"{pd}/lat.raw\n")
 
     t0 = time.time()
     try:
-        ms = qnn_run(ctx, f"{pd}/il.txt", f"{pd}/out", native=True)
+        result = sess.run(None, {"latents": latents.astype(np.float32, copy=False)})
     except Exception as e:
-        print(f"  [preview] TAESD failed: {e}")
+        _log(f"  [TAESD] inference error: {e}")
         return
 
-    # Read output — TAESD outputs [1,3,1024,1024] NCHW float16
-    raw_path = f"{pd}/out/Result_0/image_native.raw"
-    if not os.path.exists(raw_path):
-        # try generic output name
-        result_files = []
-        result_dir = f"{pd}/out/Result_0"
-        if os.path.isdir(result_dir):
-            result_files = os.listdir(result_dir)
-        if result_files:
-            raw_path = f"{result_dir}/{result_files[0]}"
-        else:
-            print(f"  [preview] No output found in {result_dir}")
-            return
-
-    raw = np.fromfile(raw_path, np.float16).astype(np.float32)
-
-    # Decode: TAESD outputs are already in [0,1] (clamped internally)
-    # Expected: 1*3*1024*1024 = 3145728 values
-    if raw.size == 1 * 3 * 1024 * 1024:
-        img = raw.reshape(1024, 1024, 3)  # NCHW → but likely NHWC from native output
-    elif raw.size == 3 * 1024 * 1024:
-        img = raw.reshape(3, 1024, 1024).transpose(1, 2, 0)  # NCHW
-    else:
-        print(f"  [preview] Unexpected output size: {raw.size}")
-        return
-
-    img = np.clip(img, 0.0, 1.0)
+    out = result[0][0].transpose(1, 2, 0)
+    img = np.clip(out / 2.0 + 0.5, 0.0, 1.0)
     img_u8 = (img * 255).astype(np.uint8)
 
     from PIL import Image
-    Image.fromarray(img_u8).save(PREVIEW_PNG)
-    # Make readable by APK (which runs as non-root)
+
+    tmp_path = PREVIEW_PNG + ".tmp"
+    Image.fromarray(img_u8).save(tmp_path, format="PNG")
+    os.replace(tmp_path, PREVIEW_PNG)
     try:
         os.chmod(PREVIEW_PNG, 0o644)
     except Exception:
         pass
 
-    elapsed_ms = (time.time() - t0) * 1000
-    print(f"  [PREVIEW step {step_idx+1}/{total_steps} → {PREVIEW_PNG} ({elapsed_ms:.0f}ms)]",
-          flush=True)
+    ms = (time.time() - t0) * 1000
+    _log(f"  [PREVIEW step {step_idx+1}/{total_steps}] CPU {ms:.0f}ms")
 
 
-# ─── UNet helpers (split encoder + decoder) ───────────────────────────────────
+def _start_bg_preview(latents_copy: np.ndarray, step_idx: int, total_steps: int) -> None:
+    global _preview_thread
+    if _preview_thread and _preview_thread.is_alive():
+        _preview_thread.join(timeout=0.2)
+        if _preview_thread.is_alive():
+            _log(f"  [PREVIEW step {step_idx+1}/{total_steps}] skipped (previous decode still running)")
+            return
+    _preview_thread = threading.Thread(
+        target=_preview_step,
+        args=(latents_copy, step_idx, total_steps),
+        daemon=True,
+    )
+    _preview_thread.start()
+
+
+def _join_preview_thread(timeout: float = 30.0) -> None:
+    global _preview_thread
+    if _preview_thread and _preview_thread.is_alive():
+        _preview_thread.join(timeout=timeout)
+
 
 def _ensure_unet_workdirs(use_cfg):
     """Pre-create all work directories so per-step mkdir is skipped."""
@@ -685,9 +790,9 @@ if __name__ == "__main__":
     ap.add_argument("--name", type=str, default=None,
                     help="Output filename (without .png)")
     ap.add_argument("--preview", action="store_true",
-                    help="Decode each step with TAESD for live preview (~200-500ms extra/step)")
+                    help="Decode each step with TAESD ONNX on CPU for live preview")
     ap.add_argument("--prog-cfg", action="store_true",
-                    help="Progressive CFG: guidance on first half of steps only (~40%% faster)")
+                    help="Apply CFG only on the first half of denoising steps")
     a = ap.parse_args()
 
     generate(

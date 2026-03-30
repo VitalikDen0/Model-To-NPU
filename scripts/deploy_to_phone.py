@@ -3,8 +3,7 @@
 Deploy SDXL NPU pipeline to phone via ADB.
 
 Pushes context binaries, QNN runtime libs, phone_generate.py,
-and tokenizer files to the phone. Optionally generates context
-binaries on-device if .so model libs are pushed instead.
+tokenizer files, and the optional TAESD ONNX preview decoder.
 
 Usage:
   python scripts/deploy_to_phone.py --contexts-dir /path/to/contexts
@@ -24,8 +23,6 @@ CONTEXT_FILES = [
     "clip_l.serialized.bin.bin",
     "clip_g.serialized.bin.bin",
     "vae_decoder.serialized.bin.bin",
-    # Optional tiny preview decoder for APK live previews
-    "taesd_decoder.serialized.bin.bin",
     # Split UNet (FP16)
     "unet_encoder_fp16.serialized.bin.bin",
     "unet_decoder_fp16.serialized.bin.bin",
@@ -95,6 +92,18 @@ def find_adb():
                 return c
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
+    return None
+
+
+def find_optional_taesd_onnx(repo_root: str) -> str | None:
+    candidates = [
+        os.path.join(repo_root, "examples", "rooted-phone-sample", "phone_gen", "taesd_decoder.onnx"),
+        os.path.join("D:/platform-tools/sdxl_npu/taesd_decoder", "taesd_decoder.onnx"),
+        os.path.join("D:/platform-tools/NPU/taesd_decoder", "taesd_decoder.onnx"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
     return None
 
 
@@ -177,7 +186,7 @@ def main():
     else:
         print("\n[3/5] Skipping QNN libs (use --qnn-lib-dir)")
 
-    # Push phone_generate.py and tokenizer
+    # Push phone_generate.py, tokenizer, and optional TAESD preview model
     print("\n[4/5] Pushing phone_generate.py + tokenizer...")
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -194,6 +203,12 @@ def main():
             adb_push(adb, serial, local, f"{phone_base}/phone_gen/tokenizer/{f}")
         else:
             print(f"  ERROR: {local} not found")
+
+    taesd_onnx = find_optional_taesd_onnx(repo_root)
+    if taesd_onnx:
+        adb_push(adb, serial, taesd_onnx, f"{phone_base}/phone_gen/taesd_decoder.onnx")
+    else:
+        print("  SKIP taesd_decoder.onnx (optional preview model not found locally)")
 
     extra_files = [
         (os.path.join(repo_root, "SDXL", "run_ctxgen_lightning.sh"), f"{phone_base}/run_ctxgen_lightning.sh", True),

@@ -1,13 +1,13 @@
 # Live phone-side SDXL deployment example
 
-This file documents a **real directory snapshot** collected on **2026-03-30** from a connected phone via `adb shell su -c ...`.
+This file documents a **real directory snapshot** collected on **2026-03-29** from a connected phone via `adb shell su -c ...`.
 
 It reflects a **historical rooted deployment layout**. The current default deploy target documented in the repository is `/sdcard/Download/sdxl_qnn`.
 
-The documented SDXL contexts and example outputs in this repository are currently **1024×1024-specific**. This snapshot should therefore be read as a 1024×1024 deployment example, not as a generic multi-resolution layout.
-
 It is included as an example of what the toolchain has already produced on-device.  
 Large binaries are **not** stored in the repository; this file is an inventory/reference only.
+
+> **Note:** the current live-preview runtime has moved to a tiny CPU-side ONNX decoder (`phone_gen/taesd_decoder.onnx`). This rooted snapshot is still useful as a historical layout reference, but it predates that newer preview path.
 
 ## Base path
 
@@ -31,7 +31,6 @@ Large binaries are **not** stored in the repository; this file is an inventory/r
 ```text
 clip_l.serialized.bin.bin
 clip_g.serialized.bin.bin
-taesd_decoder.serialized.bin.bin
 unet_encoder_fp16.serialized.bin.bin
 unet_decoder_fp16.serialized.bin.bin
 unet_lightning8step.serialized.bin.bin
@@ -66,8 +65,6 @@ The live phone snapshot also contains files that are useful for development/debu
 - `htp_backend_extensions_*.json`
 - `runtime_work_gen/`
 - helper shell scripts such as `run_cfg35.sh`, `run_seed15.sh`, and `run_test.sh`
-
-The current rooted runtime also includes the optional TAESD preview path used by APK `v0.1.1` live preview.
 
 ## Why this file exists
 

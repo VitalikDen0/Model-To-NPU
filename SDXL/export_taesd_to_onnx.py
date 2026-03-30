@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export TAESD XL decoder to ONNX for QNN compilation.
+"""Export TAESD XL decoder to ONNX for phone-side live preview.
 
 TAESD XL: Tiny AutoEncoder for SDXL — ~5MB weights,
 decodes latents [1,4,128,128] → RGB image [1,3,1024,1024].
@@ -52,7 +52,7 @@ DEFAULT_OUT_DIR = "D:/platform-tools/sdxl_npu/taesd_decoder"
 # ─── Architecture ─────────────────────────────────────────────────────────────
 
 class ResBlock(nn.Module):
-    """Residual block: x + Conv(ReLU(Conv(ReLU(Conv(x)))))"""
+    """Residual block matching diffusers AutoencoderTinyBlock."""
     def __init__(self, n: int = 64):
         super().__init__()
         self.conv = nn.Sequential(
@@ -64,7 +64,7 @@ class ResBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.conv(x)
+        return torch.relu(x + self.conv(x))
 
 
 class TAESDXLDecoder(nn.Module):
@@ -110,8 +110,14 @@ class TAESDXLDecoder(nn.Module):
         Returns:
             [1, 3, 1024, 1024] RGB image in [0, 1] range (after clamp)
         """
-        x = self.layers(latents)
-        return x.clamp(0.0, 1.0)
+        # Match diffusers DecoderTiny:
+        #   x = tanh(latents / 3) * 3
+        #   x = decoder_layers(x)
+        #   return x * 2 - 1
+        # This is important — skipping the latent clamp causes preview garbage.
+        x = torch.tanh(latents / 3.0) * 3.0
+        x = self.layers(x)
+        return x * 2.0 - 1.0
 
 
 def load_decoder(weights_path: str) -> TAESDXLDecoder:
@@ -171,6 +177,12 @@ def export_onnx(model: TAESDXLDecoder, out_path: str, opset: int = 18) -> None:
         do_constant_folding=True,
     )
 
+    # Force-save as self-contained single file (no external .data sidecar).
+    # onnxruntime on Android needs one file — torch.onnx.export may create external data
+    # for models >2 MB by default depending on onnx version.
+    m = onnx.load(out_path, load_external_data=True)
+    onnx.save(m, out_path, save_as_external_data=False)
+
     # Validate
     m = onnx.load(out_path)
     onnx.checker.check_model(m)
@@ -188,12 +200,14 @@ def validate_vs_comfyui(model: TAESDXLDecoder, weights_path: str) -> None:
     model.eval()
     with torch.no_grad():
         out = model(lat)
-    arr = out.numpy()[0].transpose(1, 2, 0)  # [H, W, 3]
+    arr = out.numpy()[0].transpose(1, 2, 0)  # [H, W, 3] in [-1, 1]
+    img = np.clip(arr / 2.0 + 0.5, 0.0, 1.0)
     print(f"  Input latent: min={lat.min():.3f} max={lat.max():.3f} std={lat.std():.3f}")
-    print(f"  Output image: min={arr.min():.3f} max={arr.max():.3f} mean={arr.mean():.3f}")
+    print(f"  Decoder raw:  min={arr.min():.3f} max={arr.max():.3f} mean={arr.mean():.3f}")
+    print(f"  Preview img:  min={img.min():.3f} max={img.max():.3f} mean={img.mean():.3f}")
 
-    nonzero_range = (arr.max() - arr.min()) > 0.05
-    not_saturated = arr.mean() > 0.05 and arr.mean() < 0.95
+    nonzero_range = (img.max() - img.min()) > 0.05
+    not_saturated = img.mean() > 0.05 and img.mean() < 0.95
     if nonzero_range and not_saturated:
         print("  Result: PASS — output has reasonable dynamic range")
     else:
