@@ -82,10 +82,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
 
     // Patterns for parsing generate.py stdout
-    private static final Pattern PAT_CLIP  = Pattern.compile("\\[CLIP (cond|uncond)\\].*?L=(\\d+)ms G=(\\d+)ms");
-    private static final Pattern PAT_UNET  = Pattern.compile("\\[UNet (\\d+)/(\\d+)\\].*?(\\d+)ms");
-    private static final Pattern PAT_PREV  = Pattern.compile("\\[PREVIEW step (\\d+)/(\\d+)");
-    private static final Pattern PAT_VAE   = Pattern.compile("\\[VAE\\]\\s+(\\d+)ms");
+    private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
+    private static final Pattern PAT_UNET  = Pattern.compile("^\\s*\\[UNet (\\d+)/(\\d+)\\][^\\n]*?\\s(\\d+)ms(?:\\s|$)");
+    private static final Pattern PAT_PREV  = Pattern.compile("^\\s*\\[PREVIEW step (\\d+)/(\\d+)\\]\\s+(?:CPU\\s+)?(\\d+)ms\\s*$");
+    private static final Pattern PAT_VAE   = Pattern.compile("^\\[VAE\\]\\s+(\\d+)ms\\s*$");
     private static final Pattern PAT_SAVED = Pattern.compile("Saved:\\s+(.+\\.png)");
     private static final Pattern PAT_TOTAL = Pattern.compile("Total:\\s+([\\d.]+)s");
 
@@ -358,7 +358,7 @@ public class MainActivity extends AppCompatActivity {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (currentProcess == null) break; // stopped
-                if (rawLog.length() < 4000) rawLog.append(line).append("\n");
+                if (rawLog.length() < 16000) rawLog.append(line).append("\n");
 
                 // Parse CLIP progress
                 Matcher m = PAT_CLIP.matcher(line);
@@ -385,6 +385,17 @@ public class MainActivity extends AppCompatActivity {
                     int pct = 10 + step * 75 / total;
                     updateStatus(String.format(Locale.US,
                         "UNet %d/%d — %dms", step, total, ms), pct);
+                    continue;
+                }
+
+                // Parse preview timing (useful for diagnostics, but do not override progress)
+                m = PAT_PREV.matcher(line);
+                if (m.find()) {
+                    int step = Integer.parseInt(m.group(1));
+                    int total = Integer.parseInt(m.group(2));
+                    int ms = Integer.parseInt(m.group(3));
+                    timingLog.append(String.format(Locale.US,
+                        "  Preview %d/%d: %dms\n", step, total, ms));
                     continue;
                 }
 

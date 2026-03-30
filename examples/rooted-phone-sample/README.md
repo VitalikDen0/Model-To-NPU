@@ -11,7 +11,7 @@ It is meant for **reference, exploration, and educational use** when someone wan
 This sample intentionally includes only **lightweight and illustrative** files:
 
 - selected generated PNG outputs;
-- the tiny optional TAESD preview context: `context/taesd_decoder.serialized.bin.bin`;
+- the current tiny TAESD preview model: `phone_gen/taesd_decoder.onnx`;
 - HTP backend JSON configs;
 - helper shell scripts used during rooted experiments;
 - `phone_gen/generate.py` from the rooted phone-side runtime;
@@ -22,14 +22,16 @@ This sample intentionally includes only **lightweight and illustrative** files:
 
 This folder does **not** redistribute the heavy or sensitive runtime payload:
 
-- context binaries from `context/`;
+- the main context binaries from `context/` (`clip_*`, `unet_*`, `vae_*`);
 - QNN runtime libraries from `lib/`;
 - compiled model libraries from `model/`;
 - any complete proprietary SDK packages.
 
 Those files are either too large, too environment-specific, or not appropriate to redistribute here.
 
-The only exception is the tiny TAESD preview context, which is small enough to keep as a reference artifact because it powers APK `v0.1.1` live previews.
+Why they are missing: GitHub does not allow multi-hundred-megabyte / multi-gigabyte model payloads in a normal repository. The split UNet/CLIP contexts alone exceed the per-file limit by a wide margin, so this sample keeps only the lightweight pieces that are practical to version.
+
+The current live-preview exception is the tiny TAESD ONNX decoder, which is small enough to keep as a reference artifact because it powers APK `v0.1.1` live previews. A legacy `context/taesd_decoder.serialized.bin.bin` may still appear in older rooted snapshots, but the current runtime no longer needs it.
 
 ## Source model reference
 
