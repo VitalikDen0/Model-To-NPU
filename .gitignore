@@ -54,3 +54,6 @@ Thumbs.db
 
 # Local drafts / scratch (never commit)
 1/
+
+# Local benchmark tooling / outputs (never commit)
+local_tools/

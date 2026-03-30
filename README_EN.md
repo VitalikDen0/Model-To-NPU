@@ -45,6 +45,8 @@ For accumulated technical pitfalls and implementation notes, see [`SDXL/LESSONS_
 
 For a dedicated review of the current SDXL UNet structure, split boundaries, and quantization risk zones, see [`SDXL/UNET_QUANTIZATION_REVIEW.md`](SDXL/UNET_QUANTIZATION_REVIEW.md) and [`SDXL/UNET_QUANTIZATION_REVIEW_RU.md`](SDXL/UNET_QUANTIZATION_REVIEW_RU.md).
 
+For the latest runtime-overhead findings, `mmap` impact, and the post-`0.1.3` control-run numbers, see [`SDXL/UNET_OVERHEAD_REVIEW.md`](SDXL/UNET_OVERHEAD_REVIEW.md) and [`SDXL/UNET_OVERHEAD_REVIEW_RU.md`](SDXL/UNET_OVERHEAD_REVIEW_RU.md).
+
 For a categorized map of every script currently living under `SDXL/`, see [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) and [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
 
 ## Requirements for the current SDXL pipeline
@@ -87,6 +89,8 @@ Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
 Peak RAM: **~12 GB** out of 16 GB  
 Resolution: **1024x1024** (fixed)
+
+Recent session-validated `v0.1.3` control run with default `mmap` on OnePlus 13 (`1024×1024`, `8` steps, `CFG=1.0`) reached **104.4 s total** (`CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`), which is about **17.1% faster** than the earlier public no-CFG baseline.
 
 ## Quick start
 
@@ -196,7 +200,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, save to gallery.  
-APK `v0.1.2-beta` includes the optional **Live Preview (TAESD)** toggle and a **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled.  
+APK `v0.1.3` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, and now enables QNN `mmap` by default for the phone runtime launch path.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)

@@ -70,6 +70,10 @@ _ort_session = None
 _ort_avail: bool | None = None
 _preview_thread: threading.Thread | None = None
 SHOW_TEMP = os.environ.get("SDXL_SHOW_TEMP", "0") == "1"
+QNN_LOG_LEVEL = os.environ.get("SDXL_QNN_LOG_LEVEL", "warn")
+QNN_PROFILING_LEVEL = os.environ.get("SDXL_QNN_PROFILING_LEVEL", "").strip()
+QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
+QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 
 
 def _log(line: str = "") -> None:
@@ -359,8 +363,12 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False):
         "--input_list", input_list_path,
         "--output_dir", output_dir,
         "--perf_profile", "burst",
-        "--log_level", "warn",
+        "--log_level", QNN_LOG_LEVEL,
     ]
+    if QNN_PROFILING_LEVEL:
+        cmd.extend(["--profiling_level", QNN_PROFILING_LEVEL])
+    if QNN_USE_MMAP:
+        cmd.append("--use_mmap")
     if native:
         cmd.append("--use_native_output_files")
     t0 = time.time()
@@ -373,6 +381,12 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False):
     if result.returncode != 0:
         print(f"  [qnn-net-run ERROR] {result.stderr[-500:]}", file=sys.stderr)
         raise RuntimeError(f"qnn-net-run failed: exit {result.returncode}")
+    if QNN_STDOUT_ECHO and result.stdout.strip():
+        _log(result.stdout.rstrip())
+    if QNN_PROFILING_LEVEL:
+        prof_log = os.path.join(output_dir, "qnn-profiling-data_0.log")
+        if os.path.exists(prof_log):
+            _log(f"  [QNN profile] {prof_log}")
     return elapsed
 
 
@@ -395,6 +409,10 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     _log(f"Prompt: {prompt}")
     _log(f"Base:   {DR}")
+    qnn_mode = f"QNN:    mmap={'on' if QNN_USE_MMAP else 'off'}, log={QNN_LOG_LEVEL}"
+    if QNN_PROFILING_LEVEL:
+        qnn_mode += f", profiling={QNN_PROFILING_LEVEL}"
+    _log(qnn_mode)
     if use_cfg:
         _log(f"Neg:    {neg_prompt[:80]}{'...' if len(neg_prompt) > 80 else ''}")
     _log(f"Seed: {seed}, Steps: {steps}, CFG: {cfg_scale}")

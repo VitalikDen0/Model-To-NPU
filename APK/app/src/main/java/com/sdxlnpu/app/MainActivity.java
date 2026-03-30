@@ -280,6 +280,8 @@ public class MainActivity extends AppCompatActivity {
         StringBuilder script = new StringBuilder();
         script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
         script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
+        script.append("export SDXL_QNN_USE_MMAP=1\n");
+        script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
         script.append(String.format(Locale.US,
             "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
             shellEscape(BASE_DIR), shellEscape(BASE_DIR), shellEscape(BASE_DIR)));

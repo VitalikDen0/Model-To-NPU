@@ -13,6 +13,8 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
+Current documented APK version: **`0.1.3`**.
+
 ## Architecture
 
 ```text
@@ -119,6 +121,8 @@ Through ⚙️ in the ActionBar you can:
 | **Total (no CFG)** | **~126 s** |
 | **Total (CFG=3.5)** | **~251 s** |
 
+The session-validated `v0.1.3` control run (`1024×1024`, `8` steps, `CFG=1.0`, `mmap` ON) reached **104.4 s total**: `CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`.
+
 ## Files on the phone
 
 ```text
@@ -145,6 +149,7 @@ Through ⚙️ in the ActionBar you can:
 
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
+- APK `v0.1.3` explicitly exports `SDXL_QNN_USE_MMAP=1` before launching the runtime, and `phone_generate.py` now also defaults to `mmap` itself;
 - Live Preview uses `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime`; the old `taesd_decoder.serialized.bin.bin` preview path is no longer required for the current flow;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
 - the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;

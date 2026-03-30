@@ -45,6 +45,8 @@
 
 Для отдельной ревизии текущей структуры SDXL UNet, split-границ и зон риска при квантовании см. [`SDXL/UNET_QUANTIZATION_REVIEW.md`](SDXL/UNET_QUANTIZATION_REVIEW.md) и [`SDXL/UNET_QUANTIZATION_REVIEW_RU.md`](SDXL/UNET_QUANTIZATION_REVIEW_RU.md).
 
+Для свежего разбора runtime-overhead, эффекта `mmap` и контрольных цифр после `0.1.3` см. [`SDXL/UNET_OVERHEAD_REVIEW.md`](SDXL/UNET_OVERHEAD_REVIEW.md) и [`SDXL/UNET_OVERHEAD_REVIEW_RU.md`](SDXL/UNET_OVERHEAD_REVIEW_RU.md).
+
 Для карты всех текущих скриптов в `SDXL/` см. [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) и [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
 
 ## Требования для текущего SDXL pipeline
@@ -87,6 +89,8 @@
 
 Пик RAM: **~12 GB** из 16 GB  
 Разрешение: **1024×1024** (фиксированное)
+
+Свежий контрольный прогон `v0.1.3` с дефолтным `mmap` на OnePlus 13 (`1024×1024`, `8` шагов, `CFG=1.0`) дал **104.4 s total** (`CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`), то есть примерно на **17.1% быстрее** прежнего публичного no-CFG ориентира.
 
 ## Быстрый старт
 
@@ -196,7 +200,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, сохранение в галерею.  
-В `v0.1.2-beta` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, где guidance применяется только на первых `ceil(steps / 2)` шагах денойзинга при включённом CFG.  
+В `v0.1.3` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, где guidance применяется только на первых `ceil(steps / 2)` шагах денойзинга при включённом CFG, а запуск phone runtime теперь по умолчанию включает QNN `mmap`.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)

@@ -33,9 +33,12 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - [Current lessons learned](SDXL/LESSONS_LEARNED.md)
 - [UNet quantization review (EN)](SDXL/UNET_QUANTIZATION_REVIEW.md)
 - [UNet quantization review (RU)](SDXL/UNET_QUANTIZATION_REVIEW_RU.md)
+- [UNet overhead review (EN)](SDXL/UNET_OVERHEAD_REVIEW.md)
+- [UNet overhead review (RU)](SDXL/UNET_OVERHEAD_REVIEW_RU.md)
 
 ## Changelog
 
+- **0.1.3** — phone runtime and APK launch path now enable QNN `mmap` by default, repo-visible SDXL speed/overhead probes were added, and the current control run reached **104.4s total** at `1024×1024`, `8` steps, `CFG=1.0` on OnePlus 13.
 - **0.1.2-beta** — APK now exposes a **½-CFG** toggle that applies guidance only to the first `ceil(steps / 2)` denoising steps; added a dedicated UNet quantization review with per-block risk notes and safer experiment boundaries.
 - **0.1.2** — APK gained optional **Live Preview (TAESD)** using `phone_gen/taesd_decoder.onnx` + `onnxruntime` on the phone.
 - **Runtime / preview fixes** — TAESD preview path was repaired end-to-end, including export, phone runtime wiring, and deployment docs.

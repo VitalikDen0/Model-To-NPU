@@ -243,3 +243,19 @@ All ONNX exports verified against PyTorch FP32 originals:
 | Context binary gen (phone) | ~5-10 min | OnePlus 13 HTP |
 | QNN conversion (host) | ~1-2 min | Windows PC |
 | Android .so build (host) | ~30s | Windows PC |
+
+---
+
+## 9. Runtime overhead findings (2026-03-30)
+
+Deep probing of the split UNet path showed that the remaining pain is not just accelerator math.
+
+- single encoder wall time was measured at **8312.0 ms**;
+- single decoder wall time was measured at **8141.1 ms**;
+- adding `--use_mmap` reduced those to **6115.0 ms** and **6011.4 ms** respectively (about **26%** gain on both halves);
+- repeat×4 in one process collapsed average cost to **3527.5 ms** (encoder) and **4379.7 ms** (decoder), which strongly points at process/context lifecycle overhead.
+
+Practical consequence:
+
+- `v0.1.3` now enables `mmap` by default in the phone runtime and the APK launch path;
+- the next major speed win is likely a persistent encoder/decoder runner rather than more quantization experiments.
