@@ -43,6 +43,8 @@ There is also a small rooted artifact bundle under [`examples/rooted-phone-sampl
 
 For accumulated technical pitfalls and implementation notes, see [`SDXL/LESSONS_LEARNED.md`](SDXL/LESSONS_LEARNED.md) and the Russian counterpart [`SDXL/LESSONS_LEARNED_RU.md`](SDXL/LESSONS_LEARNED_RU.md).
 
+For a dedicated review of the current SDXL UNet structure, split boundaries, and quantization risk zones, see [`SDXL/UNET_QUANTIZATION_REVIEW.md`](SDXL/UNET_QUANTIZATION_REVIEW.md) and [`SDXL/UNET_QUANTIZATION_REVIEW_RU.md`](SDXL/UNET_QUANTIZATION_REVIEW_RU.md).
+
 For a categorized map of every script currently living under `SDXL/`, see [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) and [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
 
 ## Requirements for the current SDXL pipeline
@@ -194,7 +196,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, save to gallery.  
-APK `v0.1.2` includes the optional **Live Preview (TAESD)** toggle that decodes step previews while denoising, as long as `phone_gen/taesd_decoder.onnx` is deployed on the phone and `onnxruntime` is available in Termux.  
+APK `v0.1.2-beta` includes the optional **Live Preview (TAESD)** toggle and a **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)

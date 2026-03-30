@@ -43,6 +43,8 @@
 
 Для практических подводных камней и накопленных технических заметок см. [`SDXL/LESSONS_LEARNED.md`](SDXL/LESSONS_LEARNED.md) и русскую версию [`SDXL/LESSONS_LEARNED_RU.md`](SDXL/LESSONS_LEARNED_RU.md).
 
+Для отдельной ревизии текущей структуры SDXL UNet, split-границ и зон риска при квантовании см. [`SDXL/UNET_QUANTIZATION_REVIEW.md`](SDXL/UNET_QUANTIZATION_REVIEW.md) и [`SDXL/UNET_QUANTIZATION_REVIEW_RU.md`](SDXL/UNET_QUANTIZATION_REVIEW_RU.md).
+
 Для карты всех текущих скриптов в `SDXL/` см. [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) и [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
 
 ## Требования для текущего SDXL pipeline
@@ -194,7 +196,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, сохранение в галерею.  
-В `v0.1.2` APK доступен опциональный переключатель **Live Preview (TAESD)**, который показывает промежуточные preview во время денойзинга, если на телефоне задеплоен `phone_gen/taesd_decoder.onnx`, а в Termux доступен `onnxruntime`.  
+В `v0.1.2-beta` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, где guidance применяется только на первых `ceil(steps / 2)` шагах денойзинга при включённом CFG.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)

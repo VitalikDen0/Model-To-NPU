@@ -497,7 +497,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     # Pre-create a single reusable work dir (avoids mkdir overhead per step)
     _ensure_unet_workdirs(use_cfg)
 
-    cfg_cutoff = (steps // 2 + 1) if (use_cfg and progressive_cfg) else steps
+    cfg_cutoff = ((steps + 1) // 2) if (use_cfg and progressive_cfg) else steps
     if progressive_cfg and use_cfg:
         _log(f"  [Progressive CFG] CFG on steps 1..{cfg_cutoff}, uncond-only after")
 
@@ -792,7 +792,7 @@ if __name__ == "__main__":
     ap.add_argument("--preview", action="store_true",
                     help="Decode each step with TAESD ONNX on CPU for live preview")
     ap.add_argument("--prog-cfg", action="store_true",
-                    help="Apply CFG only on the first half of denoising steps")
+                    help="Apply CFG only on the first ceil(steps/2) denoising steps")
     a = ap.parse_args()
 
     generate(

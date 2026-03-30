@@ -31,7 +31,7 @@ Those files are either too large, too environment-specific, or not appropriate t
 
 Why they are missing: GitHub does not allow multi-hundred-megabyte / multi-gigabyte model payloads in a normal repository. The split UNet/CLIP contexts alone exceed the per-file limit by a wide margin, so this sample keeps only the lightweight pieces that are practical to version.
 
-The current live-preview exception is the tiny TAESD ONNX decoder, which is small enough to keep as a reference artifact because it powers APK `v0.1.2` live previews. A legacy `context/taesd_decoder.serialized.bin.bin` may still appear in older rooted snapshots, but the current runtime no longer needs it.
+The current live-preview exception is the tiny TAESD ONNX decoder, which is small enough to keep as a reference artifact because it powers APK `v0.1.2-beta` live previews. A legacy `context/taesd_decoder.serialized.bin.bin` may still appear in older rooted snapshots, but the current runtime no longer needs it.
 
 ## Source model reference
 

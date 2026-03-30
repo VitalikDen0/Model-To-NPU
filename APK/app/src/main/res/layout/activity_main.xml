@@ -130,6 +130,14 @@
 
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/progressiveCfg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/progressive_cfg"
+            android:checked="false" />
+
         <!-- Generate / Stop buttons -->
         <LinearLayout
             android:layout_width="match_parent"

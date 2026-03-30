@@ -90,8 +90,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - **Промпт и негативный промпт** — полная BPE-токенизация CLIP
 - **Steps** (1–20) — число шагов UNet denoising
 - **CFG** (1.0–7.0) — classifier-free guidance
+- **½-CFG** — guidance только на первых `ceil(steps / 2)` шагах, чтобы не платить полный CFG-штраф до самого конца
 - **Seed** — воспроизводимая генерация (пусто = случайный)
 - **Контрастирование** — percentile-based contrast stretch
+- **Live Preview (TAESD)** — промежуточный preview через CPU-side ONNX decoder
 - **Сохранение** — в галерею
 - **Stop** — прерывание генерации
 - **Прогресс-бар** — этапы CLIP -> UNet -> VAE
@@ -145,6 +147,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - По умолчанию используется общая папка `/sdcard/Download/sdxl_qnn`
 - Live Preview использует `phone_gen/taesd_decoder.onnx` на CPU через `onnxruntime`; старый `taesd_decoder.serialized.bin.bin` больше не нужен для текущего preview-path
 - CFG выше `1.0` заметно замедляет генерацию, потому что phone-side runtime всё ещё считает и cond-, и uncond-ветку; при split UNet это означает существенно больше encoder/decoder-работы на каждый шаг даже после batching-оптимизаций
+- Режим **½-CFG** прокидывает в phone runtime флаг `--prog-cfg` и держит guidance только на первых `ceil(steps / 2)` шагах; это компромиссный режим между скоростью и силой guidance
 - stdout парсится в реальном времени для отображения прогресса
 - результат (PNG) загружается через `BitmapFactory.decodeFile()`
 - сохранение в галерею идёт через `MediaStore` API
