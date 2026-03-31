@@ -88,6 +88,7 @@ QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_perfo
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
 PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
 FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "1"))))
+STRETCH_SAMPLE_STRIDE = max(1, int(os.environ.get("SDXL_QNN_STRETCH_SAMPLE_STRIDE", "4")))
 TEMP_POLL_INTERVAL = max(0.2, float(os.environ.get("SDXL_TEMP_INTERVAL_SEC", "1.0")))
 _TEMP_SENSOR_CACHE: dict[str, list[tuple[str, str]]] | None = None
 _TEMP_MONITOR_STOP: threading.Event | None = None
@@ -204,6 +205,14 @@ def _write_multi_input_list_once(path: str, rows) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(" ".join(row) + "\n")
+
+
+def _stretch_sample_view(img: np.ndarray) -> np.ndarray:
+    if STRETCH_SAMPLE_STRIDE <= 1:
+        return img
+    if img.shape[0] < 512 or img.shape[1] < 512:
+        return img
+    return img[::STRETCH_SAMPLE_STRIDE, ::STRETCH_SAMPLE_STRIDE]
 
 
 # Debug: print SoC temperature in denoise loop to detect thermal throttling.
@@ -773,7 +782,8 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     img = np.clip(img / 2 + 0.5, 0, 1)
 
     if stretch:
-        lo, hi = np.percentile(img, [0.5, 99.5])
+        stretch_ref = _stretch_sample_view(img)
+        lo, hi = np.percentile(stretch_ref, [0.5, 99.5])
         if hi - lo > 0.05:
             img = np.clip((img - lo) / (hi - lo), 0, 1)
 
