@@ -92,6 +92,13 @@ Resolution: **1024x1024** (fixed)
 
 Recent session-validated `v0.1.3` control run with default `mmap` on OnePlus 13 (`1024×1024`, `8` steps, `CFG=1.0`) reached **104.4 s total** (`CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`), which is about **17.1% faster** than the earlier public no-CFG baseline.
 
+Fresh `v0.1.4` tuned runs with **live thermal logging**, default `sustained_high_performance`, deployed HTP backend extensions, and **progressive CFG** (`8` steps, `CFG=3.5`, `--prog-cfg`) reached **79.7–80.6 s total** on the same OnePlus 13:
+
+- run 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
+- run 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
+
+In those warmed-up full runs, the practical thermal envelope stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes observed up to about **78°C**. An early one-line CPU spike to `88.8°C` appeared before the first run stabilized and looks more like a transient sensor jump than the sustained generation state.
+
 ## Quick start
 
 ### 1. Environment setup (PC)
@@ -171,6 +178,8 @@ python scripts/deploy_to_phone.py \
   --qnn-bin-dir /path/to/qnn_sdk/bin/aarch64-android
 ```
 
+When `--qnn-lib-dir` contains `libQnnHtpNetRunExtensions.so`, the deploy script now copies it as well, so the phone runtime and APK can auto-enable the shipped `htp_backend_extensions_lightning.json` path.
+
 ### 4. Termux setup (on phone)
 
 ```bash
@@ -189,7 +198,16 @@ export SDXL_QNN_BASE=/sdcard/Download/sdxl_qnn
 python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "1girl, anime, cherry blossoms"
 python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "dark castle" --cfg 2.0 --neg "blurry"
 python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "landscape" --seed 777 --steps 8
+python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "1girl, upper body, looking at viewer, masterpiece, best quality" --seed 777 --steps 8 --cfg 3.5 --prog-cfg
 ```
+
+The current runtime defaults to:
+
+- `SDXL_QNN_USE_MMAP=1`
+- `SDXL_QNN_PERF_PROFILE=sustained_high_performance`
+- live CPU / GPU / NPU logging when `SDXL_SHOW_TEMP=1`
+
+If both `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` exist in the deployed phone directory, `phone_generate.py` now auto-enables `SDXL_QNN_CONFIG_FILE` even for direct Termux runs.
 
 #### Via APK
 
@@ -199,8 +217,8 @@ cd APK
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, save to gallery.  
-APK `v0.1.3` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, and now enables QNN `mmap` by default for the phone runtime launch path.  
+The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
+APK `v0.1.4` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, and auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)
@@ -295,6 +313,8 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
 │   └── vae_decoder.serialized.bin.bin     (~151 MB)
+├── htp_backend_extensions_lightning.json  (optional HTP backend extensions entrypoint)
+├── htp_backend_ext_config_lightning.json  (optional HTP backend tuning config)
 ├── phone_gen/
 │   ├── generate.py                        (standalone generator)
 │   ├── taesd_decoder.onnx                 (~5 MB, optional live preview)
@@ -302,6 +322,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │       ├── vocab.json                     (CLIP BPE vocabulary)
 │       └── merges.txt                     (BPE merge rules)
 ├── lib/                                   (QNN runtime libraries)
+│   └── libQnnHtpNetRunExtensions.so       (optional, auto-used when present)
 ├── model/                                 (optional/extra model libs used in some flows)
 ├── bin/
 │   └── qnn-net-run                        (QNN inference runner)
@@ -314,6 +335,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 - **The documented speed path assumes the Lightning LoRA has been baked into the UNet** — skipping that merge means a much slower baseline SDXL path and the repository timings/examples stop being representative
 - **VAE FP16** slightly compresses color range -> percentile contrast stretching is applied
 - **TAESD live preview is optional** — it is only used for intermediate previews and now relies on a tiny ONNX decoder (`phone_gen/taesd_decoder.onnx`) plus `onnxruntime`, not on a QNN preview context
+- **The best current fast path uses HTP backend extensions** — the repo ships the JSON config, but the runtime only auto-enables it when `libQnnHtpNetRunExtensions.so` is actually deployed under `lib/`
 - **CFG > 1.0 is expensive here** — conditional + unconditional predictions are both needed; because the runtime uses a split UNet (`encoder` + `decoder`), naive CFG means four phone-side UNet subprocess calls per step. The current runtime batches part of that work better than before, but wall-clock time is still close to 2× versus the no-CFG path.
 - **Termux required** — Python runtime for `phone_generate.py`
 - **Android shared-storage access may need manual confirmation** — especially for APK use on Android 11+
@@ -325,6 +347,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 - Low RAM may cause process kill — close other apps
 - On Android 11+, the APK may need "all files access" to read `/sdcard/Download/sdxl_qnn`
 - If `python3` is not reachable from the app process, adjust the Python command/path in ⚙️ Settings
+- If backend extensions are missing, the runtime still works — it simply falls back to the non-config QNN path
 - numpy and torch use different RNGs — the same seed produces different but valid images
 
 ## License

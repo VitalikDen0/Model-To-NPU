@@ -38,6 +38,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 ## Changelog
 
+- **0.1.4** — phone runtime and APK now show live **CPU / GPU / NPU** temperatures, default to QNN `sustained_high_performance`, auto-enable HTP backend extensions when `libQnnHtpNetRunExtensions.so` is deployed, and the current full `8`-step progressive-CFG best path reached about **79.7–80.6s total** on OnePlus 13.
 - **0.1.3** — phone runtime and APK launch path now enable QNN `mmap` by default, repo-visible SDXL speed/overhead probes were added, and the current control run reached **104.4s total** at `1024×1024`, `8` steps, `CFG=1.0` on OnePlus 13.
 - **0.1.2-beta** — APK now exposes a **½-CFG** toggle that applies guidance only to the first `ceil(steps / 2)` denoising steps; added a dedicated UNet quantization review with per-block risk notes and safer experiment boundaries.
 - **0.1.2** — APK gained optional **Live Preview (TAESD)** using `phone_gen/taesd_decoder.onnx` + `onnxruntime` on the phone.

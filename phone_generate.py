@@ -61,6 +61,14 @@ QNN_LIB = os.environ.get("SDXL_QNN_LIB_DIR", f"{DR}/lib")
 QNN_MODEL_DIR = os.environ.get("SDXL_QNN_MODEL_DIR", f"{DR}/model")
 PREVIEW_PNG = os.environ.get("SDXL_QNN_PREVIEW_PNG", f"{OUTPUT_DIR}/preview_current.png")
 TAESD_ONNX = os.environ.get("SDXL_QNN_TAESD_ONNX", f"{DR}/phone_gen/taesd_decoder.onnx")
+DEFAULT_QNN_EXT_LIB = f"{QNN_LIB}/libQnnHtpNetRunExtensions.so"
+DEFAULT_QNN_CONFIG_PATH = f"{DR}/htp_backend_extensions_lightning.json"
+
+
+def _detect_default_qnn_config() -> str:
+    if os.path.exists(DEFAULT_QNN_CONFIG_PATH) and os.path.exists(DEFAULT_QNN_EXT_LIB):
+        return DEFAULT_QNN_CONFIG_PATH
+    return ""
 
 # ─── Cached helpers / cross-thread logging ───
 
@@ -70,10 +78,16 @@ _ort_session = None
 _ort_avail: bool | None = None
 _preview_thread: threading.Thread | None = None
 SHOW_TEMP = os.environ.get("SDXL_SHOW_TEMP", "0") == "1"
+TEMP_POLL_INTERVAL = max(0.2, float(os.environ.get("SDXL_TEMP_INTERVAL_SEC", "1.0")))
 QNN_LOG_LEVEL = os.environ.get("SDXL_QNN_LOG_LEVEL", "warn")
 QNN_PROFILING_LEVEL = os.environ.get("SDXL_QNN_PROFILING_LEVEL", "").strip()
 QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
+QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_performance").strip() or "sustained_high_performance"
+QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
+_TEMP_SENSOR_CACHE: dict[str, list[tuple[str, str]]] | None = None
+_TEMP_MONITOR_STOP: threading.Event | None = None
+_TEMP_MONITOR_THREAD: threading.Thread | None = None
 
 
 def _log(line: str = "") -> None:
@@ -150,19 +164,124 @@ def _prime_ctx_bg(paths: list[str]) -> list[threading.Thread]:
     return threads
 
 
-def _phone_temp() -> tuple[float | None, str | None]:
-    keywords = ("cpu", "npu", "dsp", "soc", "thermal")
-    for zone in range(20):
+def _match_temp_group(zone_type: str) -> str | None:
+    zt = zone_type.lower()
+    if zt.startswith("cpu-") or zt.startswith("cpuss-"):
+        return "CPU"
+    if zt.startswith("gpuss-") or zt.startswith("gpu") or "kgsl" in zt:
+        return "GPU"
+    if zt.startswith("nsphvx-") or zt.startswith("nsphmx-") or zt.startswith("nsp"):
+        return "NPU"
+    return None
+
+
+def _normalize_temp(raw_value: str) -> float | None:
+    try:
+        value = float(raw_value.strip())
+    except Exception:
+        return None
+    if value <= -100:
+        return None
+    if abs(value) >= 1000:
+        value /= 1000.0
+    if value <= 0:
+        return None
+    return value
+
+
+def _discover_temp_sensors() -> dict[str, list[tuple[str, str]]]:
+    global _TEMP_SENSOR_CACHE
+    if _TEMP_SENSOR_CACHE is not None:
+        return _TEMP_SENSOR_CACHE
+
+    sensors: dict[str, list[tuple[str, str]]] = {"CPU": [], "GPU": [], "NPU": []}
+    try:
+        entries = sorted(os.listdir("/sys/class/thermal"))
+    except Exception:
+        _TEMP_SENSOR_CACHE = sensors
+        return sensors
+
+    for entry in entries:
+        if not entry.startswith("thermal_zone"):
+            continue
+        zone_dir = f"/sys/class/thermal/{entry}"
+        type_path = f"{zone_dir}/type"
+        temp_path = f"{zone_dir}/temp"
         try:
-            tp = f"/sys/class/thermal/thermal_zone{zone}/type"
-            with open(tp, "r", encoding="utf-8") as f:
-                ztype = f.read().strip().lower()
-            if any(k in ztype for k in keywords):
-                with open(f"/sys/class/thermal/thermal_zone{zone}/temp", "r", encoding="utf-8") as f:
-                    return int(f.read().strip()) / 1000.0, ztype
+            with open(type_path, "r", encoding="utf-8") as f:
+                zone_type = f.read().strip()
         except Exception:
             continue
-    return None, None
+        group = _match_temp_group(zone_type)
+        if group:
+            sensors[group].append((zone_type, temp_path))
+
+    _TEMP_SENSOR_CACHE = sensors
+    return sensors
+
+
+def _phone_thermal_snapshot() -> dict[str, float]:
+    sensors = _discover_temp_sensors()
+    temps: dict[str, float] = {}
+
+    for group in ("CPU", "GPU", "NPU"):
+        hottest_temp: float | None = None
+        for _, temp_path in sensors.get(group, []):
+            try:
+                with open(temp_path, "r", encoding="utf-8") as f:
+                    temp_c = _normalize_temp(f.read())
+            except Exception:
+                continue
+            if temp_c is None:
+                continue
+            if hottest_temp is None or temp_c > hottest_temp:
+                hottest_temp = temp_c
+        if hottest_temp is not None:
+            temps[group] = hottest_temp
+    return temps
+
+
+def _phone_temp_summary() -> str:
+    temps = _phone_thermal_snapshot()
+    parts = [
+        f"{group}={temps[group]:.1f}°C"
+        for group in ("CPU", "GPU", "NPU")
+        if group in temps
+    ]
+    return " ".join(parts)
+
+
+def _temp_monitor_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        summary = _phone_temp_summary()
+        if summary:
+            _log(f"  [TEMP] {summary}")
+        if stop_event.wait(TEMP_POLL_INTERVAL):
+            break
+
+
+def _start_temp_monitor() -> None:
+    global _TEMP_MONITOR_STOP, _TEMP_MONITOR_THREAD
+    if not SHOW_TEMP:
+        return
+    _stop_temp_monitor()
+    _TEMP_MONITOR_STOP = threading.Event()
+    _TEMP_MONITOR_THREAD = threading.Thread(
+        target=_temp_monitor_loop,
+        args=(_TEMP_MONITOR_STOP,),
+        daemon=True,
+    )
+    _TEMP_MONITOR_THREAD.start()
+
+
+def _stop_temp_monitor(timeout: float = 2.0) -> None:
+    global _TEMP_MONITOR_STOP, _TEMP_MONITOR_THREAD
+    if _TEMP_MONITOR_STOP is not None:
+        _TEMP_MONITOR_STOP.set()
+    if _TEMP_MONITOR_THREAD is not None and _TEMP_MONITOR_THREAD.is_alive():
+        _TEMP_MONITOR_THREAD.join(timeout=timeout)
+    _TEMP_MONITOR_STOP = None
+    _TEMP_MONITOR_THREAD = None
 
 # ─── CLIP BPE Tokenizer (pure Python, no dependencies) ───
 
@@ -362,11 +481,13 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False):
         "--backend", f"{QNN_LIB}/libQnnHtp.so",
         "--input_list", input_list_path,
         "--output_dir", output_dir,
-        "--perf_profile", "burst",
+        "--perf_profile", QNN_PERF_PROFILE,
         "--log_level", QNN_LOG_LEVEL,
     ]
     if QNN_PROFILING_LEVEL:
         cmd.extend(["--profiling_level", QNN_PROFILING_LEVEL])
+    if QNN_CONFIG_FILE:
+        cmd.extend(["--config_file", QNN_CONFIG_FILE])
     if QNN_USE_MMAP:
         cmd.append("--use_mmap")
     if native:
@@ -409,7 +530,12 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     _log(f"Prompt: {prompt}")
     _log(f"Base:   {DR}")
-    qnn_mode = f"QNN:    mmap={'on' if QNN_USE_MMAP else 'off'}, log={QNN_LOG_LEVEL}"
+    qnn_mode = (
+        f"QNN:    perf={QNN_PERF_PROFILE}, mmap={'on' if QNN_USE_MMAP else 'off'}, "
+        f"log={QNN_LOG_LEVEL}"
+    )
+    if QNN_CONFIG_FILE:
+        qnn_mode += f", config={os.path.basename(QNN_CONFIG_FILE)}"
     if QNN_PROFILING_LEVEL:
         qnn_mode += f", profiling={QNN_PROFILING_LEVEL}"
     _log(qnn_mode)
@@ -417,6 +543,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         _log(f"Neg:    {neg_prompt[:80]}{'...' if len(neg_prompt) > 80 else ''}")
     _log(f"Seed: {seed}, Steps: {steps}, CFG: {cfg_scale}")
     t_total = time.time()
+    _start_temp_monitor()
 
     # ── Load tokenizers ──
     tok_l = CLIPTokenizer(
@@ -541,9 +668,9 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
 
         temp_str = ""
         if SHOW_TEMP:
-            temp, zone = _phone_temp()
-            if temp is not None and zone is not None:
-                temp_str = f" [{temp:.1f}°C {zone}]"
+            temp_summary = _phone_temp_summary()
+            if temp_summary:
+                temp_str = f" [{temp_summary}]"
 
         cfg_str = " CFG" if step_uses_cfg else ""
         _log(
@@ -589,6 +716,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
             img = np.clip((img - lo) / (hi - lo), 0, 1)
 
     img_u8 = (img * 255).astype(np.uint8)
+    _stop_temp_monitor()
 
     # ── 5. Save ──
     from PIL import Image
