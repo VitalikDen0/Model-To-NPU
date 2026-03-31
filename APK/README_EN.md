@@ -13,7 +13,7 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.2.2`**.
+Current documented APK version: **`0.2.3`**.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ Current documented APK version: **`0.2.2`**.
 - **Phone**: Snapdragon 8 Elite (SM8750) or another device with a compatible Qualcomm NPU
 - **Root**: not required for the current default path layout
 - **Termux**: Python 3.13+, numpy, Pillow, `termux-setup-storage`
-- **TAESD live preview (optional)**: `onnxruntime` in Termux + `phone_gen/taesd_decoder.onnx`
+- **TAESD live preview (optional)**: preferred path is deployed QNN TAESD assets on the GPU; fallback is `onnxruntime` in Termux + `phone_gen/taesd_decoder.onnx`
 - **Android 11+**: shared Downloads access may require “all files access”
 - **QNN**: context binaries must already be deployed (see `scripts/deploy_to_phone.py`)
 
@@ -95,7 +95,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - half-CFG toggle — guidance only on the first `ceil(steps / 2)` denoising steps;
 - reproducible seed handling;
 - percentile-based contrast stretching;
-- Live Preview (TAESD) toggle;
+- Live Preview (TAESD) toggle with a preferred QNN GPU path and CPU ONNX fallback;
 - save-to-gallery support;
 - stop button for ongoing generation;
 - progress bar for CLIP → UNet → VAE stages;
@@ -126,6 +126,8 @@ The session-validated `v0.1.3` control run (`1024×1024`, `8` steps, `CFG=1.0`, 
 
 The current best session-validated `v0.2.0` path with `sustained_high_performance`, backend extensions, and `--prog-cfg` (`8` steps, `CFG=3.5`) reached **79.7–80.6 s total** on OnePlus 13. During those full runs, live thermals typically stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes seen up to roughly **78°C**.
 
+The fresh `v0.2.3` reuse-tuned path pushed the README-visible marker to **78.0 s total**. On the current fast path, the first guided UNet steps now descend roughly as **12.2 → 10.4 → 9.9 → 9.8 s**, while the first `CFG=1.0` steps are roughly **7.4 → 7.4 → 6.2 → 6.5 s**. Separately, TAESD live preview moved onto rebuilt **QNN GPU** assets and is now around **1.0 s** per step instead of the older **5.5–6.0 s** CPU preview path.
+
 ## Files on the phone
 
 ```text
@@ -155,8 +157,8 @@ The current best session-validated `v0.2.0` path with `sustained_high_performanc
 
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
-- APK `v0.2.2` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=sustained_high_performance`, enables live thermal logging, auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present, routes transient `WORK_DIR` / preview / output files into the app cache to reduce shared-storage overhead, and once again parses preview timing lines in the `QNN GPU ...ms` format;
-- Live Preview now prefers deployed QNN TAESD preview assets (`taesd_decoder.serialized.bin.bin` and/or `model/libTAESDDecoder.so`) on the GPU backend when available, and falls back to `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime` if QNN preview is unavailable or fails;
+- APK `v0.2.3` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=sustained_high_performance`, enables live thermal logging, auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present, routes transient `WORK_DIR` / preview / output files into the app cache to reduce shared-storage overhead, and correctly parses preview timing lines in the `QNN GPU ...ms` format;
+- Live Preview now prefers rebuilt QNN TAESD preview assets (`taesd_decoder.serialized.bin.bin` and/or `model/libTAESDDecoder.so`) on the GPU backend, runs there at roughly **1.0 s** per step, and falls back to `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime` only when QNN preview is unavailable or fails;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
 - the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;
 - the status parser now keeps the live `CPU / GPU / NPU` line separate from the main stage/progress text;

@@ -259,3 +259,47 @@ Practical consequence:
 
 - `v0.1.3` now enables `mmap` by default in the phone runtime and the APK launch path;
 - the next major speed win is likely a persistent encoder/decoder runner rather than more quantization experiments.
+
+---
+
+## 10. TAESD QNN preview root cause and fix (2026-04-01)
+
+The broken TAESD preview turned out to be a layered problem.
+
+### Part 1: preview save path was too naive
+
+`phone_generate.py` was always applying `img / 2 + 0.5` before saving the preview PNG.
+That is correct only when the incoming tensor is in roughly `[-1, 1]`.
+
+The phone-side QNN TAESD path had cases where the output already arrived in `[0, 1]`, so the save path could wash the image out into roughly `[0.5, 1.0]`.
+
+### Part 2: the bigger real bug was stale / bad TAESD QNN artifacts
+
+Even after fixing save-path normalization, the deployed QNN TAESD preview was still far from the ONNX reference.
+
+What exposed the real issue:
+
+- ONNX TAESD vs final VAE image: about **0.78** correlation on the same latent;
+- old QNN TAESD vs ONNX TAESD: only about **0.21** correlation;
+- old QNN TAESD raw output was clipped to **`[0, 1]`** instead of the expected roughly **`[-1.18, 1.23]`** range.
+
+### What actually fixed it
+
+The reliable fix was:
+
+1. rebuild `libTAESDDecoder.so` from the current ONNX;
+2. generate the TAESD GPU context **on the phone itself** with `qnn-context-binary-generator`;
+3. deploy that rebuilt `lib + context` pair together.
+
+After the rebuild:
+
+- rebuilt QNN TAESD vs ONNX TAESD jumped to about **0.9999** correlation;
+- rebuilt QNN TAESD vs final image on the same latent reached about **0.91** correlation;
+- real 8-step phone preview-vs-final similarity rose to about **0.85**.
+
+### Practical deployment lesson
+
+Do **not** assume that an old TAESD `lib/context` pair is still valid just because the preview backend starts and prints timings.
+If the preview looks wrong, compare the QNN output directly against the ONNX TAESD reference on the same latent.
+
+It is very possible for the preview to be *fast* and still be *numerically wrong*.

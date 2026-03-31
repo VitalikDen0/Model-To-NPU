@@ -105,12 +105,24 @@ Result:
 
 Compared with the earlier public no-CFG baseline of about **126 s**, this control run is about **17.1% faster**.
 
+## Reuse follow-up in `v0.2.3`
+
+The later reuse-tuned phone runtime finally changed the *shape* of the first-step slowdown, not just the total number at the end.
+
+- the first four guided UNet steps on the current fast CFG path now descend roughly as **12.2 → 10.4 → 9.9 → 9.8 s**;
+- the first four `CFG=1.0` steps on the no-guidance path sit roughly around **7.4 → 7.4 → 6.2 → 6.5 s** with normal run-to-run jitter;
+- the practical README-visible marker moved to **78.0 s total** once those reuse gains were combined with the rest of the tuned path.
+
+That means the runtime is no longer stuck in the older “flat ~12 s guided plateau for the early steps” behavior. There is now clear warm-path decay even before the run reaches the cheaper tail steps.
+
 ## Practical recommendation
 
 Short term:
 
 - keep `mmap` enabled by default;
 - use the new probes when changing runtime behavior;
+- treat the first guided step as the next hot spot to squeeze harder;
+- keep an eye on CLIP prompt overhead now that UNet and TAESD are cheaper;
 - do not chase `8W8A` again before the runtime overhead path is squeezed harder.
 
 Medium term:

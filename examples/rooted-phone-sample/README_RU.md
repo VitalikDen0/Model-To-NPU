@@ -31,7 +31,7 @@
 
 Почему их нет: обычный GitHub-репозиторий не принимает multi-hundred-megabyte / multi-gigabyte model payload'ы. Одни только split UNet/CLIP context'ы заметно превышают лимит на файл, поэтому в sample-наборе лежат только лёгкие куски, которые реально имеет смысл версионировать.
 
-Текущее исключение для live preview — маленький TAESD ONNX decoder, который достаточно компактен, чтобы оставить его как референсный артефакт для текущего APK `v0.1.3`. Старый `context/taesd_decoder.serialized.bin.bin` может встречаться только в более ранних rooted-снимках, но текущему runtime он уже не нужен.
+Текущее «лёгкое исключение» для live preview — маленький TAESD ONNX decoder: его удобно хранить в репозитории, и он остаётся CPU fallback-путём. Но сам живой runtime теперь в первую очередь предпочитает rebuilt QNN TAESD preview assets на GPU (`taesd_decoder.serialized.bin.bin` вместе с `libTAESDDecoder.so`) и откатывается на ONNX только если QNN preview assets отсутствуют или ломаются. В старых rooted-снимках всё ещё могут попадаться legacy TAESD context-файлы.
 
 ## Ссылка на исходную модель
 

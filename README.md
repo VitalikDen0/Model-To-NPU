@@ -38,6 +38,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 ## Changelog
 
+- **0.2.3** — APK/runtime/docs were refreshed around the new fast path: the split-UNet reuse pass now makes the early guided steps decay instead of hovering near a flat ~12 s plateau, the README-visible run moved to **78.0 s total**, TAESD live preview now runs through rebuilt QNN GPU assets at roughly **1.0 s** per step instead of the older 5.5–6.0 s CPU path, and the deploy/docs flow was updated so these preview artifacts are described more accurately.
 - **0.2.2** — APK/runtime snapshot refreshed for the current validation cycle: TAESD preview wiring was repaired for the QNN path, APK preview timing parsing now handles `QNN GPU` preview lines again, and the deploy/docs/sample notes were synchronized around the current phone runtime layout while early CFG-step tuning remains under active investigation.
 - **0.2.1** — APK now routes transient runtime files (`WORK_DIR`, generated PNGs, and live preview frames) through app-private cache directories instead of shared storage, while keeping the deployed model tree in the public phone path.
 - **0.2.0** — phone runtime and APK now show live **CPU / GPU / NPU** temperatures, default to QNN `sustained_high_performance`, auto-enable HTP backend extensions when `libQnnHtpNetRunExtensions.so` is deployed, and the current full `8`-step progressive-CFG best path reached about **79.7–80.6s total** on OnePlus 13.
@@ -79,26 +80,32 @@ All gallery samples and the currently documented phone-side examples are **1024�
 <!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>Earlier public screenshot — 273.6s total</b><br>
       <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Earlier phone-side proof screenshot at 273.6 seconds" width="100%">
     </td>
-    <td width="50%" align="center">
-      <b>v0.2.0 current run — 100.8s total</b><br>
+    <td width="33%" align="center">
+      <b>v0.2.0 public marker — 100.8s total</b><br>
       <img src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" alt="Phone-side proof screenshot for v0.2.0 at 100.8 seconds" width="100%">
+    </td>
+    <td width="33%" align="center">
+      <b>v0.2.3 current run — 78.0s total</b><br>
+      <img src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" alt="Phone-side proof screenshot for v0.2.3 at 78.0 seconds" width="100%">
     </td>
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
 <img width="582" height="1280" alt="image" src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" />
 
-Compared with the earlier public on-device screenshot, the current `v0.2.0` screenshot shows:
+Compared with the earlier public on-device screenshot and the later `v0.2.0` README marker, the current `v0.2.3` screenshot shows:
 
-- **273.6s → 100.8s total**;
-- **172.8s faster** wall-clock time;
-- about **63.2% improvement** for this README-visible screenshot comparison.
+- **273.6s → 78.0s total**;
+- **100.8s → 78.0s total**;
+- **195.6s faster** than the earliest public marker;
+- **22.8s faster** than the `v0.2.0` README marker;
+- about **71.5% faster** vs `273.6s`, and about **22.6% faster** vs `100.8s`.
 
-This `v0.2.0` comparison is meant as the new README-visible progress marker for the shared public runtime path.
+This `v0.2.3` screenshot is the new README-visible progress marker for the shared public runtime path.
 
 ## Why CFG is much slower here
 
