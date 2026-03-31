@@ -72,17 +72,12 @@ All gallery samples and the currently documented phone-side examples are **1024�
 
 ## Proof that it actually runs on-device
 
-<<<<<<< HEAD
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Phone-side proof screenshot" width="88%">
-  <img width="582" height="1280" alt="image" src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" />
-=======
 <!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <b>v0.1.3 control run — 104.4s total</b><br>
-      <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Phone-side proof screenshot for v0.1.3 at 104.4 seconds" width="100%">
+      <b>Earlier public screenshot — 273.6s total</b><br>
+      <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Earlier phone-side proof screenshot at 273.6 seconds" width="100%">
     </td>
     <td width="50%" align="center">
       <b>v0.2.0 current run — 100.8s total</b><br>
@@ -91,13 +86,12 @@ All gallery samples and the currently documented phone-side examples are **1024�
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
->>>>>>> 0644ec4 (Update README proof comparison for v0.2.0)
 
-Compared with the earlier `v0.1.3` public control run, the current `v0.2.0` screenshot shows:
+Compared with the earlier public on-device screenshot, the current `v0.2.0` screenshot shows:
 
-- **104.4s → 100.8s total**;
-- **3.6s faster** wall-clock time;
-- about **3.4% improvement** for the public phone-side path.
+- **273.6s → 100.8s total**;
+- **172.8s faster** wall-clock time;
+- about **63.2% improvement** for this README-visible screenshot comparison.
 
 This `v0.2.0` comparison is meant as the new README-visible progress marker for the shared public runtime path.
 
