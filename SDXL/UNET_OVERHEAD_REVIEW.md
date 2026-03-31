@@ -128,3 +128,13 @@ Short term:
 Medium term:
 
 - build a persistent encoder/decoder runner so contexts are loaded once and reused across steps.
+
+## Next likely wins after `v0.2.3`
+
+After the current reuse pass and the TAESD GPU move, the next practical speed targets look like this:
+
+1. **parallel CLIP work as a low-risk experiment** — the cond/uncond text path is now a cleaner fraction of total wall time, so overlapping some of that prompt-side work is worth testing;
+2. **revisit the daemon / persistent-runner path as the highest-reward project** — the repeat-in-one-process probe still says lifecycle overhead is the biggest remaining wall-clock tax even though the first daemon attempt regressed;
+3. **small VAE/context warmup experiments** — probably not a giant win, but still worth checking once the bigger UNet/CLIP questions are exhausted.
+
+The current guidance is: squeeze the first guided UNet step and CLIP overhead first, but do not forget that the daemon path is still the biggest theoretical payoff if its regression is understood.
