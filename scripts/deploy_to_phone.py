@@ -31,6 +31,7 @@ CONTEXT_FILES = [
 # QNN runtime libraries needed on phone
 QNN_LIBS = [
     "libQnnHtp.so",
+    "libQnnHtpNetRunExtensions.so",
     "libQnnHtpV79Stub.so",
     "libQnnHtpV79Skel.so",
     "libQnnSystem.so",

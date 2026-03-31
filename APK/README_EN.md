@@ -13,7 +13,7 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.1.3`**.
+Current documented APK version: **`0.1.4`**.
 
 ## Architecture
 
@@ -99,6 +99,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - save-to-gallery support;
 - stop button for ongoing generation;
 - progress bar for CLIP → UNet → VAE stages;
+- live CPU / GPU / NPU temperature line during generation;
 - configurable paths through ⚙️ Settings.
 
 ## Model settings
@@ -123,6 +124,8 @@ Through ⚙️ in the ActionBar you can:
 
 The session-validated `v0.1.3` control run (`1024×1024`, `8` steps, `CFG=1.0`, `mmap` ON) reached **104.4 s total**: `CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`.
 
+The current best session-validated `v0.1.4` path with `sustained_high_performance`, backend extensions, and `--prog-cfg` (`8` steps, `CFG=3.5`) reached **79.7–80.6 s total** on OnePlus 13. During those full runs, live thermals typically stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes seen up to roughly **78°C**.
+
 ## Files on the phone
 
 ```text
@@ -139,7 +142,10 @@ The session-validated `v0.1.3` control run (`1024×1024`, `8` steps, `CFG=1.0`, 
 │   └── tokenizer/
 │       ├── vocab.json
 │       └── merges.txt
+├── htp_backend_extensions_lightning.json
+├── htp_backend_ext_config_lightning.json
 ├── lib/    (QNN runtime libs)
+│   └── libQnnHtpNetRunExtensions.so   (optional, enables backend extensions)
 ├── model/  (optional extra model libs in some flows)
 ├── bin/    (qnn-net-run)
 └── outputs/
@@ -149,10 +155,11 @@ The session-validated `v0.1.3` control run (`1024×1024`, `8` steps, `CFG=1.0`, 
 
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
-- APK `v0.1.3` explicitly exports `SDXL_QNN_USE_MMAP=1` before launching the runtime, and `phone_generate.py` now also defaults to `mmap` itself;
+- APK `v0.1.4` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=sustained_high_performance`, enables live thermal logging, and auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present;
 - Live Preview uses `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime`; the old `taesd_decoder.serialized.bin.bin` preview path is no longer required for the current flow;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
 - the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;
+- the status parser now keeps the live `CPU / GPU / NPU` line separate from the main stage/progress text;
 - stdout is parsed in real time to display progress;
 - the resulting PNG is loaded through `BitmapFactory.decodeFile()`;
 - gallery saving uses the Android `MediaStore` API.

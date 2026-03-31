@@ -86,9 +86,14 @@ public class MainActivity extends AppCompatActivity {
     private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
     private static final Pattern PAT_UNET  = Pattern.compile("^\\s*\\[UNet (\\d+)/(\\d+)\\][^\\n]*?\\s(\\d+)ms(?:\\s|$)");
     private static final Pattern PAT_PREV  = Pattern.compile("^\\s*\\[PREVIEW step (\\d+)/(\\d+)\\]\\s+(?:CPU\\s+)?(\\d+)ms\\s*$");
+    private static final Pattern PAT_TEMP_LINE = Pattern.compile("^\\s*\\[TEMP\\]\\s+(.+)$");
+    private static final Pattern PAT_TEMP_ITEM = Pattern.compile("(CPU|GPU|NPU)=([\\d.]+)°C");
     private static final Pattern PAT_VAE   = Pattern.compile("^\\[VAE\\]\\s+(\\d+)ms\\s*$");
     private static final Pattern PAT_SAVED = Pattern.compile("Saved:\\s+(.+\\.png)");
     private static final Pattern PAT_TOTAL = Pattern.compile("Total:\\s+([\\d.]+)s");
+    private volatile String latestStageStatus = "";
+    private volatile String latestTempStatus = "";
+    private volatile int latestProgress = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -229,14 +234,19 @@ public class MainActivity extends AppCompatActivity {
         progressBar.setProgress(0);
         saveButton.setVisibility(View.GONE);
         timingText.setVisibility(View.GONE);
-        statusText.setText("Запуск...");
+        latestTempStatus = "";
+        latestStageStatus = "Запуск...";
+        latestProgress = 0;
+        renderStatus();
 
         executor.execute(() -> {
             try {
                 runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName);
             } catch (Exception e) {
                 mainHandler.post(() -> {
-                    statusText.setText("Ошибка: " + e.getMessage());
+                    latestTempStatus = "";
+                    latestStageStatus = "Ошибка: " + e.getMessage();
+                    renderStatus();
                     generateButton.setEnabled(true);
                     stopButton.setVisibility(View.GONE);
                     progressBar.setVisibility(View.GONE);
@@ -253,7 +263,9 @@ public class MainActivity extends AppCompatActivity {
         }
         isGenerating = false;
         mainHandler.post(() -> {
-            statusText.setText("Остановлено");
+            latestTempStatus = "";
+            latestStageStatus = "Остановлено";
+            renderStatus();
             generateButton.setEnabled(true);
             stopButton.setVisibility(View.GONE);
             progressBar.setVisibility(View.GONE);
@@ -261,9 +273,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateStatus(String status, int progress) {
+        latestStageStatus = status;
+        if (progress >= 0) {
+            latestProgress = progress;
+        }
+        renderStatus();
+    }
+
+    private void updateTempStatus(String tempStatus) {
+        latestTempStatus = tempStatus;
+        renderStatus();
+    }
+
+    private void renderStatus() {
+        final String stage = latestStageStatus;
+        final String temp = latestTempStatus;
+        final int progress = latestProgress;
         mainHandler.post(() -> {
-            statusText.setText(status);
-            if (progress >= 0) progressBar.setProgress(progress);
+            StringBuilder sb = new StringBuilder();
+            if (stage != null && !stage.isEmpty()) {
+                sb.append(stage);
+            }
+            if (temp != null && !temp.isEmpty()) {
+                if (sb.length() > 0) {
+                    sb.append("\n");
+                }
+                sb.append(temp);
+            }
+            statusText.setText(sb.toString());
+            progressBar.setProgress(progress);
         });
     }
 
@@ -282,6 +320,14 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
         script.append("export SDXL_QNN_USE_MMAP=1\n");
         script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
+        script.append("export SDXL_SHOW_TEMP=1\n");
+        script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
+        script.append("export SDXL_QNN_PERF_PROFILE=sustained_high_performance\n");
+        script.append("if [ -f \"").append(shellEscape(BASE_DIR)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
+            .append(shellEscape(BASE_DIR)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
+        script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(BASE_DIR))
+            .append("/htp_backend_extensions_lightning.json\"\n");
+        script.append("fi\n");
         script.append(String.format(Locale.US,
             "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
             shellEscape(BASE_DIR), shellEscape(BASE_DIR), shellEscape(BASE_DIR)));
@@ -396,6 +442,39 @@ public class MainActivity extends AppCompatActivity {
                     continue;
                 }
 
+                m = PAT_TEMP_LINE.matcher(line);
+                if (m.find()) {
+                    Matcher tempMatcher = PAT_TEMP_ITEM.matcher(m.group(1));
+                    String cpu = null;
+                    String gpu = null;
+                    String npu = null;
+                    while (tempMatcher.find()) {
+                        String label = tempMatcher.group(1);
+                        String value = tempMatcher.group(2);
+                        switch (label) {
+                            case "CPU":
+                                cpu = value;
+                                break;
+                            case "GPU":
+                                gpu = value;
+                                break;
+                            case "NPU":
+                                npu = value;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    if (cpu != null || gpu != null || npu != null) {
+                        updateTempStatus(String.format(Locale.US,
+                            "CPU %s°C | GPU %s°C | NPU %s°C",
+                            cpu != null ? cpu : "—",
+                            gpu != null ? gpu : "—",
+                            npu != null ? npu : "—"));
+                    }
+                    continue;
+                }
+
                 // Parse preview timing (useful for diagnostics, but do not override progress)
                 m = PAT_PREV.matcher(line);
                 if (m.find()) {
@@ -474,13 +553,15 @@ public class MainActivity extends AppCompatActivity {
 
         final String finalTiming = timingLog.toString();
         mainHandler.post(() -> {
+            latestTempStatus = "";
+            latestStageStatus = "Готово!";
             currentBitmap = bitmap;
             imagePreview.setImageBitmap(bitmap);
             saveButton.setVisibility(View.VISIBLE);
             stopButton.setVisibility(View.GONE);
             progressBar.setVisibility(View.GONE);
             generateButton.setEnabled(true);
-            statusText.setText("Готово!");
+            renderStatus();
             timingText.setText(finalTiming);
             timingText.setVisibility(View.VISIBLE);
         });
