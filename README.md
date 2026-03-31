@@ -95,7 +95,6 @@ All gallery samples and the currently documented phone-side examples are **1024Ã
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
-<img width="582" height="1280" alt="image" src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" />
 
 Compared with the earlier public on-device screenshot and the later `v0.2.0` README marker, the current `v0.2.3` screenshot shows:
 
