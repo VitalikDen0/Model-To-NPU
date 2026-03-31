@@ -3,7 +3,8 @@
 Deploy SDXL NPU pipeline to phone via ADB.
 
 Pushes context binaries, QNN runtime libs, phone_generate.py,
-tokenizer files, and the optional TAESD ONNX preview decoder.
+tokenizer files, the optional TAESD ONNX preview decoder,
+and optional TAESD QNN preview assets when they are available locally.
 
 Usage:
   python scripts/deploy_to_phone.py --contexts-dir /path/to/contexts
@@ -37,6 +38,16 @@ QNN_LIBS = [
     "libQnnSystem.so",
     "libQnnHtpPrepare.so",
     "libQnnHtpProfilingReader.so",
+]
+
+OPTIONAL_QNN_LIBS = [
+    "libQnnGpu.so",
+    "libQnnGpuNetRunExtensions.so",
+]
+
+OPTIONAL_QNN_BINS = [
+    "qnn-context-binary-generator",
+    "qnn-gpu-target-server",
 ]
 
 
@@ -102,6 +113,54 @@ def find_optional_taesd_onnx(repo_root: str) -> str | None:
         os.path.join("D:/platform-tools/sdxl_npu/taesd_decoder", "taesd_decoder.onnx"),
         os.path.join("D:/platform-tools/NPU/taesd_decoder", "taesd_decoder.onnx"),
     ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def find_optional_taesd_context(repo_root: str) -> str | None:
+    candidates = [
+        os.path.join(repo_root, "examples", "rooted-phone-sample", "context", "taesd_decoder.serialized.bin.bin"),
+        os.path.join("D:/platform-tools/sdxl_npu", "context", "taesd_decoder.serialized.bin.bin"),
+        os.path.join("D:/platform-tools/sdxl_npu", "taesd_decoder", "context", "taesd_decoder.serialized.bin.bin"),
+        os.path.join("D:/platform-tools/NPU", "context", "taesd_decoder.serialized.bin.bin"),
+        os.path.join("D:/platform-tools/NPU", "taesd_decoder", "context", "taesd_decoder.serialized.bin.bin"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def find_optional_taesd_model(repo_root: str) -> str | None:
+    candidates = [
+        os.path.join("D:/platform-tools/sdxl_npu", "taesd_decoder", "android_lib", "libTAESDDecoder.so"),
+        os.path.join("D:/platform-tools/NPU", "taesd_decoder", "android_lib", "libTAESDDecoder.so"),
+        os.path.join(repo_root, "local_tools", "taesd_decoder", "android_lib", "libTAESDDecoder.so"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def find_optional_taesd_gpu_runner() -> str | None:
+    candidates = [
+        r"C:\Qualcomm\AIStack\QAIRT\2.31.0.250130\bin\aarch64-android\qnn-net-run",
+        r"D:\platform-tools\sdxl_npu\qairt_2.31\qairt\2.31.0.250130\bin\aarch64-android\qnn-net-run",
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def find_optional_context_runner(repo_root: str, qnn_bin_dir: str | None) -> str | None:
+    candidates = []
+    if qnn_bin_dir:
+        candidates.append(os.path.join(qnn_bin_dir, "qnn-context-runner"))
+    candidates.append(os.path.join(repo_root, "NPU", "out", "arm64-v8a", "qnn-context-runner"))
     for candidate in candidates:
         if os.path.exists(candidate):
             return candidate
@@ -178,12 +237,26 @@ def main():
             else:
                 print(f"  SKIP {lib} (not found)")
 
+        for lib in OPTIONAL_QNN_LIBS:
+            local = os.path.join(args.qnn_lib_dir, lib)
+            if os.path.exists(local):
+                adb_push(adb, serial, local, f"{phone_base}/lib/{lib}")
+            else:
+                print(f"  SKIP {lib} (optional GPU runtime not found)")
+
         # Push qnn-net-run binary
         if args.qnn_bin_dir:
             qnr = os.path.join(args.qnn_bin_dir, "qnn-net-run")
             if os.path.exists(qnr):
                 adb_push(adb, serial, qnr, f"{phone_base}/bin/qnn-net-run")
                 adb_cmd(adb, serial, "shell", f"chmod 755 {phone_base}/bin/qnn-net-run")
+            for bin_name in OPTIONAL_QNN_BINS:
+                local = os.path.join(args.qnn_bin_dir, bin_name)
+                if os.path.exists(local):
+                    adb_push(adb, serial, local, f"{phone_base}/bin/{bin_name}")
+                    adb_cmd(adb, serial, "shell", f"chmod 755 {phone_base}/bin/{bin_name}")
+                else:
+                    print(f"  SKIP {bin_name} (optional binary not found)")
     else:
         print("\n[3/5] Skipping QNN libs (use --qnn-lib-dir)")
 
@@ -211,11 +284,35 @@ def main():
     else:
         print("  SKIP taesd_decoder.onnx (optional preview model not found locally)")
 
+    taesd_context = find_optional_taesd_context(repo_root)
+    if taesd_context:
+        adb_push(adb, serial, taesd_context, f"{phone_base}/context/taesd_decoder.serialized.bin.bin")
+    else:
+        print("  SKIP taesd_decoder.serialized.bin.bin (optional QNN preview context not found locally)")
+
+    taesd_model = find_optional_taesd_model(repo_root)
+    if taesd_model:
+        adb_push(adb, serial, taesd_model, f"{phone_base}/model/libTAESDDecoder.so")
+    else:
+        print("  SKIP libTAESDDecoder.so (optional QNN preview model not found locally)")
+
+    taesd_gpu_runner = find_optional_taesd_gpu_runner()
+    if taesd_gpu_runner:
+        adb_push(adb, serial, taesd_gpu_runner, f"{phone_base}/bin/qnn-net-run-gpu")
+        adb_cmd(adb, serial, "shell", f"chmod 755 {phone_base}/bin/qnn-net-run-gpu")
+    else:
+        print("  SKIP qnn-net-run-gpu (optional TAESD GPU preview runner not found locally)")
+
     extra_files = [
         (os.path.join(repo_root, "SDXL", "run_ctxgen_lightning.sh"), f"{phone_base}/run_ctxgen_lightning.sh", True),
         (os.path.join(repo_root, "SDXL", "htp_backend_extensions_lightning.json"), f"{phone_base}/htp_backend_extensions_lightning.json", False),
         (os.path.join(repo_root, "SDXL", "htp_backend_ext_config_lightning.json"), f"{phone_base}/htp_backend_ext_config_lightning.json", False),
     ]
+    context_runner = find_optional_context_runner(repo_root, args.qnn_bin_dir)
+    if context_runner:
+        extra_files.append((context_runner, f"{phone_base}/bin/qnn-context-runner", True))
+    else:
+        print("  SKIP qnn-context-runner (optional persistent runner not found locally)")
     for local, remote, make_executable in extra_files:
         if os.path.exists(local):
             adb_push(adb, serial, local, remote)

@@ -164,7 +164,10 @@ python SDXL/export_taesd_to_onnx.py --validate
 # Deploy the single-file ONNX to the phone runtime
 adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
 
-# Optional (only if you want live preview in Termux / APK)
+# Optional: build and deploy TAESD QNN preview assets (preferred preview path)
+python SDXL/convert_taesd_to_qnn.py --backend gpu
+
+# Optional fallback only (if you want CPU ONNX preview in Termux / APK)
 python -m pip install onnxruntime
 ```
 
@@ -178,13 +181,13 @@ python scripts/deploy_to_phone.py \
   --qnn-bin-dir /path/to/qnn_sdk/bin/aarch64-android
 ```
 
-When `--qnn-lib-dir` contains `libQnnHtpNetRunExtensions.so`, the deploy script now copies it as well, so the phone runtime and APK can auto-enable the shipped `htp_backend_extensions_lightning.json` path.
+When `--qnn-lib-dir` contains `libQnnHtpNetRunExtensions.so`, the deploy script now copies it as well, so the phone runtime and APK can auto-enable the shipped `htp_backend_extensions_lightning.json` path. The deploy helper also tries to copy optional TAESD preview assets (`taesd_decoder.serialized.bin.bin`, `libTAESDDecoder.so`, `libQnnGpu.so`, `qnn-gpu-target-server`) when they are available locally.
 
 ### 4. Termux setup (on phone)
 
 ```bash
 pkg install python python-numpy python-pillow
-python -m pip install onnxruntime   # optional, only for TAESD live preview
+python -m pip install onnxruntime   # optional CPU fallback for TAESD live preview
 termux-setup-storage
 ```
 
@@ -218,7 +221,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
-APK `v0.2.1` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, and now writes transient runtime files through app-private cache directories instead of shared storage.  
+APK `v0.2.2` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, and restores APK-side parsing for `QNN GPU` preview timing lines.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)
@@ -312,20 +315,24 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   └── vae_decoder.serialized.bin.bin     (~151 MB)
+│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
+│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, optional QNN live preview)
 ├── htp_backend_extensions_lightning.json  (optional HTP backend extensions entrypoint)
 ├── htp_backend_ext_config_lightning.json  (optional HTP backend tuning config)
 ├── phone_gen/
 │   ├── generate.py                        (standalone generator)
-│   ├── taesd_decoder.onnx                 (~5 MB, optional live preview)
+│   ├── taesd_decoder.onnx                 (~5 MB, optional CPU fallback preview)
 │   └── tokenizer/
 │       ├── vocab.json                     (CLIP BPE vocabulary)
 │       └── merges.txt                     (BPE merge rules)
 ├── lib/                                   (QNN runtime libraries)
 │   └── libQnnHtpNetRunExtensions.so       (optional, auto-used when present)
+│   └── libQnnGpu.so                       (optional, for QNN GPU TAESD preview)
 ├── model/                                 (optional/extra model libs used in some flows)
+│   └── libTAESDDecoder.so                 (optional, TAESD QNN preview model fallback)
 ├── bin/
-│   └── qnn-net-run                        (QNN inference runner)
+│   ├── qnn-net-run                        (QNN inference runner)
+│   └── qnn-gpu-target-server              (optional, recommended for QNN GPU preview)
 └── outputs/                               (generated PNGs)
 ```
 
@@ -334,7 +341,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 - **Resolution is fixed** at 1024×1024 — others need full re-conversion
 - **The documented speed path assumes the Lightning LoRA has been baked into the UNet** — skipping that merge means a much slower baseline SDXL path and the repository timings/examples stop being representative
 - **VAE FP16** slightly compresses color range -> percentile contrast stretching is applied
-- **TAESD live preview is optional** — it is only used for intermediate previews and now relies on a tiny ONNX decoder (`phone_gen/taesd_decoder.onnx`) plus `onnxruntime`, not on a QNN preview context
+- **TAESD live preview is optional** — the runtime now prefers a deployed QNN TAESD preview path (GPU backend recommended) and falls back to the tiny ONNX decoder (`phone_gen/taesd_decoder.onnx`) plus `onnxruntime` when QNN preview assets are missing or fail
 - **The best current fast path uses HTP backend extensions** — the repo ships the JSON config, but the runtime only auto-enables it when `libQnnHtpNetRunExtensions.so` is actually deployed under `lib/`
 - **CFG > 1.0 is expensive here** — conditional + unconditional predictions are both needed; because the runtime uses a split UNet (`encoder` + `decoder`), naive CFG means four phone-side UNet subprocess calls per step. The current runtime batches part of that work better than before, but wall-clock time is still close to 2× versus the no-CFG path.
 - **Termux required** — Python runtime for `phone_generate.py`

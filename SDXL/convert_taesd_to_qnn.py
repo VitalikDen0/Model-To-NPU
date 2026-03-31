@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert TAESD XL decoder ONNX → QNN FP16 context binary for phone NPU.
+"""Convert TAESD XL decoder ONNX → QNN FP16 context binary for phone preview.
 
 TAESD XL is pure Conv2d + ReLU + Upsample — no GroupNorm, no attention.
 Should convert cleanly without any patches.
@@ -7,7 +7,7 @@ Should convert cleanly without any patches.
 Steps:
   1. qnn-onnx-converter  → model.cpp / model.bin
   2. qnn-model-lib-generator → libTAESDDecoder.so  (Android arm64)
-  3. (on phone) qnn-context-binary-generator → taesd_decoder.serialized.bin.bin
+    3. (on phone) qnn-context-binary-generator → taesd_decoder.serialized.bin.bin
 
 Usage:
   # First export ONNX:
@@ -17,7 +17,8 @@ Usage:
   python SDXL/convert_taesd_to_qnn.py
   python SDXL/convert_taesd_to_qnn.py --step 1   # converter only
   python SDXL/convert_taesd_to_qnn.py --step 2   # model-lib only
-  python SDXL/convert_taesd_to_qnn.py --step 3   # show phone ctxgen command
+    python SDXL/convert_taesd_to_qnn.py --backend gpu
+    python SDXL/convert_taesd_to_qnn.py --step 3   # show phone ctxgen command
 """
 
 import argparse
@@ -161,29 +162,43 @@ def step2_build_lib(qnn_model_dir: Path, lib_out: Path):
 
 # ── Step 3: Print phone ctxgen command ────────────────────────────────────────
 
-def step3_phone_ctxgen(so_name: str = "libTAESDDecoder.so"):
-    phone_so = f"/data/local/tmp/sdxl_qnn/model/{so_name}"
-    phone_ctx = "/data/local/tmp/sdxl_qnn/context/taesd_decoder.serialized.bin.bin"
-    ld = "/data/local/tmp/sdxl_qnn/lib"
-    adsp = f"{ld};/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp"
+def step3_phone_ctxgen(so_name: str = "libTAESDDecoder.so", backend: str = "gpu",
+                       phone_base: str = "/data/local/tmp/sdxl_qnn"):
+    backend = backend.lower().strip()
+    if backend not in {"gpu", "htp"}:
+        print(f"ERROR: unsupported backend '{backend}' (expected gpu or htp)")
+        sys.exit(1)
 
-    print("\n[step3] Phone-side context generation commands:")
+    phone_base = phone_base.rstrip("/")
+    phone_so = f"{phone_base}/model/{so_name}"
+    phone_ctx = f"{phone_base}/context/taesd_decoder.serialized.bin.bin"
+    ld = f"{phone_base}/lib"
+    adsp = f"{ld};/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp"
+    backend_lib = f"{ld}/libQnnGpu.so" if backend == "gpu" else f"{ld}/libQnnHtp.so"
+    backend_label = backend.upper()
+
+    print(f"\n[step3] Phone-side context generation commands ({backend_label}):")
     print("─" * 60)
     print(f"# 1. Push .so to phone:")
     print(f"adb -s e01ad23a push {LIB_OUT}/{so_name} {phone_so}")
+    if backend == "gpu":
+        print(f"# 1b. Make sure GPU runtime assets are on phone:")
+        print(f"#     {phone_base}/lib/libQnnGpu.so")
+        print(f"#     {phone_base}/bin/qnn-gpu-target-server   (recommended when shipped by QAIRT)")
     print()
     print(f"# 2. Generate context binary (run in adb shell):")
     print(f"adb -s e01ad23a shell \\")
     print(f'  "export LD_LIBRARY_PATH={ld}:$LD_LIBRARY_PATH \\')
     print(f'   export ADSP_LIBRARY_PATH=\'{adsp}\' \\')
-    print(f"   /data/local/tmp/sdxl_qnn/bin/qnn-context-binary-generator \\")
+    print(f"   {phone_base}/bin/qnn-context-binary-generator \\")
     print(f"     --model {phone_so} \\")
-    print(f"     --backend {ld}/libQnnHtp.so \\")
-    print(f"     --output_dir /data/local/tmp/sdxl_qnn/context \\")
+    print(f"     --backend {backend_lib} \\")
+    print(f"     --output_dir {phone_base}/context \\")
     print(f'     --binary_file taesd_decoder.serialized.bin"')
     print()
     print(f"# 3. Expected output: {phone_ctx}")
     print(f"# 4. Expected size: ~5-15 MB (vs full VAE ~151 MB)")
+    print(f"# 5. Runtime hint: export SDXL_QNN_TAESD_BACKEND={backend}")
     print("─" * 60)
 
 
@@ -199,6 +214,10 @@ def main():
                     help="Android .so output directory")
     ap.add_argument("--step", type=int, choices=[1, 2, 3], default=0,
                     help="Run only specific step (1=convert, 2=build-lib, 3=show-ctxgen)")
+    ap.add_argument("--backend", choices=["gpu", "htp"], default="gpu",
+                    help="Backend to target for the generated preview context (default: gpu)")
+    ap.add_argument("--phone-base", default="/data/local/tmp/sdxl_qnn",
+                    help="Phone-side base directory where preview assets are deployed")
     a = ap.parse_args()
 
     onnx_path = Path(a.onnx)
@@ -209,6 +228,7 @@ def main():
     print(f"  ONNX:    {onnx_path}")
     print(f"  QNN out: {qnn_out}")
     print(f"  Lib out: {lib_out}")
+    print(f"  Backend: {a.backend}")
 
     if a.step in (0, 1):
         print("\n[STEP 1/3] ONNX → QNN model (FP16)")
@@ -220,13 +240,13 @@ def main():
 
     if a.step in (0, 3):
         print("\n[STEP 3/3] Phone context binary")
-        step3_phone_ctxgen()
+        step3_phone_ctxgen(backend=a.backend, phone_base=a.phone_base)
 
     print("\n[Done]")
     if a.step == 0:
         print("TAESD QNN pipeline complete.")
-        print("After deploying to phone → add to CONTEXTS in phone_generate.py:")
-        print('  "taesd": f"{DR}/context/taesd_decoder.serialized.bin.bin"')
+        print("After deploying to phone → runtime will auto-pick the TAESD QNN preview artifacts when available.")
+        print(f"If needed, force the backend with: export SDXL_QNN_TAESD_BACKEND={a.backend}")
         print("Then run with --preview flag!")
 
 

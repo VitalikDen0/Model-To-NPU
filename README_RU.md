@@ -164,7 +164,10 @@ python SDXL/export_taesd_to_onnx.py --validate
 # Деплой одного ONNX-файла в phone runtime
 adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
 
-# Опционально (только если нужен live preview в Termux / APK)
+# Опционально: собрать и задеплоить TAESD QNN preview assets (предпочтительный путь)
+python SDXL/convert_taesd_to_qnn.py --backend gpu
+
+# Опционально только как fallback (если нужен CPU ONNX preview в Termux / APK)
 python -m pip install onnxruntime
 ```
 
@@ -178,13 +181,13 @@ python scripts/deploy_to_phone.py \
   --qnn-bin-dir /path/to/qnn_sdk/bin/aarch64-android
 ```
 
-Если в `--qnn-lib-dir` есть `libQnnHtpNetRunExtensions.so`, deploy-скрипт теперь копирует и её тоже, так что phone runtime и APK смогут автоматически включить уже лежащий в репозитории путь через `htp_backend_extensions_lightning.json`.
+Если в `--qnn-lib-dir` есть `libQnnHtpNetRunExtensions.so`, deploy-скрипт теперь копирует и её тоже, так что phone runtime и APK смогут автоматически включить уже лежащий в репозитории путь через `htp_backend_extensions_lightning.json`. Тот же deploy helper также пытается докинуть optional TAESD preview assets (`taesd_decoder.serialized.bin.bin`, `libTAESDDecoder.so`, `libQnnGpu.so`, `qnn-gpu-target-server`), если они найдены локально.
 
 ### 4. Подготовка Termux (на телефоне)
 
 ```bash
 pkg install python python-numpy python-pillow
-python -m pip install onnxruntime   # опционально, только для TAESD live preview
+python -m pip install onnxruntime   # опциональный CPU fallback для TAESD live preview
 termux-setup-storage
 ```
 
@@ -218,7 +221,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, live-температуры CPU / GPU / NPU и сохранение в галерею.  
-В `v0.2.1` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config, а временные runtime-файлы теперь пишутся в app-private cache вместо общей папки.  
+В `v0.2.2` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config, временные runtime-файлы пишутся в app-private cache вместо общей папки, а APK снова корректно парсит preview-тайминги вида `QNN GPU ...ms`.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)
@@ -312,20 +315,24 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   └── vae_decoder.serialized.bin.bin     (~151 MB)
+│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
+│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, optional QNN live preview)
 ├── htp_backend_extensions_lightning.json  (опциональная точка входа для HTP backend extensions)
 ├── htp_backend_ext_config_lightning.json  (опциональная tuning-конфигурация HTP backend)
 ├── phone_gen/
 │   ├── generate.py                        (standalone генератор)
-│   ├── taesd_decoder.onnx                 (~5 MB, опциональный live preview)
+│   ├── taesd_decoder.onnx                 (~5 MB, опциональный CPU fallback preview)
 │   └── tokenizer/
 │       ├── vocab.json                     (CLIP BPE vocabulary)
 │       └── merges.txt                     (BPE merge rules)
 ├── lib/                                   (QNN runtime библиотеки)
 │   └── libQnnHtpNetRunExtensions.so       (опционально, auto-used при наличии)
+│   └── libQnnGpu.so                       (опционально, для QNN GPU TAESD preview)
 ├── model/                                 (опционально: дополнительные model libs для некоторых сценариев)
+│   └── libTAESDDecoder.so                 (опционально, TAESD QNN preview model fallback)
 ├── bin/
-│   └── qnn-net-run                        (QNN inference runner)
+│   ├── qnn-net-run                        (QNN inference runner)
+│   └── qnn-gpu-target-server              (опционально, рекомендуется для QNN GPU preview)
 └── outputs/                               (PNG результаты)
 ```
 
@@ -334,7 +341,7 @@ Prompt ──▶│ CLIP-L ──┐                                            
 - **Разрешение фиксировано** 1024×1024 — другие размеры требуют полной переконвертации
 - **Быстрый документированный путь предполагает, что Lightning LoRA уже замержена в UNet** — без этого merge вы фактически уходите в сильно более медленный базовый SDXL path, и тайминги/примеры из репозитория перестают быть репрезентативными
 - **VAE FP16** слегка сжимает цветовой диапазон -> применяется percentile contrast stretching
-- **TAESD live preview опционален** — он нужен только для промежуточных preview и теперь использует маленький ONNX-декодер (`phone_gen/taesd_decoder.onnx`) плюс `onnxruntime`, а не QNN preview-context
+- **TAESD live preview опционален** — runtime теперь в первую очередь пытается использовать задеплоенный QNN TAESD preview path (предпочтительно через GPU backend), а при отсутствии или ошибке QNN-preview assets откатывается на маленький ONNX-декодер (`phone_gen/taesd_decoder.onnx`) плюс `onnxruntime`
 - **Лучший текущий быстрый путь использует HTP backend extensions** — JSON-конфиг уже лежит в репозитории, но runtime включает его автоматически только если на телефон реально задеплоен `libQnnHtpNetRunExtensions.so` в `lib/`
 - **CFG > 1.0 здесь дорогой** — нужны и conditional, и unconditional предсказания; поскольку runtime использует split UNet (`encoder` + `decoder`), наивный CFG превращает каждый шаг в четыре phone-side запуска UNet-подпроцессов. Текущий runtime уже батчит часть этой работы лучше, чем раньше, но по wall-clock времени это всё равно почти 2× относительно no-CFG пути.
 - **Termux обязателен** — Python runtime для `phone_generate.py`

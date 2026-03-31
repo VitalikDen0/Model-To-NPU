@@ -10,11 +10,15 @@ Usage (in Termux):
   python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "dark castle" --cfg 2.0 --neg "blurry, bad"
 """
 import argparse
+import atexit
 import json
 import importlib
 import math
 import os
 import re
+import select
+import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -67,9 +71,20 @@ OUTPUT_DIR = os.environ.get("SDXL_QNN_OUTPUT_DIR", f"{DR}/outputs")
 WORK_DIR = _resolve_work_dir()
 PREVIEW_PNG = os.environ.get("SDXL_QNN_PREVIEW_PNG", f"{OUTPUT_DIR}/preview_current.png")
 QNN_NET_RUN = f"{DR}/bin/qnn-net-run"
+QNN_BIN_DIR = os.environ.get("SDXL_QNN_BIN_DIR", f"{DR}/bin")
 QNN_LIB = f"{DR}/lib"
+QNN_MODEL_DIR = os.environ.get("SDXL_QNN_MODEL_DIR", f"{DR}/model")
+TAESD_CONTEXT = os.environ.get("SDXL_QNN_TAESD_CONTEXT", f"{DR}/context/taesd_decoder.serialized.bin.bin")
+TAESD_MODEL = os.environ.get("SDXL_QNN_TAESD_MODEL", f"{QNN_MODEL_DIR}/libTAESDDecoder.so")
 DEFAULT_QNN_EXT_LIB = f"{QNN_LIB}/libQnnHtpNetRunExtensions.so"
 DEFAULT_QNN_CONFIG_PATH = f"{DR}/htp_backend_extensions_lightning.json"
+QNN_CONTEXT_RUNNER = os.environ.get("SDXL_QNN_DAEMON_BIN", f"{DR}/bin/qnn-context-runner")
+QNN_SYSTEM_LIB = os.environ.get("SDXL_QNN_SYSTEM_LIB", f"{QNN_LIB}/libQnnSystem.so")
+DEFAULT_TAESD_QNN_NET_RUN = (
+    f"{QNN_BIN_DIR}/qnn-net-run-gpu"
+    if os.path.exists(f"{QNN_BIN_DIR}/qnn-net-run-gpu")
+    else QNN_NET_RUN
+)
 
 
 def _detect_default_qnn_config() -> str:
@@ -86,13 +101,26 @@ QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_performance").strip() or "sustained_high_performance"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
+QNN_USE_DAEMON = os.environ.get("SDXL_QNN_USE_DAEMON", "0") == "1"
 PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
 FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "1"))))
 STRETCH_SAMPLE_STRIDE = max(1, int(os.environ.get("SDXL_QNN_STRETCH_SAMPLE_STRIDE", "4")))
+TAESD_BACKEND = os.environ.get("SDXL_QNN_TAESD_BACKEND", "gpu").strip().lower() or "gpu"
+TAESD_BACKEND_LIB = os.environ.get("SDXL_QNN_TAESD_BACKEND_LIB", "").strip()
+TAESD_CONFIG_FILE = os.environ.get("SDXL_QNN_TAESD_CONFIG_FILE", "").strip()
+TAESD_QNN_NET_RUN = os.environ.get("SDXL_QNN_TAESD_NET_RUN", DEFAULT_TAESD_QNN_NET_RUN).strip() or QNN_NET_RUN
+TAESD_FORCE_ONNX = os.environ.get("SDXL_QNN_TAESD_FORCE_ONNX", "0") == "1"
 TEMP_POLL_INTERVAL = max(0.2, float(os.environ.get("SDXL_TEMP_INTERVAL_SEC", "1.0")))
 _TEMP_SENSOR_CACHE: dict[str, list[tuple[str, str]]] | None = None
 _TEMP_MONITOR_STOP: threading.Event | None = None
 _TEMP_MONITOR_THREAD: threading.Thread | None = None
+_QNN_DAEMONS: dict[tuple[str, bool], "_QnnContextDaemon"] = {}
+_EXEC_BIN_CACHE: dict[str, str] = {}
+_RUNTIME_FILE_CACHE: dict[str, str] = {}
+_SHARED_RUNTIME_STAGED = False
+_TAESD_QNN_CHECKED = False
+_TAESD_QNN_PLAN: dict | None = None
+_TAESD_QNN_FAILED = False
 
 def _log(line: str = "") -> None:
     with _PRINT_LOCK:
@@ -102,17 +130,239 @@ def _log(line: str = "") -> None:
 def _get_qnn_env() -> dict:
     """Build QNN env dict once and cache it."""
     if not _QNN_ENV:
+        _ensure_shared_runtime_assets()
         _QNN_ENV.update(os.environ)
         existing_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        staged_runtime_lib = os.path.join(WORK_DIR, "runtime", "lib")
         _QNN_ENV["LD_LIBRARY_PATH"] = (
-            f"{QNN_LIB}:{DR}/bin:{DR}/model"
+            f"{staged_runtime_lib}:{QNN_LIB}:{DR}/bin:{DR}/model"
             + (f":{existing_ld}" if existing_ld else "")
         )
         _QNN_ENV["ADSP_LIBRARY_PATH"] = (
-            f"{QNN_LIB};/vendor/lib64/rfs/dsp;"
+            f"{staged_runtime_lib};{QNN_LIB};/vendor/lib64/rfs/dsp;"
             f"/vendor/lib/rfsa/adsp;/vendor/dsp"
         )
     return _QNN_ENV
+
+
+def _is_shared_storage_path(path: str | None) -> bool:
+    if not path:
+        return False
+    norm = path.replace("\\", "/")
+    return norm.startswith("/sdcard/") or norm.startswith("/storage/emulated/")
+
+
+def _ensure_shared_runtime_assets() -> None:
+    global _SHARED_RUNTIME_STAGED
+    if _SHARED_RUNTIME_STAGED or not _is_shared_storage_path(QNN_LIB):
+        return
+
+    runtime_root = os.path.join(WORK_DIR, "runtime")
+    staged_lib_dir = os.path.join(runtime_root, "lib")
+    os.makedirs(staged_lib_dir, exist_ok=True)
+
+    try:
+        for name in os.listdir(QNN_LIB):
+            src = os.path.join(QNN_LIB, name)
+            if not os.path.isfile(src):
+                continue
+            dst = os.path.join(staged_lib_dir, name)
+            if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(src):
+                shutil.copy2(src, dst)
+                os.chmod(dst, 0o755)
+    except Exception as e:
+        _log(f"  [QNN] runtime lib staging warning: {e}")
+    _SHARED_RUNTIME_STAGED = True
+
+
+def _resolve_runtime_artifact(path: str, category: str) -> str:
+    cached = _RUNTIME_FILE_CACHE.get(path)
+    if cached and os.path.exists(cached):
+        return cached
+    if not _is_shared_storage_path(path):
+        _RUNTIME_FILE_CACHE[path] = path
+        return path
+
+    dst_dir = os.path.join(WORK_DIR, "runtime", category)
+    os.makedirs(dst_dir, exist_ok=True)
+    dst = os.path.join(dst_dir, os.path.basename(path))
+    try:
+        needs_copy = (
+            not os.path.exists(dst)
+            or os.path.getsize(dst) != os.path.getsize(path)
+            or os.path.getmtime(dst) < os.path.getmtime(path)
+        )
+    except Exception:
+        needs_copy = True
+    if needs_copy:
+        shutil.copy2(path, dst)
+        if category in ("bin", "lib"):
+            os.chmod(dst, 0o755)
+    _RUNTIME_FILE_CACHE[path] = dst
+    return dst
+
+
+def _resolve_qnn_config_path(config_path: str) -> str:
+    if not config_path:
+        return config_path
+    if not _is_shared_storage_path(config_path):
+        return config_path
+
+    runtime_root = os.path.join(WORK_DIR, "runtime")
+    os.makedirs(runtime_root, exist_ok=True)
+    dst = os.path.join(runtime_root, os.path.basename(config_path))
+    with open(config_path, "r", encoding="utf-8") as f:
+        config_data = json.load(f)
+
+    shared_ext_cfg = os.path.join(os.path.dirname(config_path), "htp_backend_ext_config_lightning.json")
+    staged_ext_cfg = os.path.join(runtime_root, os.path.basename(shared_ext_cfg))
+    if os.path.exists(shared_ext_cfg):
+        shutil.copy2(shared_ext_cfg, staged_ext_cfg)
+
+    shared_ext_lib = os.path.join(QNN_LIB, "libQnnHtpNetRunExtensions.so")
+    staged_ext_lib = _resolve_runtime_artifact(shared_ext_lib, "lib") if os.path.exists(shared_ext_lib) else ""
+
+    backend_ext = config_data.get("backend_extensions")
+    if isinstance(backend_ext, dict):
+        if staged_ext_lib:
+            backend_ext["shared_library_path"] = staged_ext_lib
+        if os.path.exists(staged_ext_cfg):
+            backend_ext["config_file_path"] = staged_ext_cfg
+
+    with open(dst, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=4)
+    return dst
+
+
+def _resolve_exec_binary(path: str) -> str:
+    cached = _EXEC_BIN_CACHE.get(path)
+    if cached and os.path.exists(cached):
+        return cached
+
+    if os.path.exists(path) and os.access(path, os.X_OK):
+        _EXEC_BIN_CACHE[path] = path
+        return path
+
+    dst = os.path.join(WORK_DIR, "bin", os.path.basename(path))
+    try:
+        needs_copy = (
+            not os.path.exists(dst)
+            or os.path.getsize(dst) != os.path.getsize(path)
+            or os.path.getmtime(dst) < os.path.getmtime(path)
+        )
+    except Exception:
+        needs_copy = True
+    if needs_copy:
+        shutil.copy2(path, dst)
+    os.chmod(dst, 0o755)
+    _EXEC_BIN_CACHE[path] = dst
+    return dst
+
+
+def _resolve_backend_lib(backend_name_or_path: str | None) -> str:
+    if not backend_name_or_path:
+        return f"{QNN_LIB}/libQnnHtp.so"
+
+    candidate = backend_name_or_path.strip()
+    if os.path.isabs(candidate) or "/" in candidate or "\\" in candidate:
+        return candidate
+
+    mapping = {
+        "cpu": "libQnnCpu.so",
+        "dsp": "libQnnDsp.so",
+        "gpu": "libQnnGpu.so",
+        "hta": "libQnnHta.so",
+        "htp": "libQnnHtp.so",
+        "lpai": "libQnnLpai.so",
+    }
+    lib_name = mapping.get(candidate.lower())
+    if lib_name is None:
+        raise ValueError(f"unsupported QNN backend: {backend_name_or_path}")
+    return f"{QNN_LIB}/{lib_name}"
+
+
+def _backend_label(backend_lib: str) -> str:
+    base = os.path.basename(backend_lib).lower()
+    if "gpu" in base:
+        return "GPU"
+    if "htp" in base:
+        return "HTP"
+    if "dsp" in base:
+        return "DSP"
+    if "cpu" in base:
+        return "CPU"
+    if "hta" in base:
+        return "HTA"
+    if "lpai" in base:
+        return "LPAI"
+    return os.path.basename(backend_lib)
+
+
+def _is_htp_backend(backend_lib: str) -> bool:
+    return "htp" in os.path.basename(backend_lib).lower()
+
+
+def _get_taesd_qnn_plan() -> dict | None:
+    global _TAESD_QNN_CHECKED, _TAESD_QNN_PLAN
+    if _TAESD_QNN_CHECKED:
+        return _TAESD_QNN_PLAN
+
+    _TAESD_QNN_CHECKED = True
+    if TAESD_FORCE_ONNX or TAESD_BACKEND in ("", "off", "none", "onnx", "cpu"):
+        return None
+
+    try:
+        backend_lib = TAESD_BACKEND_LIB or _resolve_backend_lib(TAESD_BACKEND)
+    except Exception as e:
+        _log(f"  [TAESD] invalid QNN backend '{TAESD_BACKEND}': {e}")
+        return None
+
+    if not os.path.exists(backend_lib):
+        return None
+
+    if os.path.exists(TAESD_CONTEXT):
+        _TAESD_QNN_PLAN = {
+            "mode": "context",
+            "ctx_path": TAESD_CONTEXT,
+            "backend_lib": backend_lib,
+            "backend_label": _backend_label(backend_lib),
+        }
+        return _TAESD_QNN_PLAN
+
+    if os.path.exists(TAESD_MODEL):
+        _TAESD_QNN_PLAN = {
+            "mode": "model",
+            "model_path": TAESD_MODEL,
+            "backend_lib": backend_lib,
+            "backend_label": _backend_label(backend_lib),
+        }
+        return _TAESD_QNN_PLAN
+
+    return None
+
+
+def _prepare_preview_backend() -> None:
+    plan = None if _TAESD_QNN_FAILED else _get_taesd_qnn_plan()
+    if plan is not None:
+        location = plan.get("ctx_path") or plan.get("model_path") or ""
+        _log(
+            f"  [TAESD] preview backend ready: QNN {plan['backend_label']} "
+            f"({plan['mode']}, {os.path.basename(location)})"
+        )
+        return
+
+    if os.path.exists(TAESD_ONNX):
+        _get_ort_session()
+        return
+
+    if not TAESD_FORCE_ONNX and TAESD_BACKEND not in ("", "off", "none", "onnx", "cpu"):
+        backend_lib = TAESD_BACKEND_LIB or TAESD_BACKEND
+        _log(
+            f"  [TAESD] no QNN preview artifacts for backend '{backend_lib}' — "
+            "falling back to ONNX CPU if available"
+        )
+    else:
+        _log("  [TAESD] no preview backend available")
 
 
 # ─── TAESD CPU decoder (onnxruntime) ────────────────────────────────────────────────────────────────
@@ -514,7 +764,173 @@ class EulerDiscreteScheduler:
 
 # ─── QNN Net Run helper ───
 
-def qnn_run(ctx_path, input_list_path, output_dir, native=False):
+
+def _can_use_qnn_daemon() -> bool:
+    return QNN_USE_DAEMON and os.path.exists(QNN_CONTEXT_RUNNER) and os.path.exists(QNN_SYSTEM_LIB)
+
+
+class _QnnContextDaemon:
+    def __init__(self, ctx_path: str, native: bool) -> None:
+        self.ctx_path = ctx_path
+        self.native = native
+        self.name = re.sub(r"[^0-9A-Za-z_.-]+", "_", os.path.basename(ctx_path))
+        self.daemon_dir = os.path.join(WORK_DIR, "daemon")
+        self.req_fifo = os.path.join(self.daemon_dir, f"{self.name}.req")
+        self.rsp_fifo = os.path.join(self.daemon_dir, f"{self.name}.rsp")
+        self.bootstrap_output_dir = os.path.join(self.daemon_dir, f"{self.name}.boot")
+        self.proc: subprocess.Popen[str] | None = None
+        self.stderr_tail: list[str] = []
+        self.stderr_thread: threading.Thread | None = None
+
+    def _capture_stderr(self) -> None:
+        if self.proc is None or self.proc.stderr is None:
+            return
+        try:
+            for raw_line in self.proc.stderr:
+                line = raw_line.rstrip()
+                if not line:
+                    continue
+                self.stderr_tail.append(line)
+                if len(self.stderr_tail) > 40:
+                    self.stderr_tail = self.stderr_tail[-40:]
+                if QNN_STDOUT_ECHO:
+                    _log(f"  [daemon {self.name}] {line}")
+        except Exception:
+            pass
+
+    def _error_tail(self) -> str:
+        if not self.stderr_tail:
+            return ""
+        return " | ".join(self.stderr_tail[-5:])
+
+    def _ensure_fifo(self, path: str) -> None:
+        mkfifo = getattr(os, "mkfifo", None)
+        if mkfifo is None:
+            raise RuntimeError("os.mkfifo is unavailable on this platform")
+        if os.path.exists(path):
+            if not stat.S_ISFIFO(os.stat(path).st_mode):
+                os.remove(path)
+        if not os.path.exists(path):
+            mkfifo(path)
+
+    def start(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            return
+        os.makedirs(self.daemon_dir, exist_ok=True)
+        os.makedirs(self.bootstrap_output_dir, exist_ok=True)
+        for fifo in (self.req_fifo, self.rsp_fifo):
+            self._ensure_fifo(fifo)
+
+        cmd = [
+            QNN_CONTEXT_RUNNER,
+            "--retrieve_context", self.ctx_path,
+            "--backend", f"{QNN_LIB}/libQnnHtp.so",
+            "--system_library", QNN_SYSTEM_LIB,
+            "--request_fifo", self.req_fifo,
+            "--response_fifo", self.rsp_fifo,
+            "--output_dir", self.bootstrap_output_dir,
+            "--log_level", QNN_LOG_LEVEL,
+        ]
+        if self.native:
+            cmd.append("--use_native_output_files")
+        if QNN_PROFILING_LEVEL:
+            cmd.extend(["--profiling_level", QNN_PROFILING_LEVEL])
+
+        self.proc = subprocess.Popen(
+            cmd,
+            env=_get_qnn_env(),
+            cwd=DR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.stderr_thread = threading.Thread(target=self._capture_stderr, daemon=True)
+        self.stderr_thread.start()
+        time.sleep(0.15)
+        if self.proc.poll() is not None:
+            raise RuntimeError(f"runner exited early: {self._error_tail()}")
+
+    def run(self, input_list_path: str, output_dir: str, timeout: float = 120.0) -> float:
+        self.start()
+        assert self.proc is not None
+        os.makedirs(output_dir, exist_ok=True)
+
+        t0 = time.time()
+        with open(self.req_fifo, "w", encoding="utf-8") as req:
+            req.write(f"{input_list_path}\n{output_dir}\n")
+            req.flush()
+
+        fd = os.open(self.rsp_fifo, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            response = b""
+            while True:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(f"runner exited: {self._error_tail()}")
+                remaining = timeout - (time.time() - t0)
+                if remaining <= 0:
+                    raise TimeoutError(f"runner timeout after {timeout:.1f}s")
+                readable, _, _ = select.select([fd], [], [], min(0.2, remaining))
+                if not readable:
+                    continue
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    continue
+                response += chunk
+                if b"\n" not in response:
+                    continue
+                line = response.splitlines()[0].decode("utf-8", errors="replace").strip()
+                if line == "OK":
+                    return (time.time() - t0) * 1000
+                raise RuntimeError(f"{line} ({self._error_tail()})")
+        finally:
+            os.close(fd)
+
+    def stop(self) -> None:
+        proc = self.proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            try:
+                with open(self.req_fifo, "w", encoding="utf-8") as req:
+                    req.write("__quit__\n\n")
+                    req.flush()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=2.0)
+            except Exception:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    proc.kill()
+        self.proc = None
+
+
+def _get_qnn_daemon(ctx_path: str, native: bool) -> _QnnContextDaemon:
+    key = (ctx_path, native)
+    daemon = _QNN_DAEMONS.get(key)
+    if daemon is None:
+        daemon = _QnnContextDaemon(ctx_path, native=native)
+        _QNN_DAEMONS[key] = daemon
+    return daemon
+
+
+def _shutdown_qnn_daemons() -> None:
+    for daemon in list(_QNN_DAEMONS.values()):
+        try:
+            daemon.stop()
+        except Exception:
+            pass
+    _QNN_DAEMONS.clear()
+
+
+atexit.register(_shutdown_qnn_daemons)
+
+def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
+            native_input=False, backend=None, model_path=None, config_file=None,
+            use_mmap=None, perf_profile=None, net_run_path=None):
     """Run QNN context on NPU via qnn-net-run.
 
     Uses direct exec (no shell wrapper) — avoids fork→sh→exec overhead (~10-20ms/call).
@@ -532,22 +948,52 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False):
     #   → See: NPU/qnn_inf_server.cpp (TODO)
     # ─────────────────────────────────────────────────────────────────────────────
     """
+    if ctx_path is None and model_path is None:
+        raise ValueError("qnn_run needs either ctx_path or model_path")
+    if ctx_path is not None and model_path is not None:
+        raise ValueError("qnn_run accepts ctx_path or model_path, not both")
+
+    backend_lib = _resolve_backend_lib(backend or "htp")
+    backend_lib = _resolve_runtime_artifact(backend_lib, "lib")
+    effective_config = QNN_CONFIG_FILE if config_file is None and _is_htp_backend(backend_lib) else (config_file or "")
+    effective_config = _resolve_qnn_config_path(effective_config) if effective_config else ""
+    effective_mmap = QNN_USE_MMAP if use_mmap is None else use_mmap
+    effective_perf = perf_profile or QNN_PERF_PROFILE
+    runner_path = _resolve_exec_binary(net_run_path or QNN_NET_RUN)
+
+    if ctx_path is not None and model_path is None and net_run_path is None and _is_htp_backend(backend_lib) and _can_use_qnn_daemon():
+        try:
+            daemon = _get_qnn_daemon(ctx_path, native=native)
+            return daemon.run(input_list_path, output_dir, timeout=120.0)
+        except Exception as e:
+            _log(f"  [QNN daemon] fallback for {os.path.basename(ctx_path)}: {e}")
+            daemon = _QNN_DAEMONS.pop((ctx_path, native), None)
+            if daemon is not None:
+                daemon.stop()
+
     os.makedirs(output_dir, exist_ok=True)
-    cmd = [
-        QNN_NET_RUN,
-        "--retrieve_context", ctx_path,
-        "--backend", f"{QNN_LIB}/libQnnHtp.so",
+    cmd = [runner_path]
+    if ctx_path is not None:
+        cmd.extend(["--retrieve_context", ctx_path])
+    else:
+        assert model_path is not None
+        model_path = _resolve_runtime_artifact(model_path, "model")
+        cmd.extend(["--model", model_path])
+    cmd.extend([
+        "--backend", backend_lib,
         "--input_list", input_list_path,
         "--output_dir", output_dir,
-        "--perf_profile", QNN_PERF_PROFILE,
+        "--perf_profile", effective_perf,
         "--log_level", QNN_LOG_LEVEL,
-    ]
+    ])
     if QNN_PROFILING_LEVEL:
         cmd.extend(["--profiling_level", QNN_PROFILING_LEVEL])
-    if QNN_CONFIG_FILE:
-        cmd.extend(["--config_file", QNN_CONFIG_FILE])
-    if QNN_USE_MMAP:
+    if effective_config:
+        cmd.extend(["--config_file", effective_config])
+    if effective_mmap and ctx_path is not None:
         cmd.append("--use_mmap")
+    if native_input:
+        cmd.append("--use_native_input_files")
     if native:
         cmd.append("--use_native_output_files")
     t0 = time.time()
@@ -608,6 +1054,10 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         f"QNN:    perf={QNN_PERF_PROFILE}, mmap={'on' if QNN_USE_MMAP else 'off'}, "
         f"log={QNN_LOG_LEVEL}"
     )
+    if _can_use_qnn_daemon():
+        qnn_mode += f", daemon={os.path.basename(QNN_CONTEXT_RUNNER)}"
+    else:
+        qnn_mode += ", daemon=off"
     if QNN_CONFIG_FILE:
         qnn_mode += f", config={os.path.basename(QNN_CONFIG_FILE)}"
     if QNN_PROFILING_LEVEL:
@@ -679,6 +1129,9 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     # Wait for context priming threads (they're likely done by now; minimal wait if not)
     for t in _ctx_prime_threads:
         t.join(timeout=0.5)
+
+    if preview:
+        _prepare_preview_backend()
 
     # ── 2. Prepare UNet inputs ──
     def push_unet_data(pe, te, tag):
@@ -816,25 +1269,68 @@ def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
     Output: saves PREVIEW_PNG as RGB PNG [1024×1024].
     Called from background thread — must be thread-safe (only writes PREVIEW_PNG).
     """
+    global _TAESD_QNN_FAILED
+
+    plan = None if _TAESD_QNN_FAILED else _get_taesd_qnn_plan()
+    if plan is not None:
+        try:
+            ms = _preview_step_qnn(latents, plan)
+            _log(
+                f"  [PREVIEW step {step_idx+1}/{total_steps}] "
+                f"QNN {plan['backend_label']} {ms:.0f}ms"
+            )
+            return
+        except Exception as e:
+            _TAESD_QNN_FAILED = True
+            _log(f"  [TAESD] QNN preview fallback to ONNX CPU: {e}")
+
     sess = _get_ort_session()
     if sess is None:
         return
 
     t0 = time.time()
     try:
-        # TAESD expects [1,4,128,128] NCHW float32 — same layout as our latents
-        result = sess.run(None, {"latents": latents.astype(np.float32)})
+        result = sess.run(None, {"latents": latents.astype(np.float32, copy=False)})
     except Exception as e:
-        print(f"  [TAESD] inference error: {e}", flush=True)
+        _log(f"  [TAESD] inference error: {e}")
         return
 
-    # Output: [1,3,1024,1024] NCHW float32 in [-1, 1]
-    out = result[0]  # [1,3,1024,1024]
-    img = out[0].transpose(1, 2, 0)  # NCHW → HWC [1024,1024,3]
+    _save_preview_png(result[0])
+
+    ms = (time.time() - t0) * 1000
+    _log(f"  [PREVIEW step {step_idx+1}/{total_steps}] CPU {ms:.0f}ms")
+
+
+def _preview_tensor_to_hwc(out_tensor: np.ndarray) -> np.ndarray:
+    arr = np.asarray(out_tensor)
+    if arr.ndim == 4:
+        if arr.shape[0] != 1:
+            raise ValueError(f"TAESD preview expects batch=1, got {arr.shape}")
+        arr = arr[0]
+    if arr.ndim != 3:
+        raise ValueError(f"TAESD preview expects rank-3/4 tensor, got {arr.shape}")
+
+    if arr.shape[-1] in (1, 3, 4):
+        img = arr
+    elif arr.shape[0] in (1, 3, 4):
+        img = arr.transpose(1, 2, 0)
+    else:
+        raise ValueError(f"TAESD preview cannot infer tensor layout from {arr.shape}")
+
+    if img.shape[-1] == 1:
+        img = np.repeat(img, 3, axis=2)
+    elif img.shape[-1] > 3:
+        img = img[:, :, :3]
+    return img.astype(np.float32, copy=False)
+
+
+def _save_preview_png(out_tensor: np.ndarray) -> None:
+    img = _preview_tensor_to_hwc(out_tensor)
     img = np.clip(img / 2.0 + 0.5, 0.0, 1.0)
     img_u8 = (img * 255).astype(np.uint8)
 
     from PIL import Image
+
     tmp_path = PREVIEW_PNG + ".tmp"
     Image.fromarray(img_u8).save(
         tmp_path,
@@ -848,8 +1344,78 @@ def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
     except Exception:
         pass
 
-    ms = (time.time() - t0) * 1000
-    _log(f"  [PREVIEW step {step_idx+1}/{total_steps}] CPU {ms:.0f}ms")
+
+def _load_qnn_raw_tensor(raw_path: str, dims: list[int] | tuple[int, ...], dtype) -> np.ndarray:
+    data = np.fromfile(raw_path, dtype)
+    expected = math.prod(dims)
+    if data.size != expected:
+        raise ValueError(
+            f"TAESD QNN output size mismatch for {os.path.basename(raw_path)}: "
+            f"expected {expected} elements, got {data.size}"
+        )
+    return data.reshape(dims).astype(np.float32, copy=False)
+
+
+def _read_taesd_qnn_output(out_dir: str) -> np.ndarray:
+    result_dir = f"{out_dir}/Result_0"
+    if not os.path.isdir(result_dir):
+        raise FileNotFoundError(f"TAESD QNN output dir missing: {result_dir}")
+
+    native_path = os.path.join(result_dir, "image_native.raw")
+    native_meta_path = os.path.join(out_dir, "image_native.raw.json")
+    if os.path.exists(native_path):
+        dims = [1, 1024, 1024, 3]
+        dtype = np.float16
+        if os.path.exists(native_meta_path):
+            with open(native_meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            meta_dims = meta.get("Dimensions") or meta.get("dimensions")
+            if isinstance(meta_dims, list) and len(meta_dims) == 4:
+                dims = [int(v) for v in meta_dims]
+            dtype_name = str(meta.get("Datatype") or meta.get("datatype") or "").upper()
+            if "FLOAT_32" in dtype_name:
+                dtype = np.float32
+        return _load_qnn_raw_tensor(native_path, dims, dtype)
+
+    raw_path = os.path.join(result_dir, "image.raw")
+    if os.path.exists(raw_path):
+        dims = [1, 1024, 1024, 3]
+        raw_bytes = os.path.getsize(raw_path)
+        elem_count = math.prod(dims)
+        if raw_bytes == elem_count * 4:
+            return _load_qnn_raw_tensor(raw_path, dims, np.float32)
+        if raw_bytes == elem_count * 2:
+            return _load_qnn_raw_tensor(raw_path, dims, np.float16)
+        raise ValueError(f"TAESD QNN output has unexpected size: {raw_bytes} bytes")
+
+    raise FileNotFoundError(f"TAESD QNN output file missing in {result_dir}")
+
+
+def _preview_step_qnn(latents: np.ndarray, plan: dict) -> float:
+    base = f"{WORK_DIR}/preview_qnn"
+    out_dir = f"{base}/out"
+    os.makedirs(base, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
+
+    lat_path = f"{base}/latents.raw"
+    il_path = f"{base}/il.txt"
+    np.transpose(latents, (0, 2, 3, 1)).astype(np.float16, copy=False).tofile(lat_path)
+    _write_input_list_once(il_path, [lat_path])
+
+    ms = qnn_run(
+        plan.get("ctx_path"),
+        il_path,
+        out_dir,
+        native=True,
+        native_input=True,
+        backend=plan["backend_lib"],
+        model_path=plan.get("model_path"),
+        config_file=TAESD_CONFIG_FILE or "",
+        use_mmap=(plan["mode"] == "context"),
+        net_run_path=TAESD_QNN_NET_RUN,
+    )
+    _save_preview_png(_read_taesd_qnn_output(out_dir))
+    return ms
 
 
 def _start_bg_preview(latents_copy: np.ndarray, step_idx: int, total_steps: int) -> None:
@@ -1020,7 +1586,7 @@ if __name__ == "__main__":
     ap.add_argument("--name", type=str, default=None,
                     help="Output filename (without .png)")
     ap.add_argument("--preview", action="store_true",
-                    help="Decode each step with TAESD for live preview (~200-500ms extra/step)")
+                    help="Decode each step with TAESD live preview (prefers QNN GPU if deployed, otherwise ONNX CPU)")
     ap.add_argument("--prog-cfg", action="store_true",
                     help="Progressive CFG: guidance on first ceil(steps/2) steps only (~40%% faster)")
     a = ap.parse_args()
