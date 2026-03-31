@@ -57,3 +57,7 @@ Thumbs.db
 
 # Local benchmark tooling / outputs (never commit)
 local_tools/
+
+# Persistent QNN runner build artifacts
+NPU/build/
+NPU/out/
