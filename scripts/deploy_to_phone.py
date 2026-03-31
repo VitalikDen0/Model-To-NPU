@@ -121,11 +121,13 @@ def find_optional_taesd_onnx(repo_root: str) -> str | None:
 
 def find_optional_taesd_context(repo_root: str) -> str | None:
     candidates = [
-        os.path.join(repo_root, "examples", "rooted-phone-sample", "context", "taesd_decoder.serialized.bin.bin"),
-        os.path.join("D:/platform-tools/sdxl_npu", "context", "taesd_decoder.serialized.bin.bin"),
+        # Prefer canonical rebuilt artifacts outside the repo; repo example assets may lag behind.
         os.path.join("D:/platform-tools/sdxl_npu", "taesd_decoder", "context", "taesd_decoder.serialized.bin.bin"),
+        os.path.join("D:/platform-tools/sdxl_npu", "taesd_decoder", "taesd_decoder.serialized.bin.bin"),
+        os.path.join("D:/platform-tools/sdxl_npu", "context", "taesd_decoder.serialized.bin.bin"),
         os.path.join("D:/platform-tools/NPU", "context", "taesd_decoder.serialized.bin.bin"),
         os.path.join("D:/platform-tools/NPU", "taesd_decoder", "context", "taesd_decoder.serialized.bin.bin"),
+        os.path.join(repo_root, "examples", "rooted-phone-sample", "context", "taesd_decoder.serialized.bin.bin"),
     ]
     for candidate in candidates:
         if os.path.exists(candidate):
@@ -135,6 +137,7 @@ def find_optional_taesd_context(repo_root: str) -> str | None:
 
 def find_optional_taesd_model(repo_root: str) -> str | None:
     candidates = [
+        os.path.join("D:/platform-tools/sdxl_npu", "taesd_decoder", "android_lib_rebuild", "libTAESDDecoder.so"),
         os.path.join("D:/platform-tools/sdxl_npu", "taesd_decoder", "android_lib", "libTAESDDecoder.so"),
         os.path.join("D:/platform-tools/NPU", "taesd_decoder", "android_lib", "libTAESDDecoder.so"),
         os.path.join(repo_root, "local_tools", "taesd_decoder", "android_lib", "libTAESDDecoder.so"),

@@ -7,7 +7,7 @@ It reflects a **historical rooted deployment layout**. The current default deplo
 It is included as an example of what the toolchain has already produced on-device.  
 Large binaries are **not** stored in the repository; this file is an inventory/reference only.
 
-> **Note:** the current live-preview runtime has moved to a tiny CPU-side ONNX decoder (`phone_gen/taesd_decoder.onnx`). This rooted snapshot is still useful as a historical layout reference, but it predates that newer preview path.
+> **Note:** the current live-preview runtime now prefers rebuilt QNN TAESD preview assets on the GPU (`context/taesd_decoder.serialized.bin.bin` plus `model/libTAESDDecoder.so`) and only falls back to the tiny CPU-side ONNX decoder (`phone_gen/taesd_decoder.onnx`) when QNN preview is unavailable. This rooted snapshot is still useful as a historical layout reference.
 
 ## Base path
 

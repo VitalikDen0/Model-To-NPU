@@ -1324,9 +1324,22 @@ def _preview_tensor_to_hwc(out_tensor: np.ndarray) -> np.ndarray:
     return img.astype(np.float32, copy=False)
 
 
+def _normalize_preview_image(img: np.ndarray) -> np.ndarray:
+    lo = float(np.min(img))
+    hi = float(np.max(img))
+
+    if lo >= -0.05 and hi <= 1.05:
+        return np.clip(img, 0.0, 1.0)
+
+    if lo >= -1.05 and hi <= 1.05:
+        return np.clip(img / 2.0 + 0.5, 0.0, 1.0)
+
+    return np.clip(img, 0.0, 1.0)
+
+
 def _save_preview_png(out_tensor: np.ndarray) -> None:
     img = _preview_tensor_to_hwc(out_tensor)
-    img = np.clip(img / 2.0 + 0.5, 0.0, 1.0)
+    img = _normalize_preview_image(img)
     img_u8 = (img * 255).astype(np.uint8)
 
     from PIL import Image

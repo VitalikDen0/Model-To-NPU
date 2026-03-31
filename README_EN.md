@@ -97,6 +97,12 @@ Fresh `v0.2.0` tuned runs with **live thermal logging**, default `sustained_high
 - run 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
 - run 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
 
+Fresh `v0.2.3` reuse-tuned runs pushed the current README-visible marker to **78.0 s total** and made the early UNet curve behave more like a descending warm path instead of a flat ~12 s guided plateau:
+
+- first four guided steps on the fast CFG path: about **12.2 → 10.4 → 9.9 → 9.8 s**;
+- first four `CFG=1.0` steps on the no-guidance path: about **7.4 → 7.4 → 6.2 → 6.5 s** (allowing normal run-to-run jitter);
+- TAESD live preview now prefers rebuilt **QNN GPU** assets and is currently around **1.0 s/step**, versus the older **5.5–6.0 s** CPU-side ONNX preview path.
+
 In those warmed-up full runs, the practical thermal envelope stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes observed up to about **78°C**. An early one-line CPU spike to `88.8°C` appeared before the first run stabilized and looks more like a transient sensor jump than the sustained generation state.
 
 ## Quick start
@@ -221,7 +227,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
-APK `v0.2.2` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, and restores APK-side parsing for `QNN GPU` preview timing lines.  
+APK `v0.2.3` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and now documents the rebuilt QNN TAESD preview path that runs on GPU at roughly **1.0 s** per step.
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)
