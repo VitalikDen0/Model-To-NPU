@@ -92,7 +92,7 @@ Resolution: **1024x1024** (fixed)
 
 Recent session-validated `v0.1.3` control run with default `mmap` on OnePlus 13 (`1024×1024`, `8` steps, `CFG=1.0`) reached **104.4 s total** (`CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`), which is about **17.1% faster** than the earlier public no-CFG baseline.
 
-Fresh `v0.1.4` tuned runs with **live thermal logging**, default `sustained_high_performance`, deployed HTP backend extensions, and **progressive CFG** (`8` steps, `CFG=3.5`, `--prog-cfg`) reached **79.7–80.6 s total** on the same OnePlus 13:
+Fresh `v0.2.0` tuned runs with **live thermal logging**, default `sustained_high_performance`, deployed HTP backend extensions, and **progressive CFG** (`8` steps, `CFG=3.5`, `--prog-cfg`) reached **79.7–80.6 s total** on the same OnePlus 13:
 
 - run 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
 - run 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
@@ -218,7 +218,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
-APK `v0.1.4` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, and auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path.  
+APK `v0.2.0` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, and auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path.  
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 #### Host-side (from PC via ADB)

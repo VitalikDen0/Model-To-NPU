@@ -92,7 +92,7 @@
 
 Свежий контрольный прогон `v0.1.3` с дефолтным `mmap` на OnePlus 13 (`1024×1024`, `8` шагов, `CFG=1.0`) дал **104.4 s total** (`CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`), то есть примерно на **17.1% быстрее** прежнего публичного no-CFG ориентира.
 
-Новые настроенные прогоны `v0.1.4` с **живым логированием температур**, дефолтным `sustained_high_performance`, задеплоенными HTP backend extensions и **progressive CFG** (`8` шагов, `CFG=3.5`, `--prog-cfg`) дали **79.7–80.6 s total** на том же OnePlus 13:
+Новые настроенные прогоны `v0.2.0` с **живым логированием температур**, дефолтным `sustained_high_performance`, задеплоенными HTP backend extensions и **progressive CFG** (`8` шагов, `CFG=3.5`, `--prog-cfg`) дали **79.7–80.6 s total** на том же OnePlus 13:
 
 - прогон 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
 - прогон 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
@@ -218,7 +218,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, live-температуры CPU / GPU / NPU и сохранение в галерею.  
-В `v0.1.4` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, а при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config.  
+В `v0.2.0` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, а при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)
