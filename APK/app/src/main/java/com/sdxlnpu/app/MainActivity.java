@@ -314,10 +314,20 @@ public class MainActivity extends AppCompatActivity {
             throw new IOException("Нет доступа к общей папке Downloads. Выдайте приложению доступ ко всем файлам.");
         }
 
+        File runtimeRoot = ensureDir(new File(getCacheDir(), "sdxl_runtime"));
+        File runtimeWorkDir = ensureDir(new File(runtimeRoot, "work"));
+        File runtimeOutputDir = ensureDir(new File(runtimeRoot, "outputs"));
+        final String runtimeWorkDirPath = runtimeWorkDir.getAbsolutePath();
+        final String runtimeOutputDirPath = runtimeOutputDir.getAbsolutePath();
+        final String previewPath = new File(runtimeOutputDir, PREVIEW_PNG_NAME).getAbsolutePath();
+
         // Build shell script (multi-line — no nested-quote issues)
         StringBuilder script = new StringBuilder();
         script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
         script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
+        script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
+        script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
+        script.append("export SDXL_QNN_PREVIEW_PNG=\"").append(shellEscape(previewPath)).append("\"\n");
         script.append("export SDXL_QNN_USE_MMAP=1\n");
         script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
         script.append("export SDXL_SHOW_TEMP=1\n");
@@ -381,7 +391,6 @@ public class MainActivity extends AppCompatActivity {
         int clipDone = 0;
 
         // Live preview polling: check for preview_current.png every 2 seconds
-        final String previewPath = OUTPUT_DIR + "/" + PREVIEW_PNG_NAME;
         final long[] previewLastModified = {0};
         final Runnable previewPoller = new Runnable() {
             @Override
@@ -539,7 +548,7 @@ public class MainActivity extends AppCompatActivity {
         // Load the generated PNG
         final String finalPath = savedPath != null
             ? savedPath
-            : OUTPUT_DIR + "/" + outName + ".png";
+            : runtimeOutputDirPath + "/" + outName + ".png";
 
         File pngFile = new File(finalPath);
         if (!pngFile.exists()) {
@@ -573,6 +582,13 @@ public class MainActivity extends AppCompatActivity {
                 .replace("\"", "\\\"")
                 .replace("$", "\\$")
                 .replace("`", "\\`");
+    }
+
+    private static File ensureDir(File dir) throws IOException {
+        if (dir.exists() || dir.mkdirs()) {
+            return dir;
+        }
+        throw new IOException("Не удалось создать каталог: " + dir.getAbsolutePath());
     }
 
     private boolean ensureExternalStorageAccess() {
