@@ -74,6 +74,7 @@ All gallery samples and the currently documented phone-side examples are **1024Ã
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Phone-side proof screenshot" width="88%">
+  <img width="582" height="1280" alt="image" src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" />
 
 </p>
 
