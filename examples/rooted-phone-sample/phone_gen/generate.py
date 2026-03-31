@@ -86,6 +86,8 @@ QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_performance").strip() or "sustained_high_performance"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
+PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
+FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "1"))))
 TEMP_POLL_INTERVAL = max(0.2, float(os.environ.get("SDXL_TEMP_INTERVAL_SEC", "1.0")))
 _TEMP_SENSOR_CACHE: dict[str, list[tuple[str, str]]] | None = None
 _TEMP_MONITOR_STOP: threading.Event | None = None
@@ -782,7 +784,12 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     from PIL import Image
     tag = name or f"gen_s{seed}"
     out_path = f"{OUTPUT_DIR}/{tag}.png"
-    Image.fromarray(img_u8).save(out_path)
+    Image.fromarray(img_u8).save(
+        out_path,
+        format="PNG",
+        compress_level=FINAL_PNG_COMPRESS_LEVEL,
+        optimize=False,
+    )
 
     elapsed = time.time() - t_total
     _log(f"\n{'=' * 40}")
@@ -819,7 +826,12 @@ def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
 
     from PIL import Image
     tmp_path = PREVIEW_PNG + ".tmp"
-    Image.fromarray(img_u8).save(tmp_path, format="PNG")
+    Image.fromarray(img_u8).save(
+        tmp_path,
+        format="PNG",
+        compress_level=PREVIEW_PNG_COMPRESS_LEVEL,
+        optimize=False,
+    )
     os.replace(tmp_path, PREVIEW_PNG)
     try:
         os.chmod(PREVIEW_PNG, 0o644)
