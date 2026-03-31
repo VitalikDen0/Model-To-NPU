@@ -23,6 +23,31 @@ import time
 
 import numpy as np
 
+def _dir_is_writable(path: str) -> bool:
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".sdxl_write_test")
+        with open(probe, "wb") as f:
+            f.write(b"ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+def _resolve_work_dir() -> str:
+    override = os.environ.get("SDXL_QNN_WORK_DIR")
+    if override:
+        return override
+
+    candidates = [
+        f"{DR}/phone_gen/work",
+        "/data/local/tmp/sdxl_qnn_work",
+    ]
+    for candidate in candidates:
+        if _dir_is_writable(candidate):
+            return candidate
+    return candidates[0]
+
 # ─── Paths ───
 DR = "/data/local/tmp/sdxl_qnn"
 CONTEXTS = {
@@ -32,15 +57,15 @@ CONTEXTS = {
     "decoder": f"{DR}/context/unet_decoder_fp16.serialized.bin.bin",
     "vae":     f"{DR}/context/vae_decoder.serialized.bin.bin",
 }
-PREVIEW_PNG = f"{DR}/outputs/preview_current.png"
 # TAESD runs on CPU via onnxruntime (not QNN) — avoids NPU context overhead and layout bugs.
 # Export: python SDXL/export_taesd_to_onnx.py
 # Push:   adb push sdxl_npu/taesd_decoder/taesd_decoder.onnx /data/local/tmp/sdxl_qnn/phone_gen/
 # Install:pip install onnxruntime  (in Termux)
 TAESD_ONNX = f"{DR}/phone_gen/taesd_decoder.onnx"
 TOKENIZER_DIR = f"{DR}/phone_gen/tokenizer"
-OUTPUT_DIR = f"{DR}/outputs"
-WORK_DIR = f"{DR}/phone_gen/work"
+OUTPUT_DIR = os.environ.get("SDXL_QNN_OUTPUT_DIR", f"{DR}/outputs")
+WORK_DIR = _resolve_work_dir()
+PREVIEW_PNG = os.environ.get("SDXL_QNN_PREVIEW_PNG", f"{OUTPUT_DIR}/preview_current.png")
 QNN_NET_RUN = f"{DR}/bin/qnn-net-run"
 QNN_LIB = f"{DR}/lib"
 DEFAULT_QNN_EXT_LIB = f"{QNN_LIB}/libQnnHtpNetRunExtensions.so"
@@ -162,6 +187,21 @@ def _prime_ctx_bg(paths: list) -> list:
     for t in threads:
         t.start()
     return threads
+
+
+def _write_input_list_once(path: str, entries) -> None:
+    if os.path.exists(path):
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(" ".join(entries) + "\n")
+
+
+def _write_multi_input_list_once(path: str, rows) -> None:
+    if os.path.exists(path):
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(" ".join(row) + "\n")
 
 
 # Debug: print SoC temperature in denoise loop to detect thermal throttling.
@@ -500,16 +540,21 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False):
     if native:
         cmd.append("--use_native_output_files")
     t0 = time.time()
+    stdout_target = subprocess.PIPE if QNN_STDOUT_ECHO else subprocess.DEVNULL
     result = subprocess.run(
         cmd,
         env=_get_qnn_env(),
-        capture_output=True, text=True, timeout=120
+        cwd=DR,
+        stdout=stdout_target,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=120,
     )
     elapsed = (time.time() - t0) * 1000
     if result.returncode != 0:
         print(f"  [qnn-net-run ERROR] {result.stderr[-500:]}", file=sys.stderr)
         raise RuntimeError(f"qnn-net-run failed: exit {result.returncode}")
-    if QNN_STDOUT_ECHO and result.stdout.strip():
+    if QNN_STDOUT_ECHO and result.stdout and result.stdout.strip():
         _log(result.stdout.rstrip())
     if QNN_PROFILING_LEVEL:
         prof_log = os.path.join(output_dir, "qnn-profiling-data_0.log")
@@ -532,6 +577,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(WORK_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(PREVIEW_PNG), exist_ok=True)
     use_cfg = cfg_scale > 1.0
     if neg_prompt is None:
         neg_prompt = DEFAULT_NEG if use_cfg else ""
@@ -540,10 +586,13 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     # File-read portion of context loading: ~1-2s from flash → ~30ms from cache.
     # CDSP init overhead is separate (~3-5s/call) — not affected, but this is free.
     _ctx_prime_threads = _prime_ctx_bg([
-        CONTEXTS["encoder"], CONTEXTS["decoder"],
+        CONTEXTS["encoder"], CONTEXTS["decoder"], CONTEXTS["vae"],
     ])
 
     _log(f"Prompt: {prompt}")
+    _log(f"Base:   {DR}")
+    _log(f"Work:   {WORK_DIR}")
+    _log(f"Out:    {OUTPUT_DIR}")
     qnn_mode = (
         f"QNN:    perf={QNN_PERF_PROFILE}, mmap={'on' if QNN_USE_MMAP else 'off'}, "
         f"log={QNN_LOG_LEVEL}"
@@ -592,10 +641,8 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         ids_l.tofile(f"{cd}/ids_l.raw")
         ids_g.tofile(f"{cd}/ids_g.raw")
 
-        with open(f"{cd}/il_l.txt", "w") as f:
-            f.write(f"{cd}/ids_l.raw\n")
-        with open(f"{cd}/il_g.txt", "w") as f:
-            f.write(f"{cd}/ids_g.raw\n")
+        _write_input_list_once(f"{cd}/il_l.txt", [f"{cd}/ids_l.raw"])
+        _write_input_list_once(f"{cd}/il_g.txt", [f"{cd}/ids_g.raw"])
 
         ms_l = qnn_run(CONTEXTS["clip_l"], f"{cd}/il_l.txt", f"{cd}/out_l")
         ms_g = qnn_run(CONTEXTS["clip_g"], f"{cd}/il_g.txt", f"{cd}/out_g")
@@ -711,8 +758,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     # VAE expects NHWC
     lat_nhwc = np.transpose(lat_sc, (0, 2, 3, 1)).astype(np.float32)
     lat_nhwc.tofile(f"{vd}/lat.raw")
-    with open(f"{vd}/il.txt", "w") as f:
-        f.write(f"{vd}/lat.raw\n")
+    _write_input_list_once(f"{vd}/il.txt", [f"{vd}/lat.raw"])
 
     ms_vae = qnn_run(CONTEXTS["vae"], f"{vd}/il.txt", f"{vd}/out", native=True)
     _log(f"[VAE] {ms_vae:.0f}ms")
@@ -865,8 +911,6 @@ def _run_unet_split(latent_np, timestep, step_idx, tag):
     base = f"{WORK_DIR}/unet/{tag}"
     enc_out = f"{base}/out_enc"
     dec_out = f"{base}/out_dec"
-    os.makedirs(enc_out, exist_ok=True)
-    os.makedirs(dec_out, exist_ok=True)
 
     smp_path = f"{base}/smp.raw"
     ts_path = f"{base}/ts.raw"
@@ -876,15 +920,13 @@ def _run_unet_split(latent_np, timestep, step_idx, tag):
 
     enc_entries = _enc_dec_inputs(base, smp_path, ts_path)
     il_enc = f"{base}/il_enc.txt"
-    with open(il_enc, "w") as f:
-        f.write(" ".join(enc_entries) + "\n")
+    _write_input_list_once(il_enc, enc_entries)
 
     ms_enc = qnn_run(CONTEXTS["encoder"], il_enc, enc_out)
 
     dec_entries = _dec_entries_from_enc_out(base, f"{enc_out}/Result_0")
     il_dec = f"{base}/il_dec.txt"
-    with open(il_dec, "w") as f:
-        f.write(" ".join(dec_entries) + "\n")
+    _write_input_list_once(il_dec, dec_entries)
 
     ms_dec = qnn_run(CONTEXTS["decoder"], il_dec, dec_out)
 
@@ -912,8 +954,6 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
 
     enc_out_batch = f"{WORK_DIR}/unet/enc_batch"
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
-    os.makedirs(enc_out_batch, exist_ok=True)
-    os.makedirs(dec_out_batch, exist_ok=True)
 
     # ── Batched Encoder: 2 inferences in one qnn-net-run ──
     # Line 0 → uncond (Result_0), Line 1 → cond (Result_1)
@@ -921,9 +961,7 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
     enc_cond = _enc_dec_inputs(cond_base, smp_path, ts_path)
 
     il_enc_batch = f"{cond_base}/il_enc_batch.txt"
-    with open(il_enc_batch, "w") as f:
-        f.write(" ".join(enc_uncond) + "\n")
-        f.write(" ".join(enc_cond) + "\n")
+    _write_multi_input_list_once(il_enc_batch, [enc_uncond, enc_cond])
 
     # Single shared output dir; Result_0 = uncond, Result_1 = cond
     ms_enc = qnn_run(CONTEXTS["encoder"], il_enc_batch, enc_out_batch)
@@ -933,9 +971,7 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
     dec_cond = _dec_entries_from_enc_out(cond_base, f"{enc_out_batch}/Result_1")
 
     il_dec_batch = f"{cond_base}/il_dec_batch.txt"
-    with open(il_dec_batch, "w") as f:
-        f.write(" ".join(dec_uncond) + "\n")
-        f.write(" ".join(dec_cond) + "\n")
+    _write_multi_input_list_once(il_dec_batch, [dec_uncond, dec_cond])
 
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
     ms_dec = qnn_run(CONTEXTS["decoder"], il_dec_batch, dec_out_batch)

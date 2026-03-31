@@ -38,6 +38,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 ## Changelog
 
+- **0.2.1** — APK now routes transient runtime files (`WORK_DIR`, generated PNGs, and live preview frames) through app-private cache directories instead of shared storage, while keeping the deployed model tree in the public phone path.
 - **0.2.0** — phone runtime and APK now show live **CPU / GPU / NPU** temperatures, default to QNN `sustained_high_performance`, auto-enable HTP backend extensions when `libQnnHtpNetRunExtensions.so` is deployed, and the current full `8`-step progressive-CFG best path reached about **79.7–80.6s total** on OnePlus 13.
 - **0.1.3** — phone runtime and APK launch path now enable QNN `mmap` by default, repo-visible SDXL speed/overhead probes were added, and the current control run reached **104.4s total** at `1024×1024`, `8` steps, `CFG=1.0` on OnePlus 13.
 - **0.1.2-beta** — APK now exposes a **½-CFG** toggle that applies guidance only to the first `ceil(steps / 2)` denoising steps; added a dedicated UNet quantization review with per-block risk notes and safer experiment boundaries.
@@ -57,6 +58,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 ## Gallery
 
+<!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
     <td width="50%"><img src="https://github.com/user-attachments/assets/915ef71e-d72b-4fa0-823d-b316289f2041" alt="SDXL on phone sample 1" width="100%"></td>
@@ -67,6 +69,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
     <td width="50%"><img src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" alt="SDXL on phone sample 4" width="100%"></td>
   </tr>
 </table>
+<!-- markdownlint-enable MD033 -->
 
 All gallery samples and the currently documented phone-side examples are **1024×1024** outputs from the current Lightning-merged SDXL path.
 

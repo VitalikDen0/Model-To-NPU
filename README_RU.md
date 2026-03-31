@@ -218,7 +218,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, live-температуры CPU / GPU / NPU и сохранение в галерею.  
-В `v0.2.0` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, а при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config.  
+В `v0.2.1` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config, а временные runtime-файлы теперь пишутся в app-private cache вместо общей папки.  
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 #### Host-side (с ПК через ADB)

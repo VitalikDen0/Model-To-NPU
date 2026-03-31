@@ -13,7 +13,7 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.2.0`**.
+Current documented APK version: **`0.2.1`**.
 
 ## Architecture
 
@@ -155,7 +155,7 @@ The current best session-validated `v0.2.0` path with `sustained_high_performanc
 
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
-- APK `v0.2.0` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=sustained_high_performance`, enables live thermal logging, and auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present;
+- APK `v0.2.1` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=sustained_high_performance`, enables live thermal logging, auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present, and routes transient `WORK_DIR` / preview / output files into the app cache to reduce shared-storage overhead;
 - Live Preview uses `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime`; the old `taesd_decoder.serialized.bin.bin` preview path is no longer required for the current flow;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
 - the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;
