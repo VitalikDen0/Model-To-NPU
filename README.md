@@ -16,6 +16,7 @@
   <a href="README_EN.md#performance"><img src="https://img.shields.io/badge/Snapdragon-8%20Elite-5C2D91?style=for-the-badge" alt="Snapdragon 8 Elite"></a>
   <a href="README_EN.md#architecture"><img src="https://img.shields.io/badge/QNN%20%2F%20QAIRT-Hexagon%20NPU-CB2E6D?style=for-the-badge" alt="QNN / QAIRT"></a>
 </p>
+<img width="582" height="1280" alt="image" src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" />
 
 Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
