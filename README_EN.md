@@ -2,8 +2,9 @@
 
 **Languages:** [English](README_EN.md) | [Русский](README_RU.md)
 
-> [!WARNING]
-> The pipeline is still marked beta in some branches, but a full practical loop for SDXL-Lightning was re-validated on **2026-04-06** from checkpoint build to final phone-generated image.
+> [!TIP]
+> End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
+> Some advanced build/conversion branches remain openly marked as beta or experimental.
 
 <p align="center">
   <b>Repository for model-to-NPU pipelines on Qualcomm Snapdragon devices</b><br>

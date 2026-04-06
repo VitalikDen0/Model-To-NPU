@@ -2,8 +2,9 @@
 
 **Языки:** [English](README_EN.md) | [Русский](README_RU.md)
 
-> [!WARNING]
-> Некоторые ветки всё ещё помечены как beta/experimental, но практический полный цикл SDXL-Lightning был повторно подтверждён **2026-04-06**: от checkpoint-сборки до финального изображения с телефона.
+> [!TIP]
+> End-to-end SDXL flow доступен и практически подтверждён (`checkpoint -> final phone-generated PNG`).
+> Отдельные продвинутые ветки сборки/конвертации по-прежнему открыто помечены как beta/experimental.
 
 <p align="center">
   <b>Репозиторий для model-to-NPU pipeline'ов на Qualcomm Snapdragon</b><br>
