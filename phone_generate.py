@@ -11,10 +11,12 @@ Usage (in Termux):
 """
 import argparse
 import atexit
+import hashlib
 import json
 import importlib
 import math
 import os
+import random
 import re
 import select
 import shutil
@@ -102,11 +104,7 @@ DEFAULT_QNN_EXT_LIB = f"{QNN_LIB}/libQnnHtpNetRunExtensions.so"
 DEFAULT_QNN_CONFIG_PATH = f"{DR}/htp_backend_extensions_lightning.json"
 QNN_CONTEXT_RUNNER = os.environ.get("SDXL_QNN_DAEMON_BIN", f"{QNN_BIN_DIR}/qnn-context-runner")
 QNN_SYSTEM_LIB = os.environ.get("SDXL_QNN_SYSTEM_LIB", f"{QNN_LIB}/libQnnSystem.so")
-DEFAULT_TAESD_QNN_NET_RUN = (
-    f"{QNN_BIN_DIR}/qnn-net-run-gpu"
-    if os.path.exists(f"{QNN_BIN_DIR}/qnn-net-run-gpu")
-    else QNN_NET_RUN
-)
+DEFAULT_TAESD_QNN_NET_RUN = QNN_NET_RUN
 
 
 def _detect_default_qnn_config() -> str:
@@ -125,11 +123,19 @@ SHOW_TEMP = os.environ.get("SDXL_SHOW_TEMP", "0") == "1"
 TEMP_POLL_INTERVAL = max(0.2, float(os.environ.get("SDXL_TEMP_INTERVAL_SEC", "1.0")))
 QNN_LOG_LEVEL = os.environ.get("SDXL_QNN_LOG_LEVEL", "warn")
 QNN_PROFILING_LEVEL = os.environ.get("SDXL_QNN_PROFILING_LEVEL", "").strip()
+QNN_PROFILE_ARCHIVE = os.environ.get("SDXL_QNN_PROFILE_ARCHIVE", "0") == "1"
+QNN_PROFILE_ARCHIVE_DIR = os.environ.get("SDXL_QNN_PROFILE_ARCHIVE_DIR", os.path.join(WORK_DIR, "qnn_profiles"))
+QNN_PROFILE_VIEWER = os.environ.get("SDXL_QNN_PROFILE_VIEWER", f"{QNN_BIN_DIR}/qnn-profile-viewer").strip()
 QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_performance").strip() or "sustained_high_performance"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
 QNN_USE_DAEMON = os.environ.get("SDXL_QNN_USE_DAEMON", "0") == "1"
+QNN_DAEMON_CONTEXT_SCOPE = os.environ.get("SDXL_QNN_DAEMON_CONTEXT_SCOPE", "unet").strip().lower() or "unet"
+QNN_DAEMON_PREWARM = os.environ.get("SDXL_QNN_DAEMON_PREWARM", "1") == "1"
+QNN_DAEMON_CONFIG_FILE = os.environ.get("SDXL_QNN_DAEMON_CONFIG_FILE", "").strip()
+QNN_CLIP_CACHE = os.environ.get("SDXL_QNN_CLIP_CACHE", "1") == "1"
+QNN_CLIP_CACHE_DIR = os.environ.get("SDXL_QNN_CLIP_CACHE_DIR", f"{DR}/phone_gen/cache/clip")
 PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
 FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "1"))))
 STRETCH_SAMPLE_STRIDE = max(1, int(os.environ.get("SDXL_QNN_STRETCH_SAMPLE_STRIDE", "4")))
@@ -148,11 +154,160 @@ _SHARED_RUNTIME_STAGED = False
 _TAESD_QNN_CHECKED = False
 _TAESD_QNN_PLAN: dict | None = None
 _TAESD_QNN_FAILED = False
+_QNN_PROFILE_INDEX = 0
+_QNN_PROFILE_LOCK = threading.Lock()
+_CLIP_CACHE_NAMESPACE: str | None = None
 
 
 def _log(line: str = "") -> None:
     with _PRINT_LOCK:
         print(line, flush=True)
+
+
+def _sanitize_profile_tag(tag: str) -> str:
+    return re.sub(r"[^0-9A-Za-z_.-]+", "_", str(tag)).strip("._") or "profile"
+
+
+def _artifact_signature(path: str) -> str:
+    if not path or not os.path.exists(path):
+        return f"missing:{path}"
+    st = os.stat(path)
+    return f"{os.path.basename(path)}:{st.st_size}:{st.st_mtime_ns}"
+
+
+def _get_clip_cache_namespace() -> str:
+    global _CLIP_CACHE_NAMESPACE
+    if _CLIP_CACHE_NAMESPACE is not None:
+        return _CLIP_CACHE_NAMESPACE
+
+    parts = [
+        "clip-cache-v1",
+        _artifact_signature(CONTEXTS["clip_l"]),
+        _artifact_signature(CONTEXTS["clip_g"]),
+        _artifact_signature(f"{TOKENIZER_DIR}/vocab.json"),
+        _artifact_signature(f"{TOKENIZER_DIR}/merges.txt"),
+        _artifact_signature(QNN_CONFIG_FILE) if QNN_CONFIG_FILE else "no-config",
+        _artifact_signature(DEFAULT_QNN_EXT_LIB),
+    ]
+    _CLIP_CACHE_NAMESPACE = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return _CLIP_CACHE_NAMESPACE
+
+
+def _clip_cache_prefix(text: str) -> str:
+    cache_key = hashlib.sha256(
+        json.dumps(
+            {
+                "text": text,
+                "namespace": _get_clip_cache_namespace(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return os.path.join(QNN_CLIP_CACHE_DIR, cache_key)
+
+
+def _write_atomic_bytes(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(data)
+    os.replace(tmp_path, path)
+
+
+def _write_atomic_json(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _load_clip_cache(text: str) -> tuple[np.ndarray, np.ndarray] | None:
+    if not QNN_CLIP_CACHE:
+        return None
+
+    prefix = _clip_cache_prefix(text)
+    pe_path = prefix + ".pe.raw"
+    te_path = prefix + ".te.raw"
+    meta_path = prefix + ".json"
+    if not (os.path.exists(pe_path) and os.path.exists(te_path) and os.path.exists(meta_path)):
+        return None
+
+    try:
+        pe = np.fromfile(pe_path, np.float32).reshape(1, 77, 2048)
+        te = np.fromfile(te_path, np.float32).reshape(1, 1280)
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        if meta.get("namespace") != _get_clip_cache_namespace() or meta.get("text") != text:
+            return None
+        return pe, te
+    except Exception:
+        return None
+
+
+def _save_clip_cache(text: str, pe: np.ndarray, te: np.ndarray) -> None:
+    if not QNN_CLIP_CACHE:
+        return
+
+    prefix = _clip_cache_prefix(text)
+    _write_atomic_bytes(prefix + ".pe.raw", pe.astype(np.float32, copy=False).tobytes())
+    _write_atomic_bytes(prefix + ".te.raw", te.astype(np.float32, copy=False).tobytes())
+    _write_atomic_json(
+        prefix + ".json",
+        {
+            "text": text,
+            "namespace": _get_clip_cache_namespace(),
+            "pe_shape": [1, 77, 2048],
+            "te_shape": [1, 1280],
+        },
+    )
+
+
+def _archive_qnn_profile(output_dir: str, profile_tag: str | None) -> dict | None:
+    global _QNN_PROFILE_INDEX
+    if not QNN_PROFILING_LEVEL:
+        return None
+
+    prof_log = os.path.join(output_dir, "qnn-profiling-data_0.log")
+    if not os.path.exists(prof_log):
+        return None
+
+    info = {"log_path": prof_log}
+    if not QNN_PROFILE_ARCHIVE:
+        return info
+
+    os.makedirs(QNN_PROFILE_ARCHIVE_DIR, exist_ok=True)
+    with _QNN_PROFILE_LOCK:
+        _QNN_PROFILE_INDEX += 1
+        idx = _QNN_PROFILE_INDEX
+    stem = f"{idx:03d}_{_sanitize_profile_tag(profile_tag or os.path.basename(output_dir))}"
+    archived_log = os.path.join(QNN_PROFILE_ARCHIVE_DIR, f"{stem}.log")
+    shutil.copy2(prof_log, archived_log)
+    info["archived_log"] = archived_log
+
+    if os.path.exists(QNN_PROFILE_VIEWER):
+        try:
+            viewer_result = subprocess.run(
+                [QNN_PROFILE_VIEWER, "--input_log", prof_log],
+                env=_get_qnn_env(),
+                cwd=DR,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+            viewer_stdout = (viewer_result.stdout or "").strip()
+            if viewer_result.returncode == 0 and viewer_stdout:
+                viewer_path = os.path.join(QNN_PROFILE_ARCHIVE_DIR, f"{stem}.txt")
+                with open(viewer_path, "w", encoding="utf-8") as f:
+                    f.write(viewer_stdout)
+                info["viewer_path"] = viewer_path
+            elif viewer_result.stderr:
+                info["viewer_error"] = viewer_result.stderr.strip()
+        except Exception as e:
+            info["viewer_error"] = str(e)
+    return info
 
 
 def _get_qnn_env() -> dict:
@@ -402,7 +557,7 @@ def _get_ort_session():
     if not os.path.exists(TAESD_ONNX):
         _ort_avail = False
         _log(f"  [TAESD] ONNX not found: {TAESD_ONNX}")
-        _log("  [TAESD] Export: python SDXL/export_taesd_to_onnx.py --validate")
+        _log("  [TAESD] Export: python SDXL/debug/export_taesd_to_onnx.py --validate")
         return None
 
     try:
@@ -782,6 +937,43 @@ def _can_use_qnn_daemon() -> bool:
     return QNN_USE_DAEMON and os.path.exists(QNN_CONTEXT_RUNNER) and os.path.exists(QNN_SYSTEM_LIB)
 
 
+def _daemon_supports_context(ctx_path: str | None) -> bool:
+    if not ctx_path:
+        return False
+    if QNN_DAEMON_CONTEXT_SCOPE == "all":
+        return True
+    if QNN_DAEMON_CONTEXT_SCOPE in ("", "none", "off", "0"):
+        return False
+
+    name = os.path.basename(ctx_path)
+    if QNN_DAEMON_CONTEXT_SCOPE == "unet":
+        return name in {
+            "unet_encoder_fp16.serialized.bin.bin",
+            "unet_decoder_fp16.serialized.bin.bin",
+        }
+
+    allowed = {part.strip() for part in QNN_DAEMON_CONTEXT_SCOPE.split(",") if part.strip()}
+    return name in allowed
+
+
+def _prewarm_qnn_daemons(ctx_paths: list[str]) -> list[threading.Thread]:
+    threads: list[threading.Thread] = []
+
+    def _start(path: str) -> None:
+        try:
+            _get_qnn_daemon(path, native=False).start()
+        except Exception as e:
+            _log(f"  [QNN daemon] prewarm failed for {os.path.basename(path)}: {e}")
+
+    for ctx_path in ctx_paths:
+        if not _daemon_supports_context(ctx_path):
+            continue
+        t = threading.Thread(target=_start, args=(ctx_path,), daemon=True)
+        t.start()
+        threads.append(t)
+    return threads
+
+
 class _QnnContextDaemon:
     def __init__(self, ctx_path: str, native: bool) -> None:
         self.ctx_path = ctx_path
@@ -834,16 +1026,24 @@ class _QnnContextDaemon:
         for fifo in (self.req_fifo, self.rsp_fifo):
             self._ensure_fifo(fifo)
 
+        runner_path = _resolve_exec_binary(QNN_CONTEXT_RUNNER)
+        backend_lib = _resolve_runtime_artifact(f"{QNN_LIB}/libQnnHtp.so", "lib")
+        system_lib = _resolve_runtime_artifact(QNN_SYSTEM_LIB, "lib")
+        daemon_config = QNN_DAEMON_CONFIG_FILE
+        effective_config = _resolve_qnn_config_path(daemon_config) if daemon_config else ""
+
         cmd = [
-            QNN_CONTEXT_RUNNER,
+            runner_path,
             "--retrieve_context", self.ctx_path,
-            "--backend", f"{QNN_LIB}/libQnnHtp.so",
-            "--system_library", QNN_SYSTEM_LIB,
+            "--backend", backend_lib,
+            "--system_library", system_lib,
             "--request_fifo", self.req_fifo,
             "--response_fifo", self.rsp_fifo,
             "--output_dir", self.bootstrap_output_dir,
             "--log_level", QNN_LOG_LEVEL,
         ]
+        if effective_config:
+            cmd.extend(["--config_file", effective_config])
         if self.native:
             cmd.append("--use_native_output_files")
         if QNN_PROFILING_LEVEL:
@@ -943,7 +1143,7 @@ atexit.register(_shutdown_qnn_daemons)
 
 def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
             native_input=False, backend=None, model_path=None, config_file=None,
-            use_mmap=None, perf_profile=None, net_run_path=None):
+            use_mmap=None, perf_profile=None, net_run_path=None, profile_tag=None):
     """Run QNN context on NPU via qnn-net-run."""
     if ctx_path is None and model_path is None:
         raise ValueError("qnn_run needs either ctx_path or model_path")
@@ -958,7 +1158,14 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
     effective_perf = perf_profile or QNN_PERF_PROFILE
     runner_path = _resolve_exec_binary(net_run_path or QNN_NET_RUN)
 
-    if ctx_path is not None and model_path is None and net_run_path is None and _is_htp_backend(backend_lib) and _can_use_qnn_daemon():
+    if (
+        ctx_path is not None
+        and model_path is None
+        and net_run_path is None
+        and _is_htp_backend(backend_lib)
+        and _can_use_qnn_daemon()
+        and _daemon_supports_context(ctx_path)
+    ):
         try:
             daemon = _get_qnn_daemon(ctx_path, native=native)
             return daemon.run(input_list_path, output_dir, timeout=120.0)
@@ -1011,9 +1218,10 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
     if QNN_STDOUT_ECHO and result.stdout and result.stdout.strip():
         _log(result.stdout.rstrip())
     if QNN_PROFILING_LEVEL:
-        prof_log = os.path.join(output_dir, "qnn-profiling-data_0.log")
-        if os.path.exists(prof_log):
-            _log(f"  [QNN profile] {prof_log}")
+        prof_info = _archive_qnn_profile(output_dir, profile_tag)
+        if prof_info is not None:
+            log_target = prof_info.get("archived_log") or prof_info.get("log_path")
+            _log(f"  [QNN profile] {log_target}")
     return elapsed
 
 
@@ -1021,8 +1229,11 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
 
 DEFAULT_NEG = "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry"
 
-def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
+def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
              stretch=True, name=None, preview=False, progressive_cfg=False):
+    if seed is None:
+        seed = random.SystemRandom().randrange(0, 2**31)
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(WORK_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(PREVIEW_PNG), exist_ok=True)
@@ -1035,6 +1246,12 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         CONTEXTS["decoder"],
         CONTEXTS["vae"],
     ])
+    daemon_prewarm_threads: list[threading.Thread] = []
+    if _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
+        daemon_prewarm_threads = _prewarm_qnn_daemons([
+            CONTEXTS["encoder"],
+            CONTEXTS["decoder"],
+        ])
 
     _log(f"Prompt: {prompt}")
     _log(f"Base:   {DR}")
@@ -1084,6 +1301,12 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     # ── 1. CLIP ──
     def run_clip(text, tag):
+        cache_t0 = time.time()
+        cached = _load_clip_cache(text)
+        if cached is not None:
+            pe, te = cached
+            return pe, te, (time.time() - cache_t0) * 1000, 0.0, True
+
         ids_l = np.array(tok_l.encode(text, 77), dtype=np.float32).reshape(1, 77)
         ids_g = np.array(tok_g.encode(text, 77), dtype=np.float32).reshape(1, 77)
 
@@ -1095,29 +1318,33 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
         _write_input_list_once(f"{cd}/il_l.txt", [f"{cd}/ids_l.raw"])
         _write_input_list_once(f"{cd}/il_g.txt", [f"{cd}/ids_g.raw"])
 
-        ms_l = qnn_run(CONTEXTS["clip_l"], f"{cd}/il_l.txt", f"{cd}/out_l")
-        ms_g = qnn_run(CONTEXTS["clip_g"], f"{cd}/il_g.txt", f"{cd}/out_g")
+        ms_l = qnn_run(CONTEXTS["clip_l"], f"{cd}/il_l.txt", f"{cd}/out_l", profile_tag=f"clip_{tag}_l")
+        ms_g = qnn_run(CONTEXTS["clip_g"], f"{cd}/il_g.txt", f"{cd}/out_g", profile_tag=f"clip_{tag}_g")
 
         cl = np.fromfile(f"{cd}/out_l/Result_0/penultimate_hidden.raw", np.float32).reshape(1, 77, 768)
         cg = np.fromfile(f"{cd}/out_g/Result_0/penultimate_hidden.raw", np.float32).reshape(1, 77, 1280)
         te = np.fromfile(f"{cd}/out_g/Result_0/text_embeds.raw", np.float32).reshape(1, 1280)
 
         pe = np.concatenate([cl, cg], axis=-1)  # [1, 77, 2048]
-        return pe, te, ms_l, ms_g
+        _save_clip_cache(text, pe, te)
+        return pe, te, ms_l, ms_g, False
 
-    pe_cond, te_cond, ms_l, ms_g = run_clip(prompt, "cond")
-    _log(f"[CLIP cond] L={ms_l:.0f}ms G={ms_g:.0f}ms")
-    ms_clip = ms_l + ms_g
     pe_uncond = None
     te_uncond = None
-
+    pe_cond, te_cond, ms_l, ms_g, clip_cond_cached = run_clip(prompt, "cond")
+    cond_suffix = " (cache)" if clip_cond_cached else ""
+    _log(f"[CLIP cond{cond_suffix}] L={ms_l:.0f}ms G={ms_g:.0f}ms")
+    ms_clip = ms_l + ms_g
     if use_cfg:
-        pe_uncond, te_uncond, ms_l2, ms_g2 = run_clip(neg_prompt, "uncond")
-        _log(f"[CLIP uncond] L={ms_l2:.0f}ms G={ms_g2:.0f}ms")
+        pe_uncond, te_uncond, ms_l2, ms_g2, clip_uncond_cached = run_clip(neg_prompt, "uncond")
+        uncond_suffix = " (cache)" if clip_uncond_cached else ""
+        _log(f"[CLIP uncond{uncond_suffix}] L={ms_l2:.0f}ms G={ms_g2:.0f}ms")
         ms_clip += ms_l2 + ms_g2
 
     for t in ctx_prime_threads:
         t.join(timeout=0.5)
+    for t in daemon_prewarm_threads:
+        t.join(timeout=15.0)
 
     if preview:
         _prepare_preview_backend()
@@ -1171,10 +1398,11 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
                 lat_in, t,
                 f"{WORK_DIR}/unet/cond",
                 f"{WORK_DIR}/unet/uncond",
+                si,
             )
             noise_pred = np_uncond + cfg_scale * (np_cond - np_uncond)
         else:
-            noise_pred, ms = _run_unet_split(lat_in, t, 0, "cond")
+            noise_pred, ms = _run_unet_split(lat_in, t, si, "cond")
 
         total_unet_ms += ms
 
@@ -1211,7 +1439,7 @@ def generate(prompt, seed=42, steps=8, cfg_scale=3.5, neg_prompt=None,
     lat_nhwc.tofile(f"{vd}/lat.raw")
     _write_input_list_once(f"{vd}/il.txt", [f"{vd}/lat.raw"])
 
-    ms_vae = qnn_run(CONTEXTS["vae"], f"{vd}/il.txt", f"{vd}/out", native=True)
+    ms_vae = qnn_run(CONTEXTS["vae"], f"{vd}/il.txt", f"{vd}/out", native=True, profile_tag="vae_final")
     _log(f"[VAE] {ms_vae:.0f}ms")
 
     raw = np.fromfile(f"{vd}/out/Result_0/image_native.raw", np.float16).astype(np.float32)
@@ -1407,6 +1635,7 @@ def _preview_step_qnn(latents: np.ndarray, plan: dict) -> float:
         config_file=TAESD_CONFIG_FILE or "",
         use_mmap=(plan["mode"] == "context"),
         net_run_path=TAESD_QNN_NET_RUN,
+        profile_tag="taesd_preview",
     )
     _save_preview_png(_read_taesd_qnn_output(out_dir))
     return ms
@@ -1500,18 +1729,18 @@ def _run_unet_split(latent_np, timestep, step_idx, tag):
     il_enc = f"{base}/il_enc.txt"
     _write_input_list_once(il_enc, enc_entries)
 
-    ms_enc = qnn_run(CONTEXTS["encoder"], il_enc, enc_out)
+    ms_enc = qnn_run(CONTEXTS["encoder"], il_enc, enc_out, profile_tag=f"unet_step{step_idx+1:02d}_{tag}_enc")
 
     dec_entries = _dec_entries_from_enc_out(base, f"{enc_out}/Result_0")
     il_dec = f"{base}/il_dec.txt"
     _write_input_list_once(il_dec, dec_entries)
 
-    ms_dec = qnn_run(CONTEXTS["decoder"], il_dec, dec_out)
+    ms_dec = qnn_run(CONTEXTS["decoder"], il_dec, dec_out, profile_tag=f"unet_step{step_idx+1:02d}_{tag}_dec")
 
     return _read_noise_pred(dec_out, 0), ms_enc + ms_dec
 
 
-def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
+def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx):
     """Optimized CFG: run cond+uncond as 2-line input_list in ONE subprocess each.
 
     Instead of 4 qnn-net-run calls, we make 2:
@@ -1542,7 +1771,7 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
     _write_multi_input_list_once(il_enc_batch, [enc_uncond, enc_cond])
 
     # Single shared output dir; Result_0 = uncond, Result_1 = cond
-    ms_enc = qnn_run(CONTEXTS["encoder"], il_enc_batch, enc_out_batch)
+    ms_enc = qnn_run(CONTEXTS["encoder"], il_enc_batch, enc_out_batch, profile_tag=f"unet_step{step_idx+1:02d}_cfg_batch_enc")
 
     # ── Batched Decoder: 2 inferences in one qnn-net-run ──
     dec_uncond = _dec_entries_from_enc_out(uncond_base, f"{enc_out_batch}/Result_0")
@@ -1552,7 +1781,7 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
     _write_multi_input_list_once(il_dec_batch, [dec_uncond, dec_cond])
 
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
-    ms_dec = qnn_run(CONTEXTS["decoder"], il_dec_batch, dec_out_batch)
+    ms_dec = qnn_run(CONTEXTS["decoder"], il_dec_batch, dec_out_batch, profile_tag=f"unet_step{step_idx+1:02d}_cfg_batch_dec")
 
     np_cond = _read_noise_pred(dec_out_batch, 1)
     np_uncond = _read_noise_pred(dec_out_batch, 0)
@@ -1565,7 +1794,8 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="SDXL Lightning — Phone NPU (standalone)")
     ap.add_argument("prompt", type=str, help="Text prompt")
-    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Random seed (omit for a fresh random seed each run)")
     ap.add_argument("--steps", type=int, default=8)
     ap.add_argument("--cfg", type=float, default=3.5,
                     help="CFG scale (1.0=off, 3.5=default for NPU quality)")

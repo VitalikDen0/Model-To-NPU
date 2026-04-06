@@ -35,7 +35,7 @@
 
 Это ветка активных исследований внутри `SDXL/`:
 
-- `convert_lightning_to_qnn.py`
+- `debug/convert_lightning_to_qnn.py`
 - `debug/run_phone_lightning.py`
 - `debug/run_full_phone_pipeline.py`
 - `debug/trace_unet_layer_parity.py`
@@ -69,10 +69,10 @@
 | `bake_lora_into_unet.py` | Навсегда мерджит SDXL-Lightning LoRA в базовый UNet. | ✅ Основной шаг |
 | `export_clip_vae_to_onnx.py` | Экспортирует CLIP-L, CLIP-G и VAE decoder в ONNX. | ✅ Основной шаг |
 | `export_sdxl_to_onnx.py` | Экспортирует UNet и связанные SDXL-компоненты в ONNX. | ✅ Основной шаг |
-| `convert_clip_vae_to_qnn.py` | Переводит CLIP/VAE ONNX-модели в QNN-артефакты. | ⚠️ Основной, но dev/layout-sensitive |
-| `convert_lightning_to_qnn.py` | Переводит Lightning UNet в QNN-модельную цепочку. | ⚠️ Основной, но экспериментальный |
-| `debug/quantize_unet.py` | Квантует UNet (W8A16 / INT8) по calibration данным. | ✅ Основной техшаг |
-| `generate.py` | Хостовый генератор/оркестратор, который помогает гонять пайплайн через ADB. | ⚠️ Полезен, но не самый простой публичный вход |
+| `debug/convert_clip_vae_to_qnn.py` | Переводит CLIP/VAE ONNX-модели в QNN-артефакты. | ⚠️ Продвинутый/debug-путь |
+| `debug/convert_lightning_to_qnn.py` | Переводит Lightning UNet в QNN-модельную цепочку. | ⚠️ Продвинутый/debug-путь |
+| `run_end_to_end.ps1` | E2E-обёртка для build/deploy/smoke-пути с управляемыми skip-флагами. | ✅ Основной orchestration helper |
+| `debug/generate.py` | Хостовый генератор/оркестратор, который помогает гонять пайплайн через ADB. | ⚠️ Опциональный debug fallback |
 
 ### Deploy / runtime
 
@@ -80,7 +80,7 @@
 | --- | --- | --- |
 | `debug/run_phone_lightning.py` | Запускает phone-side Lightning UNet ветку через ADB и QNN runtime. | ⚠️ Экспериментальный runtime |
 | `debug/run_full_phone_pipeline.py` | Гоняет CLIP + UNet + VAE на телефоне как исследовательскую full pipeline ветку. | ⚠️ Экспериментальный runtime |
-| `build_android_model_lib_windows.py` | Собирает Android `.so` из QNN model.cpp/model.bin под Windows/NDK. | ⚠️ Важный build-step, но platform-specific |
+| `debug/build_android_model_lib_windows.py` | Собирает Android `.so` из QNN model.cpp/model.bin под Windows/NDK. | ⚠️ Важный build-step, но platform-specific |
 | `debug/export_split_unet.py` | Экспортирует/подготавливает split UNet для AI Hub и phone-side use. | ⚠️ Альтернативная runtime-ветка |
 | `debug/export_and_compile_aihub.py` | Экспорт и компиляция через Qualcomm AI Hub. | ⚠️ Альтернативная облачная ветка |
 
@@ -98,12 +98,15 @@
 
 | Файл | Что делает | Статус |
 | --- | --- | --- |
-| `verify_clip_vae_onnx.py` | Сравнивает PyTorch и ONNX для CLIP-L/CLIP-G/VAE. | ✅ Полезная верификация |
-| `verify_e2e_onnx.py` | Делает end-to-end sanity-check ONNX-цепочки без phone-side runtime. | ✅ Полезная верификация |
+| `debug/verify_clip_vae_onnx.py` | Сравнивает PyTorch и ONNX для CLIP-L/CLIP-G/VAE. | ✅ Полезная верификация |
+| `debug/verify_e2e_onnx.py` | Делает end-to-end sanity-check ONNX-цепочки без phone-side runtime. | ✅ Полезная верификация |
 | `debug/verify_vae_quick.py` | Быстрая проверка VAE ONNX. | ⚠️ Локальная техпроверка |
 | `debug/compare_unet_pytorch_vs_onnx.py` | Сравнивает выходы PyTorch UNet и ONNX UNet. | ⚠️ Глубокая диагностика |
 | `debug/compare_onnx_vs_phone.py` | Сравнивает ONNX-результаты и phone-side результаты. | ⚠️ Глубокая диагностика |
 | `debug/batch_compare_onnx_vs_phone_saved_steps.py` | Сравнивает сохранённые шаги ONNX и телефона батчами. | ⚠️ Глубокая диагностика |
+| `debug/validate_phone_candidate_with_saved_steps.py` | Валидирует phone-side candidate context на сохранённых шагах и считает parity/perf. | ⚠️ Валидация кандидатов |
+| `debug/evaluate_split_unet_8w8a.py` | Оценивает split-UNet 8W8A candidate-профили по качеству/скорости. | ⚠️ Оценка кандидатов |
+| `debug/evaluate_unet_8w8a_candidate.py` | Оценивает monolithic UNet 8W8A кандидатов против рабочих baseline'ов. | ⚠️ Оценка кандидатов |
 | `debug/host_compare_unet_baselines.py` | Сравнивает несколько host-side baseline UNet цепочек. | ⚠️ Исследовательская диагностика |
 | `debug/trace_unet_layer_parity.py` | Трассирует layer-by-layer parity внутри UNet. | ⚠️ Продвинутая диагностика |
 | `debug/check_encoder_outputs.py` | Проверяет выходы split encoder против референса. | ⚠️ Внутренняя техпроверка |
@@ -118,12 +121,12 @@
 
 | Файл | Что делает | Статус |
 | --- | --- | --- |
-| `rewrite_onnx_instancenorm_to_groupnorm.py` | Переписывает `InstanceNorm` в `GroupNorm` для QNN-совместимости. | ✅ Ключевой utility |
-| `rewrite_onnx_shape_reshape_to_static.py` | Делает shape/reshape более статичными под QAIRT. | ✅ Utility |
-| `rewrite_onnx_gemm_to_matmul.py` | Переписывает `Gemm` в `MatMul` как workaround. | ✅ Utility |
-| `rewrite_onnx_extmaps_bias_inputs_to_fp16.py` | Переписывает extmaps/extbias входы в FP16 и убирает лишние Cast. | ✅ Utility |
-| `qnn_onnx_converter_expanddims_patch.py` | Monkey-patch/entrypoint для QAIRT converter с нужными фикcами. | ⚠️ Низкоуровневый workaround |
-| `assess_generated_image.py` | Даёт быструю безреференсную оценку итоговой картинки. | ✅ Полезный utility |
+| `debug/rewrite_onnx_instancenorm_to_groupnorm.py` | Переписывает `InstanceNorm` в `GroupNorm` для QNN-совместимости. | ✅ Utility (debug-ветка) |
+| `debug/rewrite_onnx_shape_reshape_to_static.py` | Делает shape/reshape более статичными под QAIRT. | ✅ Utility (debug-ветка) |
+| `debug/rewrite_onnx_gemm_to_matmul.py` | Переписывает `Gemm` в `MatMul` как workaround. | ✅ Utility (debug-ветка) |
+| `debug/rewrite_onnx_extmaps_bias_inputs_to_fp16.py` | Переписывает extmaps/extbias входы в FP16 и убирает лишние Cast. | ✅ Utility (debug-ветка) |
+| `debug/qnn_onnx_converter_expanddims_patch.py` | Monkey-patch/entrypoint для QAIRT converter с нужными фикcами. | ⚠️ Низкоуровневый workaround |
+| `debug/assess_generated_image.py` | Даёт быструю безреференсную оценку итоговой картинки. | ✅ Полезный utility |
 
 ### Experimental / alternative
 

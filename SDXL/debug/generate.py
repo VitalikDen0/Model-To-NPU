@@ -15,7 +15,9 @@ import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parent.parent
-SDXL_NPU = ROOT / "sdxl_npu"
+EXTERNAL_PLATFORM_TOOLS = ROOT.parent
+DEFAULT_SDXL_NPU = EXTERNAL_PLATFORM_TOOLS / "sdxl_npu"
+SDXL_NPU = DEFAULT_SDXL_NPU if DEFAULT_SDXL_NPU.exists() else (ROOT / "sdxl_npu")
 sys.path.insert(0, str(SDXL_NPU))
 
 from export_sdxl_to_onnx import (
@@ -26,7 +28,12 @@ from export_sdxl_to_onnx import (
 
 DIFFUSERS_DIR = SDXL_NPU / "diffusers_pipeline"
 MERGED_UNET_DIR = SDXL_NPU / "unet_lightning8step_merged"
-ADB = str(ROOT / "adb.exe")
+ADB_CANDIDATES = [
+    ROOT / "adb.exe",
+    EXTERNAL_PLATFORM_TOOLS / "adb.exe",
+    Path(r"D:\platform-tools\adb.exe"),
+]
+ADB = str(next((p for p in ADB_CANDIDATES if p.exists()), ADB_CANDIDATES[0]))
 DR = os.environ.get("SDXL_QNN_BASE", "/sdcard/Download/sdxl_qnn")
 OUTPUT_DIR = ROOT / "NPU" / "outputs"
 WORK = ROOT / "NPU" / "runtime_work_gen"
@@ -57,6 +64,19 @@ def push(local, remote):
 def pull(remote, local):
     Path(local).parent.mkdir(parents=True, exist_ok=True)
     adb("pull", remote, str(local))
+
+
+def pull_first_remote_raw(remote_result_dir: str, local_raw: Path, candidates: tuple[str, ...]) -> str:
+    listing = adb("shell", f"ls {remote_result_dir}", check=False, cap=True)
+    files = set(listing.split()) if listing else set()
+    for name in candidates:
+        if name in files:
+            pull(f"{remote_result_dir}/{name}", local_raw)
+            return name
+    raise FileNotFoundError(
+        f"No expected raw output in {remote_result_dir}. "
+        f"Expected one of: {', '.join(candidates)}. ls output: {listing!r}"
+    )
 
 
 def nhwc_f32(arr):
@@ -241,6 +261,11 @@ def generate(prompt, seed=42, steps=8, stretch=True, name=None):
 
         ro = sd / "out" / "Result_0"
         ro.mkdir(parents=True, exist_ok=True)
+        pulled_unet = pull_first_remote_raw(
+            f"{dd}/out/Result_0",
+            ro / "np.raw",
+            ("np.raw", "noise_pred.raw", "noise_pred_native.raw"),
+        )
         d = np.fromfile(str(ro / "np.raw"), np.float32)
         expected_elems = 1 * 128 * 128 * 4
         assert d.size == expected_elems, (
@@ -249,7 +274,7 @@ def generate(prompt, seed=42, steps=8, stretch=True, name=None):
 
         d = np.fromfile(str(ro / "np.raw"), np.float32)
         np_arr = np.transpose(d.reshape(1, 128, 128, 4), (0, 3, 1, 2))
-        print(f" [{np_arr.min():.2f}..{np_arr.max():.2f}]")
+        print(f" [{np_arr.min():.2f}..{np_arr.max():.2f}] ({pulled_unet})")
 
         npt = torch.from_numpy(np_arr).to(device=dev, dtype=dtype)
         latents = _scheduler.step(npt, t, latents).prev_sample
@@ -280,6 +305,11 @@ def generate(prompt, seed=42, steps=8, stretch=True, name=None):
 
     vo = vd / "out" / "Result_0"
     vo.mkdir(parents=True, exist_ok=True)
+    pulled_vae = pull_first_remote_raw(
+        f"{dv}/out/Result_0",
+        vo / "img.raw",
+        ("img.raw", "image.raw", "image_native.raw"),
+    )
     raw = np.fromfile(str(vo / "img.raw"), np.float16).astype(np.float32)
     expected_elems = 1024 * 1024 * 3
     if raw.size != expected_elems:
@@ -308,6 +338,7 @@ def generate(prompt, seed=42, steps=8, stretch=True, name=None):
     elapsed = time.time() - t_total
     print(f"\n{'='*40}")
     print(f"Saved: {out_path}")
+    print(f"VAE source raw: {pulled_vae}")
     print(f"CLIP: {ms_l+ms_g:.0f}ms | UNet: {total_unet:.0f}ms | VAE: {ms_vae:.0f}ms")
     print(f"Total: {elapsed:.1f}s")
     return str(out_path)

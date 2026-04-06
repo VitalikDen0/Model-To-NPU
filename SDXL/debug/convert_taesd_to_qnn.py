@@ -11,14 +11,14 @@ Steps:
 
 Usage:
   # First export ONNX:
-  python SDXL/export_taesd_to_onnx.py
+    python SDXL/debug/export_taesd_to_onnx.py
 
   # Then convert to QNN:
-  python SDXL/convert_taesd_to_qnn.py
-  python SDXL/convert_taesd_to_qnn.py --step 1   # converter only
-  python SDXL/convert_taesd_to_qnn.py --step 2   # model-lib only
-    python SDXL/convert_taesd_to_qnn.py --backend gpu
-    python SDXL/convert_taesd_to_qnn.py --step 3   # show phone ctxgen command
+    python SDXL/debug/convert_taesd_to_qnn.py
+    python SDXL/debug/convert_taesd_to_qnn.py --step 1   # converter only
+    python SDXL/debug/convert_taesd_to_qnn.py --step 2   # model-lib only
+    python SDXL/debug/convert_taesd_to_qnn.py --backend gpu
+    python SDXL/debug/convert_taesd_to_qnn.py --step 3   # show phone ctxgen command
 """
 
 import argparse
@@ -27,6 +27,8 @@ import subprocess
 import sys
 import shutil
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 ROOT       = Path(r"D:\platform-tools")
 SDXL_NPU   = ROOT / "sdxl_npu"
@@ -67,7 +69,7 @@ def step1_convert(onnx_path: Path, out_dir: Path):
 
     if not onnx_path.exists():
         print(f"ERROR: ONNX not found: {onnx_path}")
-        print("Run: python SDXL/export_taesd_to_onnx.py first")
+        print("Run: python SDXL/debug/export_taesd_to_onnx.py first")
         sys.exit(1)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,7 @@ def step1_convert(onnx_path: Path, out_dir: Path):
 
     # Use the existing repo-side QAIRT patch entrypoint so modern onnx versions
     # keep working with QAIRT 2.31's older converter expectations.
-    patch_script = ROOT / "sdxl_npu" / "qnn_onnx_converter_expanddims_patch.py"
+    patch_script = SCRIPT_DIR / "qnn_onnx_converter_expanddims_patch.py"
     cmd = [
         sys.executable,
         str(patch_script),
@@ -138,7 +140,7 @@ def step2_build_lib(qnn_model_dir: Path, lib_out: Path):
 
     cmd = [
         sys.executable,
-        str(ROOT / "GitHub" / "SDXL" / "build_android_model_lib_windows.py"),
+        str(SCRIPT_DIR / "build_android_model_lib_windows.py"),
         "--sdk-root", str(QNN_SDK),
         "--model-cpp", str(cpp_path),
         "--model-bin", str(model_bin),

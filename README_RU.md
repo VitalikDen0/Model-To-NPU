@@ -3,8 +3,7 @@
 **Языки:** [English](README_EN.md) | [Русский](README_RU.md)
 
 > [!WARNING]
-> Репозиторий сейчас проходит повторную end-to-end проверку.
-> Структура и команды ниже отражают последнее известное рабочее состояние, но полный прогон «с чистого ПК до финальной генерации на телефоне» ещё перепроверяется.
+> Некоторые ветки всё ещё помечены как beta/experimental, но практический полный цикл SDXL-Lightning был повторно подтверждён **2026-04-06**: от checkpoint-сборки до финального изображения с телефона.
 
 <p align="center">
   <b>Репозиторий для model-to-NPU pipeline'ов на Qualcomm Snapdragon</b><br>
@@ -35,8 +34,35 @@
 - **Направление репозитория:** multi-model pipeline'ы под Snapdragon NPU
 - **Сейчас реализованная семья:** `SDXL/`
 - **Текущая цель APK:** SDXL
-- **Статус скриптов:** повторная проверка полной воспроизводимости
+- **Статус скриптов:** практический SDXL цикл (checkpoint -> image) повторно подтверждён на текущей структуре
 - **Статус документации:** обновлена под текущую известную структуру
+
+## Последний подтверждённый полный цикл (2026-04-06)
+
+Проверенный путь в этой сессии:
+
+1. Сборка ранних артефактов на ПК из checkpoint (`.safetensors`).
+2. Использование phone runtime в `/data/local/tmp/sdxl_qnn`.
+3. Нативная генерация на телефоне через задеплоенный `phone_gen/generate.py` (Termux Python через ADB/root shell).
+4. Визуальная проверка итогового PNG (изображение не мусорное).
+
+Использованный checkpoint:
+
+- `J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors`
+
+Ключевые собранные артефакты на хосте:
+
+- `build/sdxl_work_wai160_20260406/diffusers_pipeline/`
+- `build/sdxl_work_wai160_20260406/unet_lightning_merged/`
+- `build/sdxl_work_wai160_20260406/onnx_clip_vae/`
+- `build/sdxl_work_wai160_20260406/onnx_unet/unet.onnx` + `unet.onnx.data`
+
+Подтверждённый финальный результат:
+
+- `NPU/outputs/wai160_phone_native_cfg35_20260406.png`
+- prompt: `orange cat on wooden chair, detailed fur, soft cinematic light, high quality`
+- seed: `777`, steps: `8`, `CFG=3.5`, `--prog-cfg`
+- замер в этом прогоне: `UNet ~55.98 s`, `VAE ~3.14 s`, total `~62.0 s`
 
 Для живого примера того, как сейчас выглядит SDXL-папка на телефоне после деплоя, см. [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
 Также добавлен небольшой rooted-набор артефактов в [`examples/rooted-phone-sample/`](examples/rooted-phone-sample/) — как справочный и учебный пример.
@@ -48,6 +74,8 @@
 Для свежего разбора runtime-overhead, эффекта `mmap` и контрольных цифр после `0.1.3` см. [`SDXL/UNET_OVERHEAD_REVIEW.md`](SDXL/UNET_OVERHEAD_REVIEW.md) и [`SDXL/UNET_OVERHEAD_REVIEW_RU.md`](SDXL/UNET_OVERHEAD_REVIEW_RU.md).
 
 Для карты всех текущих скриптов в `SDXL/` см. [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) и [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
+
+Для единого практического runbook (все реально использованные файлы и команды) см. [`SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md`](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md).
 
 ## Требования для текущего SDXL pipeline
 
@@ -133,10 +161,20 @@ python scripts/build_all.py --checkpoint path/to/model.safetensors
 Также добавлен аккуратный beta-wrapper для текущего документированного пути:
 
 ```powershell
-pwsh SDXL/run_end_to_end.ps1 -Checkpoint path/to/model.safetensors -ContextsDir path/to/context_binaries
+pwsh SDXL/run_end_to_end.ps1 -ContextsDir path/to/context_binaries
 ```
 
+Если `-Checkpoint` не указан, скрипт теперь запрашивает путь интерактивно и по умолчанию подставляет:
+
+- `J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors`
+
 Он специально разделяет воспроизводимые ранние шаги сборки и ещё beta/runtime/deploy-часть.
+
+Для build-only валидации (когда телефон отключён или deploy откладывается):
+
+```powershell
+pwsh SDXL/run_end_to_end.ps1 -OutputRoot build/sdxl_work_custom -SkipDeploy -SkipSmokeTest
+```
 
 Или пошагово:
 
@@ -154,24 +192,24 @@ python SDXL/export_clip_vae_to_onnx.py
 python SDXL/export_sdxl_to_onnx.py
 
 # 5. Конвертировать в QNN
-python SDXL/convert_clip_vae_to_qnn.py
-python SDXL/convert_lightning_to_qnn.py
+python SDXL/debug/convert_clip_vae_to_qnn.py
+python SDXL/debug/convert_lightning_to_qnn.py
 
 # 6. Собрать Android model libraries (.so)
-python SDXL/build_android_model_lib_windows.py
+python SDXL/debug/build_android_model_lib_windows.py
 ```
 
 Дополнительный путь для live preview в APK / phone runtime:
 
 ```bash
 # Экспорт tiny TAESD XL preview decoder
-python SDXL/export_taesd_to_onnx.py --validate
+python SDXL/debug/export_taesd_to_onnx.py --validate
 
 # Деплой одного ONNX-файла в phone runtime
 adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
 
 # Опционально: собрать и задеплоить TAESD QNN preview assets (предпочтительный путь)
-python SDXL/convert_taesd_to_qnn.py --backend gpu
+python SDXL/debug/convert_taesd_to_qnn.py --backend gpu
 
 # Опционально только как fallback (если нужен CPU ONNX preview в Termux / APK)
 python -m pip install onnxruntime
@@ -230,11 +268,31 @@ APK даёт полноценный GUI: промпт, негативный пр
 В `v0.2.3` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config, временные runtime-файлы пишутся в app-private cache вместо общей папки, APK корректно парсит preview-тайминги вида `QNN GPU ...ms`, а документация уже описывает rebuilt QNN TAESD preview path на GPU с реальным временем порядка **1.0 s** на шаг.
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
-#### Host-side (с ПК через ADB)
+#### Host-side (с ПК через ADB, опциональный debug-путь)
 
 ```bash
-python SDXL/generate.py "cat on windowsill, masterpiece" --seed 42
+python SDXL/debug/generate.py "cat on windowsill, masterpiece" --seed 42
 ```
+
+Если runtime на телефоне расположен в `/data/local/tmp/sdxl_qnn` (rooted layout), явно задайте базовый путь:
+
+```powershell
+$env:SDXL_QNN_BASE='/data/local/tmp/sdxl_qnn'
+python SDXL/debug/generate.py "orange cat on wooden chair, detailed fur" --seed 777 --steps 8 --name wai160_e2e_phonecheck_20260406
+```
+
+Этот host-side путь полезен как fallback/debug-сценарий, если в Termux на телефоне временно недоступен `python3`, но ADB и QNN runtime-файлы на месте.
+
+## Чеклист полного круга (checkpoint -> итоговый PNG)
+
+- Подготовить ПК-окружение (`Python 3.10`, нужные pip-пакеты, QAIRT, ADB).
+- Собрать ранние SDXL-стадии из checkpoint через `scripts/build_all.py` или `SDXL/run_end_to_end.ps1 -SkipDeploy -SkipSmokeTest`.
+- Убедиться, что на телефоне есть runtime-дерево с `context/`, `bin/`, `lib/`, `model/`, `phone_gen/`.
+- Сгенерировать изображение:
+  - standalone Termux (`phone_gen/generate.py`), если на телефоне доступен `python3`.
+  - опционально как debug-fallback: host-side `SDXL/debug/generate.py` через ADB с корректным `SDXL_QNN_BASE`.
+- Проверить качество результата визуально (или через утилиты из `SDXL/debug/`).
+- Только после подтверждения качества переходить к экспериментальным шагам из `SDXL/debug/`.
 
 ## Что реально лежит на телефоне сейчас?
 
@@ -269,19 +327,19 @@ python SDXL/generate.py "cat on windowsill, masterpiece" --seed 42
 │   ├── download_adb.py
 │   └── build_all.py          ← ранний SDXL helper (поздние шаги перепроверяются)
 ├── SDXL/                     ← текущие SDXL-специфичные скрипты конвертации и сборки
-│   ├── generate.py           ← host-side генератор (с ПК)
 │   ├── bake_lora_into_unet.py
 │   ├── export_clip_vae_to_onnx.py
 │   ├── export_sdxl_to_onnx.py
-│   ├── convert_clip_vae_to_qnn.py
-│   ├── convert_lightning_to_qnn.py
-│   ├── export_taesd_to_onnx.py
-│   ├── convert_taesd_to_qnn.py
-│   ├── build_android_model_lib_windows.py
-│   ├── assess_generated_image.py
-│   ├── verify_clip_vae_onnx.py
-│   ├── verify_e2e_onnx.py
-│   ├── debug/               ← сюда перенесены лабораторные/диагностические/экспериментальные скрипты
+│   ├── debug/               ← лабораторные/диагностические/экспериментальные скрипты
+│   │   ├── assess_generated_image.py
+│   │   ├── verify_clip_vae_onnx.py
+│   │   ├── verify_e2e_onnx.py
+│   │   ├── generate.py
+│   │   ├── convert_clip_vae_to_qnn.py
+│   │   ├── convert_lightning_to_qnn.py
+│   │   ├── export_taesd_to_onnx.py
+│   │   ├── convert_taesd_to_qnn.py
+│   │   └── build_android_model_lib_windows.py
 │   ├── LESSONS_LEARNED.md    ← подводные камни и решения
 │   └── LESSONS_LEARNED_RU.md ← русская версия lessons learned
 └── APK/                      ← Android-приложение

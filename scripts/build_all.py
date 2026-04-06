@@ -12,7 +12,8 @@ end-to-end and are therefore documented in README instead of being launched
 blindly from here.
 
 Usage:
-  python scripts/build_all.py --checkpoint path/to/model.safetensors
+    python scripts/build_all.py
+    python scripts/build_all.py --checkpoint path/to/model.safetensors
   python scripts/build_all.py --help
 """
 import argparse
@@ -24,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SDXL_DIR = ROOT / "SDXL"
+DEFAULT_CHECKPOINT = Path(r"J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors")
 
 
 def run(cmd, cwd=None):
@@ -31,6 +33,24 @@ def run(cmd, cwd=None):
     print(f"[RUN] {' '.join(str(c) for c in cmd)}")
     print(f"{'='*60}")
     subprocess.check_call([str(c) for c in cmd], cwd=str(cwd or ROOT))
+
+
+def resolve_checkpoint_arg(raw_checkpoint: str | None) -> Path:
+    """Resolve checkpoint path from argument or interactive prompt."""
+    if raw_checkpoint:
+        checkpoint = Path(raw_checkpoint).expanduser()
+    else:
+        if not (sys.stdin and sys.stdin.isatty()):
+            print("ERROR: --checkpoint is required in non-interactive mode.")
+            sys.exit(2)
+        entered = input(f"Path to SDXL checkpoint (.safetensors) [{DEFAULT_CHECKPOINT}]: ").strip()
+        checkpoint = Path(entered) if entered else DEFAULT_CHECKPOINT
+        checkpoint = checkpoint.expanduser()
+
+    try:
+        return checkpoint.resolve()
+    except OSError:
+        return checkpoint.absolute()
 
 
 def ensure_tmp_lightning_pipeline(diffusers_dir: Path, merged_dir: Path, tmp_pipeline: Path):
@@ -119,7 +139,13 @@ def check_prereqs():
 
 def main():
     ap = argparse.ArgumentParser(description="Build current SDXL-on-NPU stages")
-    ap.add_argument("--checkpoint", type=str, required=True, help="Path to SDXL .safetensors checkpoint")
+    ap.add_argument(
+        "--checkpoint",
+        type=str,
+        required=False,
+        default=None,
+        help="Path to SDXL .safetensors checkpoint (if omitted, script asks interactively)",
+    )
     ap.add_argument(
         "--lightning-lora",
         type=str,
@@ -133,7 +159,7 @@ def main():
 
     check_prereqs()
 
-    checkpoint = Path(args.checkpoint).resolve()
+    checkpoint = resolve_checkpoint_arg(args.checkpoint)
     if not checkpoint.exists():
         print(f"ERROR: Checkpoint not found: {checkpoint}")
         sys.exit(1)
@@ -228,7 +254,7 @@ def main():
     print("=" * 60)
     print(f"\nArtifacts in: {out}")
     print("\nGenerate images:")
-    print('  python SDXL/generate.py "your prompt here"')
+    print('  python phone_generate.py "your prompt here"')
     print("\nNote: QNN conversion and deploy steps remain documented in README while they are being re-tested.")
 
 

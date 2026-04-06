@@ -29,9 +29,9 @@ Architecture (inferred from safetensors keys):
   [19] Conv2d(64→3, 3×3)           @ 1024×1024
 
 Usage:
-  python SDXL/export_taesd_to_onnx.py
-  python SDXL/export_taesd_to_onnx.py --weights J:/path/to/taesdxl_decoder.safetensors
-  python SDXL/export_taesd_to_onnx.py --validate  # test on random input
+    python SDXL/debug/export_taesd_to_onnx.py
+    python SDXL/debug/export_taesd_to_onnx.py --weights J:/path/to/taesdxl_decoder.safetensors
+    python SDXL/debug/export_taesd_to_onnx.py --validate  # test on random input
 """
 
 import sys
@@ -244,7 +244,7 @@ def main():
     if a.validate:
         validate_vs_comfyui(model, a.weights)
 
-    print(f"\nDone! Next: python SDXL/convert_taesd_to_qnn.py --onnx {onnx_path}")
+    print(f"\nDone! Next: python SDXL/debug/convert_taesd_to_qnn.py --onnx {onnx_path}")
 
 
 if __name__ == "__main__":
