@@ -63,7 +63,10 @@ Validated final image:
 - `NPU/outputs/wai160_phone_native_cfg35_20260406.png`
 - prompt: `orange cat on wooden chair, detailed fur, soft cinematic light, high quality`
 - seed: `777`, steps: `8`, `CFG=3.5`, `--prog-cfg`
-- measured stage times in that run: `UNet ~55.98 s`, `VAE ~3.14 s`, total `~62.0 s`
+- measured stage times in that run: `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, total `62.0 s`
+- UNet step progression in that precise run:
+  - CFG steps 1..4: `9.765 -> 8.230 -> 8.386 -> 7.936 s`
+  - no-guidance steps 5..8: `5.377 -> 5.513 -> 5.294 -> 5.479 s`
 
 For a live example of what a deployed phone-side SDXL directory currently looks like, see [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
 There is also a small rooted artifact bundle under [`examples/rooted-phone-sample/`](examples/rooted-phone-sample/) for reference and educational exploration.
@@ -126,11 +129,17 @@ Fresh `v0.2.0` tuned runs with **live thermal logging**, default `sustained_high
 - run 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
 - run 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
 
-Fresh `v0.2.3` reuse-tuned runs pushed the current README-visible marker to **78.0 s total** and made the early UNet curve behave more like a descending warm path instead of a flat ~12 s guided plateau:
+Fresh `v0.2.3` measurements now have two practical markers:
 
-- first four guided steps on the fast CFG path: about **12.2 → 10.4 → 9.9 → 9.8 s**;
-- first four `CFG=1.0` steps on the no-guidance path: about **7.4 → 7.4 → 6.2 → 6.5 s** (allowing normal run-to-run jitter);
-- TAESD live preview now prefers rebuilt **QNN GPU** assets and is currently around **1.0 s/step**, versus the older **5.5–6.0 s** CPU-side ONNX preview path.
+- **README-visible APK marker (Live Preview ON):** about **78.0 s total**;
+- **latest precise runtime run (Live Preview OFF, same `v0.2.3` path):** **62.0 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
+
+UNet step progression in that precise run:
+
+- CFG steps 1..4: **9.765 → 8.230 → 8.386 → 7.936 s**;
+- no-guidance steps 5..8: **5.377 → 5.513 → 5.294 → 5.479 s**.
+
+TAESD live preview still prefers rebuilt **QNN GPU** assets and is currently around **1.0 s/step**; this preview/UI overhead is the main reason APK screenshot-visible totals are higher than no-preview runtime totals.
 
 In those warmed-up full runs, the practical thermal envelope stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes observed up to about **78°C**. An early one-line CPU spike to `88.8°C` appeared before the first run stabilized and looks more like a transient sensor jump than the sustained generation state.
 
@@ -268,6 +277,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
 APK `v0.2.3` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and now documents the rebuilt QNN TAESD preview path that runs on GPU at roughly **1.0 s** per step.
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
+
+Performance note: speed-critical runtime changes often land in `phone_generate.py` (deployed as `phone_gen/generate.py`), so the APK version may stay the same while generation gets faster after updating only that runtime script.
 
 #### Host-side (from PC via ADB, optional debug path)
 

@@ -111,7 +111,8 @@ The later reuse-tuned phone runtime finally changed the *shape* of the first-ste
 
 - the first four guided UNet steps on the current fast CFG path now descend roughly as **12.2 → 10.4 → 9.9 → 9.8 s**;
 - the first four `CFG=1.0` steps on the no-guidance path sit roughly around **7.4 → 7.4 → 6.2 → 6.5 s** with normal run-to-run jitter;
-- the practical README-visible marker moved to **78.0 s total** once those reuse gains were combined with the rest of the tuned path.
+- the practical README-visible APK marker is **78.0 s total** (Live Preview ON);
+- a later precise runtime run on the same `v0.2.3` path (Live Preview OFF, updated `phone_generate.py`) reached **62.0 s total** with `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
 
 That means the runtime is no longer stuck in the older “flat ~12 s guided plateau for the early steps” behavior. There is now clear warm-path decay even before the run reaches the cheaper tail steps.
 

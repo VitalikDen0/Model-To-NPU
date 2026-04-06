@@ -27,6 +27,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - **2026-04-06:** practical SDXL full loop was re-validated from checkpoint build to final phone-generated PNG.
 - Checkpoint used: `waiIllustriousSDXL_v160.safetensors`.
 - Final validated output: `NPU/outputs/wai160_phone_native_cfg35_20260406.png`.
+- Latest precise runtime timing (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF): `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, **`62.0 s total`**.
 - Updated full walkthroughs are documented in:
   - [`README_EN.md`](README_EN.md)
   - [`README_RU.md`](README_RU.md)
@@ -49,7 +50,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 ## Changelog
 
-- **0.2.3** — APK/runtime/docs were refreshed around the new fast path: the split-UNet reuse pass now makes the early guided steps decay instead of hovering near a flat ~12 s plateau, the README-visible run moved to **78.0 s total**, TAESD live preview now runs through rebuilt QNN GPU assets at roughly **1.0 s** per step instead of the older 5.5–6.0 s CPU path, and the deploy/docs flow was updated so these preview artifacts are described more accurately.
+- **0.2.3** — APK/runtime/docs were refreshed around the new fast path: the split-UNet reuse pass now makes the early guided steps decay instead of hovering near a flat ~12 s plateau; the README-visible APK marker is **78.0 s total** (Live Preview ON), while the latest precise runtime-only run reached **62.0 s total** (`CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`) with Live Preview OFF on the same `v0.2.3` path; TAESD live preview now runs through rebuilt QNN GPU assets at roughly **1.0 s** per step instead of the older 5.5–6.0 s CPU path.
 - **0.2.2** — APK/runtime snapshot refreshed for the current validation cycle: TAESD preview wiring was repaired for the QNN path, APK preview timing parsing now handles `QNN GPU` preview lines again, and the deploy/docs/sample notes were synchronized around the current phone runtime layout while early CFG-step tuning remains under active investigation.
 - **0.2.1** — APK now routes transient runtime files (`WORK_DIR`, generated PNGs, and live preview frames) through app-private cache directories instead of shared storage, while keeping the deployed model tree in the public phone path.
 - **0.2.0** — phone runtime and APK now show live **CPU / GPU / NPU** temperatures, default to QNN `sustained_high_performance`, auto-enable HTP backend extensions when `libQnnHtpNetRunExtensions.so` is deployed, and the current full `8`-step progressive-CFG best path reached about **79.7–80.6s total** on OnePlus 13.
@@ -100,22 +101,37 @@ All gallery samples and the currently documented phone-side examples are **1024�
       <img src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" alt="Phone-side proof screenshot for v0.2.0 at 100.8 seconds" width="100%">
     </td>
     <td width="33%" align="center">
-      <b>v0.2.3 current run — 78.0s total</b><br>
+      <b>v0.2.3 screenshot (Live Preview ON) — 78.0s total</b><br>
       <img src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" alt="Phone-side proof screenshot for v0.2.3 at 78.0 seconds" width="100%">
     </td>
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
 
-Compared with the earlier public on-device screenshot and the later `v0.2.0` README marker, the current `v0.2.3` screenshot shows:
+Compared with the earlier public on-device screenshots and the latest precise `v0.2.3` runtime run:
 
-- **273.6s → 78.0s total**;
-- **100.8s → 78.0s total**;
-- **195.6s faster** than the earliest public marker;
-- **22.8s faster** than the `v0.2.0` README marker;
-- about **71.5% faster** vs `273.6s`, and about **22.6% faster** vs `100.8s`.
+- **273.6s → 78.0s total** (README-visible APK screenshot marker, Live Preview ON);
+- **273.6s → 62.0s total** (latest precise runtime run, Live Preview OFF);
+- **100.8s → 62.0s total**;
+- **78.0s → 62.0s total** on the same `v0.2.3` generation path when running without live-preview overhead.
 
-This `v0.2.3` screenshot is the new README-visible progress marker for the shared public runtime path.
+That corresponds to:
+
+- **211.6s faster** vs `273.6s` (~**77.3%**);
+- **38.8s faster** vs `100.8s` (~**38.5%**);
+- **16.0s faster** vs the `78.0s` screenshot marker (~**20.5%**).
+
+In short: **78.0s** remains a valid README-visible APK marker with Live Preview ON, while **62.0s** is the latest precise runtime timing for the same `v0.2.3` path with Live Preview OFF.
+
+## Runtime updates vs APK version
+
+Performance-sensitive changes in this project often land in `phone_generate.py` (deployed to the phone as `phone_gen/generate.py`), not only in the APK UI layer.
+
+That means:
+
+- the APK version may stay the same while runtime speed still improves;
+- updating only `phone_generate.py` can make the same APK build run faster;
+- APK rebuild/reinstall is not always required when only runtime generation logic changes.
 
 ## Why CFG is much slower here
 
