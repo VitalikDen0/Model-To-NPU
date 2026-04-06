@@ -5,8 +5,8 @@
 Основание:
 
 - `SDXL/export_sdxl_to_onnx.py`
-- `SDXL/export_split_unet.py`
-- `SDXL/quantize_unet.py`
+- `SDXL/debug/export_split_unet.py`
+- `SDXL/debug/quantize_unet.py`
 - `SDXL/LESSONS_LEARNED_RU.md`
 
 ## 1. Какая UNet здесь на самом деле
@@ -68,7 +68,7 @@ Encoder отдаёт наружу:
 
 ## 3. Что уже считается чувствительным в самом репозитории
 
-`SDXL/quantize_unet.py` уже исключает из грубого квантования следующие узлы:
+`SDXL/debug/quantize_unet.py` уже исключает из грубого квантования следующие узлы:
 
 - `conv_in`
 - `conv_out`
@@ -164,7 +164,7 @@ Encoder отдаёт наружу:
 
 Сам репозиторий уже смотрит именно в эту сторону:
 
-- `quantize_unet.py` по умолчанию использует `per_channel=True`
+- `debug/quantize_unet.py` по умолчанию использует `per_channel=True`
 - `WeightSymmetric=True`
 - базовый calibration method = `percentile`
 

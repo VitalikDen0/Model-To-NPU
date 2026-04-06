@@ -70,8 +70,8 @@ Split здесь не является случайным дизайнерски
 - rooted sample runtime зеркалит то же поведение;
 - APK-path запуска теперь явно экспортирует `SDXL_QNN_USE_MMAP=1`;
 - в репозиторий добавлены нормальные debug-утилиты:
-  - `SDXL/sdxl_speed_probe.py`
-  - `SDXL/sdxl_unet_overhead_probe.py`
+  - `SDXL/debug/sdxl_speed_probe.py`
+  - `SDXL/debug/sdxl_unet_overhead_probe.py`
 
 При желании дефолт можно отключить для проверки:
 

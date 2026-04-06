@@ -70,8 +70,8 @@ Release `0.1.3` applies the first cheap runtime win everywhere it matters:
 - the rooted sample runtime mirrors the same default;
 - the APK launch path explicitly exports `SDXL_QNN_USE_MMAP=1`;
 - repo-visible debug tools were added:
-  - `SDXL/sdxl_speed_probe.py`
-  - `SDXL/sdxl_unet_overhead_probe.py`
+  - `SDXL/debug/sdxl_speed_probe.py`
+  - `SDXL/debug/sdxl_unet_overhead_probe.py`
 
 You can still disable the default for testing:
 

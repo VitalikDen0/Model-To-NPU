@@ -5,6 +5,8 @@
 > [!IMPORTANT]
 > В папке `SDXL/` сейчас лежат **не только файлы happy-path**, но и диагностика, проверка численной близости, калибровка, QAIRT/QNN workaround'ы и экспериментальные ветки.
 > Это нормально для живого R&D-репозитория.
+> [!NOTE]
+> После cleanup-реорганизации лабораторные/диагностические/экспериментальные скрипты перенесены в `SDXL/debug/`, а в корне `SDXL/` оставлен самый короткий практический public path.
 
 ## Как читать эту карту
 
@@ -34,11 +36,11 @@
 Это ветка активных исследований внутри `SDXL/`:
 
 - `convert_lightning_to_qnn.py`
-- `run_phone_lightning.py`
-- `run_full_phone_pipeline.py`
-- `trace_unet_layer_parity.py`
-- `compare_*`
-- `generate_*_references.py`
+- `debug/run_phone_lightning.py`
+- `debug/run_full_phone_pipeline.py`
+- `debug/trace_unet_layer_parity.py`
+- `debug/compare_*`
+- `debug/generate_*_references.py`
 - shell-скрипты для `ctxgen`
 
 Она важна, но **не является самым коротким публичным маршрутом** для первого знакомства с проектом.
@@ -69,28 +71,28 @@
 | `export_sdxl_to_onnx.py` | Экспортирует UNet и связанные SDXL-компоненты в ONNX. | ✅ Основной шаг |
 | `convert_clip_vae_to_qnn.py` | Переводит CLIP/VAE ONNX-модели в QNN-артефакты. | ⚠️ Основной, но dev/layout-sensitive |
 | `convert_lightning_to_qnn.py` | Переводит Lightning UNet в QNN-модельную цепочку. | ⚠️ Основной, но экспериментальный |
-| `quantize_unet.py` | Квантует UNet (W8A16 / INT8) по calibration данным. | ✅ Основной техшаг |
+| `debug/quantize_unet.py` | Квантует UNet (W8A16 / INT8) по calibration данным. | ✅ Основной техшаг |
 | `generate.py` | Хостовый генератор/оркестратор, который помогает гонять пайплайн через ADB. | ⚠️ Полезен, но не самый простой публичный вход |
 
 ### Deploy / runtime
 
 | Файл | Что делает | Статус |
 | --- | --- | --- |
-| `run_phone_lightning.py` | Запускает phone-side Lightning UNet ветку через ADB и QNN runtime. | ⚠️ Экспериментальный runtime |
-| `run_full_phone_pipeline.py` | Гоняет CLIP + UNet + VAE на телефоне как исследовательскую full pipeline ветку. | ⚠️ Экспериментальный runtime |
+| `debug/run_phone_lightning.py` | Запускает phone-side Lightning UNet ветку через ADB и QNN runtime. | ⚠️ Экспериментальный runtime |
+| `debug/run_full_phone_pipeline.py` | Гоняет CLIP + UNet + VAE на телефоне как исследовательскую full pipeline ветку. | ⚠️ Экспериментальный runtime |
 | `build_android_model_lib_windows.py` | Собирает Android `.so` из QNN model.cpp/model.bin под Windows/NDK. | ⚠️ Важный build-step, но platform-specific |
-| `export_split_unet.py` | Экспортирует/подготавливает split UNet для AI Hub и phone-side use. | ⚠️ Альтернативная runtime-ветка |
-| `export_and_compile_aihub.py` | Экспорт и компиляция через Qualcomm AI Hub. | ⚠️ Альтернативная облачная ветка |
+| `debug/export_split_unet.py` | Экспортирует/подготавливает split UNet для AI Hub и phone-side use. | ⚠️ Альтернативная runtime-ветка |
+| `debug/export_and_compile_aihub.py` | Экспорт и компиляция через Qualcomm AI Hub. | ⚠️ Альтернативная облачная ветка |
 
 ### Calibration / data prep
 
 | Файл | Что делает | Статус |
 | --- | --- | --- |
-| `generate_calibration_prompts.py` | Генерирует набор промптов для calibration. | ✅ Вспомогательный, но полезный |
-| `make_calibration_data.py` | Делает calibration `.npz` из промптов и диффузионных входов. | ✅ Полезный |
-| `make_lightning_calibration.py` | Делает calibration для Lightning с правильным `init_noise_sigma`. | ⚠️ Важный, но ближе к dev-пайплайну |
-| `make_qnn_input_list_from_npz.py` | Превращает `.npz` calibration в `input_list.txt` и `.raw` файлы для QNN. | ✅ Полезный |
-| `make_qnn_extbias_input_list_from_npz.py` | Строит расширенный input-list для extbias/extmaps сценариев. | ⚠️ Специализированный |
+| `debug/generate_calibration_prompts.py` | Генерирует набор промптов для calibration. | ✅ Вспомогательный, но полезный |
+| `debug/make_calibration_data.py` | Делает calibration `.npz` из промптов и диффузионных входов. | ✅ Полезный |
+| `debug/make_lightning_calibration.py` | Делает calibration для Lightning с правильным `init_noise_sigma`. | ⚠️ Важный, но ближе к dev-пайплайну |
+| `debug/make_qnn_input_list_from_npz.py` | Превращает `.npz` calibration в `input_list.txt` и `.raw` файлы для QNN. | ✅ Полезный |
+| `debug/make_qnn_extbias_input_list_from_npz.py` | Строит расширенный input-list для extbias/extmaps сценариев. | ⚠️ Специализированный |
 
 ### Verification / debug / parity
 
@@ -98,19 +100,19 @@
 | --- | --- | --- |
 | `verify_clip_vae_onnx.py` | Сравнивает PyTorch и ONNX для CLIP-L/CLIP-G/VAE. | ✅ Полезная верификация |
 | `verify_e2e_onnx.py` | Делает end-to-end sanity-check ONNX-цепочки без phone-side runtime. | ✅ Полезная верификация |
-| `verify_vae_quick.py` | Быстрая проверка VAE ONNX. | ⚠️ Локальная техпроверка |
-| `compare_unet_pytorch_vs_onnx.py` | Сравнивает выходы PyTorch UNet и ONNX UNet. | ⚠️ Глубокая диагностика |
-| `compare_onnx_vs_phone.py` | Сравнивает ONNX-результаты и phone-side результаты. | ⚠️ Глубокая диагностика |
-| `batch_compare_onnx_vs_phone_saved_steps.py` | Сравнивает сохранённые шаги ONNX и телефона батчами. | ⚠️ Глубокая диагностика |
-| `host_compare_unet_baselines.py` | Сравнивает несколько host-side baseline UNet цепочек. | ⚠️ Исследовательская диагностика |
-| `trace_unet_layer_parity.py` | Трассирует layer-by-layer parity внутри UNet. | ⚠️ Продвинутая диагностика |
-| `check_encoder_outputs.py` | Проверяет выходы split encoder против референса. | ⚠️ Внутренняя техпроверка |
-| `generate_host_references.py` | Генерирует host-side reference данные для пошагового сравнения. | ⚠️ Исследовательский helper |
-| `generate_pc_reference.py` | Делает PC/GPU reference generation для контрольных сравнений. | ⚠️ Исследовательский helper |
-| `generate_embed_cfg_references.py` | Строит reference для embedding-space CFG сценариев. | ⚠️ Исследовательский helper |
-| `measure_ram.py` | Меряет расход памяти в runtime/phone-side сценариях. | ⚠️ Диагностический helper |
-| `sdxl_speed_probe.py` | Гоняет end-to-end замеры скорости на телефоне (и при желании добавляет PC baseline) для текущего runtime-path. | ✅ Runtime diagnostic |
-| `sdxl_unet_overhead_probe.py` | Разбирает overhead split-UNet через `qnn-profile-viewer`, включая `mmap`, batched CFG и repeat-в-одном-процессе. | ✅ Runtime diagnostic |
+| `debug/verify_vae_quick.py` | Быстрая проверка VAE ONNX. | ⚠️ Локальная техпроверка |
+| `debug/compare_unet_pytorch_vs_onnx.py` | Сравнивает выходы PyTorch UNet и ONNX UNet. | ⚠️ Глубокая диагностика |
+| `debug/compare_onnx_vs_phone.py` | Сравнивает ONNX-результаты и phone-side результаты. | ⚠️ Глубокая диагностика |
+| `debug/batch_compare_onnx_vs_phone_saved_steps.py` | Сравнивает сохранённые шаги ONNX и телефона батчами. | ⚠️ Глубокая диагностика |
+| `debug/host_compare_unet_baselines.py` | Сравнивает несколько host-side baseline UNet цепочек. | ⚠️ Исследовательская диагностика |
+| `debug/trace_unet_layer_parity.py` | Трассирует layer-by-layer parity внутри UNet. | ⚠️ Продвинутая диагностика |
+| `debug/check_encoder_outputs.py` | Проверяет выходы split encoder против референса. | ⚠️ Внутренняя техпроверка |
+| `debug/generate_host_references.py` | Генерирует host-side reference данные для пошагового сравнения. | ⚠️ Исследовательский helper |
+| `debug/generate_pc_reference.py` | Делает PC/GPU reference generation для контрольных сравнений. | ⚠️ Исследовательский helper |
+| `debug/generate_embed_cfg_references.py` | Строит reference для embedding-space CFG сценариев. | ⚠️ Исследовательский helper |
+| `debug/measure_ram.py` | Меряет расход памяти в runtime/phone-side сценариях. | ⚠️ Диагностический helper |
+| `debug/sdxl_speed_probe.py` | Гоняет end-to-end замеры скорости на телефоне (и при желании добавляет PC baseline) для текущего runtime-path. | ✅ Runtime diagnostic |
+| `debug/sdxl_unet_overhead_probe.py` | Разбирает overhead split-UNet через `qnn-profile-viewer`, включая `mmap`, batched CFG и repeat-в-одном-процессе. | ✅ Runtime diagnostic |
 
 ### Utility / rewrite / compatibility
 
@@ -127,7 +129,7 @@
 
 | Файл | Что делает | Статус |
 | --- | --- | --- |
-| `test_distillation_loras.py` | Проверяет альтернативные distillation/LoRA сценарии. | ⚠️ Чистое исследование |
+| `debug/test_distillation_loras.py` | Проверяет альтернативные distillation/LoRA сценарии. | ⚠️ Чистое исследование |
 
 ## Shell-helpers рядом с Python-цепочкой
 
@@ -135,8 +137,8 @@
 
 | Файл | Что делает |
 | --- | --- |
-| `build_fp16_ctx.sh` | Старый rooted helper для генерации context binary на телефоне. |
-| `run_ctxgen_lightning.sh` | Более свежий helper для phone-side `qnn-context-binary-generator`. |
+| `debug/build_fp16_ctx.sh` | Старый rooted helper для генерации context binary на телефоне. |
+| `debug/run_ctxgen_lightning.sh` | Более свежий helper для phone-side `qnn-context-binary-generator`. |
 
 ## Что реально входит в “финальный путь”, а что нет
 
@@ -151,13 +153,13 @@
 
 Следующие файлы **не нужно воспринимать как обязательные для обычного пользователя**:
 
-- все `compare_*`
-- все `generate_*reference*`
-- `trace_unet_layer_parity.py`
-- `check_encoder_outputs.py`
-- `measure_ram.py`
-- `test_distillation_loras.py`
-- AI Hub-ветка (`export_and_compile_aihub.py`, `export_split_unet.py`)
+- все `debug/compare_*`
+- все `debug/generate_*reference*`
+- `debug/trace_unet_layer_parity.py`
+- `debug/check_encoder_outputs.py`
+- `debug/measure_ram.py`
+- `debug/test_distillation_loras.py`
+- AI Hub-ветка (`debug/export_and_compile_aihub.py`, `debug/export_split_unet.py`)
 
 ## Почему их так много — и это не мусор
 

@@ -231,13 +231,13 @@ Lightning здесь приходит как LoRA, а не как готовый
 - `verify_clip_vae_onnx.py`
 - `verify_e2e_onnx.py`
 - `assess_generated_image.py`
-- `measure_ram.py`
+- `debug/measure_ram.py`
 
 ### Экспериментальные / продвинутые
 
-- `quantize_unet.py`
-- `run_full_phone_pipeline.py`
-- `run_ctxgen_lightning.sh`
+- `debug/quantize_unet.py`
+- `debug/run_full_phone_pipeline.py`
+- `debug/run_ctxgen_lightning.sh`
 - calibration-скрипты
 - ONNX/QAIRT workaround-скрипты
 

@@ -20,7 +20,9 @@ import torch.nn as nn
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
-SDXL_NPU = ROOT / "sdxl_npu"
+EXTERNAL_PLATFORM_TOOLS = ROOT.parent
+DEFAULT_SDXL_NPU = EXTERNAL_PLATFORM_TOOLS / "sdxl_npu"
+SDXL_NPU = DEFAULT_SDXL_NPU if DEFAULT_SDXL_NPU.exists() else (ROOT / "sdxl_npu")
 MERGED_UNET_DIR = SDXL_NPU / "unet_lightning8step_merged"
 ONNX_DIR = ROOT / "NPU" / "onnx_lightning_split"
 ONNX_ENC = ONNX_DIR / "unet_encoder.onnx"    # AI Hub package dir

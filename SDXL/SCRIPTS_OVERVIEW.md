@@ -4,6 +4,8 @@ A detailed map of the current `SDXL/` folder.
 
 > [!IMPORTANT]
 > `SDXL/` currently contains **more than just the shortest happy-path**. It also includes diagnostics, parity checks, calibration helpers, QAIRT/QNN workarounds, and experimental branches. That is expected for a live R&D repository.
+> [!NOTE]
+> After the SDXL cleanup pass, lab/diagnostic/experimental scripts were moved under `SDXL/debug/`, while the root `SDXL/` keeps the shortest practical public path.
 
 ## How to read this map
 
@@ -33,11 +35,11 @@ This branch is the best match for the current `README`s.
 This is the active research branch inside `SDXL/`:
 
 - `convert_lightning_to_qnn.py`
-- `run_phone_lightning.py`
-- `run_full_phone_pipeline.py`
-- `trace_unet_layer_parity.py`
-- `compare_*`
-- `generate_*_references.py`
+- `debug/run_phone_lightning.py`
+- `debug/run_full_phone_pipeline.py`
+- `debug/trace_unet_layer_parity.py`
+- `debug/compare_*`
+- `debug/generate_*_references.py`
 - shell helpers for `ctxgen`
 
 It matters, but it is **not the shortest public entry point** for first-time readers.
@@ -68,28 +70,28 @@ If you want the shortest useful route through the repository, start with:
 | `export_sdxl_to_onnx.py` | Exports the UNet and related SDXL components to ONNX. | ✅ Main step |
 | `convert_clip_vae_to_qnn.py` | Converts CLIP/VAE ONNX models into QNN artifacts. | ⚠️ Main but dev/layout-sensitive |
 | `convert_lightning_to_qnn.py` | Converts the Lightning UNet into the QNN model pipeline. | ⚠️ Main but still experimental |
-| `quantize_unet.py` | Quantizes the UNet (W8A16 / INT8) from calibration data. | ✅ Main technical step |
+| `debug/quantize_unet.py` | Quantizes the UNet (W8A16 / INT8) from calibration data. | ✅ Main technical step |
 | `generate.py` | Host-side generator/orchestrator that drives parts of the pipeline over ADB. | ⚠️ Useful, but not the simplest public entry |
 
 ### Deploy / runtime
 
 | File | Purpose | Status |
 | --- | --- | --- |
-| `run_phone_lightning.py` | Runs the phone-side Lightning UNet branch through ADB and the QNN runtime. | ⚠️ Experimental runtime |
-| `run_full_phone_pipeline.py` | Runs CLIP + UNet + VAE on the phone as a research full-pipeline branch. | ⚠️ Experimental runtime |
+| `debug/run_phone_lightning.py` | Runs the phone-side Lightning UNet branch through ADB and the QNN runtime. | ⚠️ Experimental runtime |
+| `debug/run_full_phone_pipeline.py` | Runs CLIP + UNet + VAE on the phone as a research full-pipeline branch. | ⚠️ Experimental runtime |
 | `build_android_model_lib_windows.py` | Builds Android `.so` files from QNN model.cpp/model.bin on Windows/NDK. | ⚠️ Important build step, but platform-specific |
-| `export_split_unet.py` | Exports/prepares split UNet artifacts for AI Hub and phone-side use. | ⚠️ Alternative runtime branch |
-| `export_and_compile_aihub.py` | Handles export/compile through Qualcomm AI Hub. | ⚠️ Alternative cloud branch |
+| `debug/export_split_unet.py` | Exports/prepares split UNet artifacts for AI Hub and phone-side use. | ⚠️ Alternative runtime branch |
+| `debug/export_and_compile_aihub.py` | Handles export/compile through Qualcomm AI Hub. | ⚠️ Alternative cloud branch |
 
 ### Calibration / data prep
 
 | File | Purpose | Status |
 | --- | --- | --- |
-| `generate_calibration_prompts.py` | Generates a prompt set for calibration. | ✅ Useful helper |
-| `make_calibration_data.py` | Builds calibration `.npz` data from prompts and diffusion inputs. | ✅ Useful helper |
-| `make_lightning_calibration.py` | Builds Lightning calibration data with correct `init_noise_sigma` scaling. | ⚠️ Important but closer to the dev pipeline |
-| `make_qnn_input_list_from_npz.py` | Converts calibration `.npz` into `input_list.txt` and `.raw` files for QNN tools. | ✅ Useful helper |
-| `make_qnn_extbias_input_list_from_npz.py` | Builds extended input lists for extbias/extmaps scenarios. | ⚠️ Specialized |
+| `debug/generate_calibration_prompts.py` | Generates a prompt set for calibration. | ✅ Useful helper |
+| `debug/make_calibration_data.py` | Builds calibration `.npz` data from prompts and diffusion inputs. | ✅ Useful helper |
+| `debug/make_lightning_calibration.py` | Builds Lightning calibration data with correct `init_noise_sigma` scaling. | ⚠️ Important but closer to the dev pipeline |
+| `debug/make_qnn_input_list_from_npz.py` | Converts calibration `.npz` into `input_list.txt` and `.raw` files for QNN tools. | ✅ Useful helper |
+| `debug/make_qnn_extbias_input_list_from_npz.py` | Builds extended input lists for extbias/extmaps scenarios. | ⚠️ Specialized |
 
 ### Verification / debug / parity
 
@@ -97,19 +99,19 @@ If you want the shortest useful route through the repository, start with:
 | --- | --- | --- |
 | `verify_clip_vae_onnx.py` | Compares PyTorch and ONNX for CLIP-L/CLIP-G/VAE. | ✅ Useful verification |
 | `verify_e2e_onnx.py` | Runs an end-to-end ONNX sanity check without the phone runtime. | ✅ Useful verification |
-| `verify_vae_quick.py` | Quick VAE ONNX check. | ⚠️ Local technical check |
-| `compare_unet_pytorch_vs_onnx.py` | Compares PyTorch UNet output with ONNX UNet output. | ⚠️ Deep diagnostics |
-| `compare_onnx_vs_phone.py` | Compares ONNX results with phone-side results. | ⚠️ Deep diagnostics |
-| `batch_compare_onnx_vs_phone_saved_steps.py` | Batch-compares saved ONNX and phone step outputs. | ⚠️ Deep diagnostics |
-| `host_compare_unet_baselines.py` | Compares multiple host-side UNet baselines. | ⚠️ Research diagnostics |
-| `trace_unet_layer_parity.py` | Traces layer-by-layer UNet parity. | ⚠️ Advanced diagnostics |
-| `check_encoder_outputs.py` | Checks split-encoder outputs against a reference. | ⚠️ Internal technical check |
-| `generate_host_references.py` | Generates host-side reference data for step-by-step comparisons. | ⚠️ Research helper |
-| `generate_pc_reference.py` | Produces PC/GPU reference generations for control comparisons. | ⚠️ Research helper |
-| `generate_embed_cfg_references.py` | Produces references for embedding-space CFG experiments. | ⚠️ Research helper |
-| `measure_ram.py` | Measures runtime/phone-side memory usage. | ⚠️ Diagnostic helper |
-| `sdxl_speed_probe.py` | Runs end-to-end phone speed checks (and optional PC baseline) for the current runtime path. | ✅ Runtime diagnostic |
-| `sdxl_unet_overhead_probe.py` | Breaks down split-UNet overhead with `qnn-profile-viewer`, including `mmap`, batched CFG, and repeat-in-one-process cases. | ✅ Runtime diagnostic |
+| `debug/verify_vae_quick.py` | Quick VAE ONNX check. | ⚠️ Local technical check |
+| `debug/compare_unet_pytorch_vs_onnx.py` | Compares PyTorch UNet output with ONNX UNet output. | ⚠️ Deep diagnostics |
+| `debug/compare_onnx_vs_phone.py` | Compares ONNX results with phone-side results. | ⚠️ Deep diagnostics |
+| `debug/batch_compare_onnx_vs_phone_saved_steps.py` | Batch-compares saved ONNX and phone step outputs. | ⚠️ Deep diagnostics |
+| `debug/host_compare_unet_baselines.py` | Compares multiple host-side UNet baselines. | ⚠️ Research diagnostics |
+| `debug/trace_unet_layer_parity.py` | Traces layer-by-layer UNet parity. | ⚠️ Advanced diagnostics |
+| `debug/check_encoder_outputs.py` | Checks split-encoder outputs against a reference. | ⚠️ Internal technical check |
+| `debug/generate_host_references.py` | Generates host-side reference data for step-by-step comparisons. | ⚠️ Research helper |
+| `debug/generate_pc_reference.py` | Produces PC/GPU reference generations for control comparisons. | ⚠️ Research helper |
+| `debug/generate_embed_cfg_references.py` | Produces references for embedding-space CFG experiments. | ⚠️ Research helper |
+| `debug/measure_ram.py` | Measures runtime/phone-side memory usage. | ⚠️ Diagnostic helper |
+| `debug/sdxl_speed_probe.py` | Runs end-to-end phone speed checks (and optional PC baseline) for the current runtime path. | ✅ Runtime diagnostic |
+| `debug/sdxl_unet_overhead_probe.py` | Breaks down split-UNet overhead with `qnn-profile-viewer`, including `mmap`, batched CFG, and repeat-in-one-process cases. | ✅ Runtime diagnostic |
 
 ### Utility / rewrite / compatibility
 
@@ -126,7 +128,7 @@ If you want the shortest useful route through the repository, start with:
 
 | File | Purpose | Status |
 | --- | --- | --- |
-| `test_distillation_loras.py` | Tests alternative distillation/LoRA scenarios. | ⚠️ Pure research |
+| `debug/test_distillation_loras.py` | Tests alternative distillation/LoRA scenarios. | ⚠️ Pure research |
 
 ## Nearby shell helpers
 
@@ -134,8 +136,8 @@ They are not Python, but they matter when reading the full story:
 
 | File | Purpose |
 | --- | --- |
-| `build_fp16_ctx.sh` | Older rooted helper for building context binaries on the phone. |
-| `run_ctxgen_lightning.sh` | Newer helper for phone-side `qnn-context-binary-generator`. |
+| `debug/build_fp16_ctx.sh` | Older rooted helper for building context binaries on the phone. |
+| `debug/run_ctxgen_lightning.sh` | Newer helper for phone-side `qnn-context-binary-generator`. |
 
 ## What belongs to the “final path” and what does not
 
@@ -150,13 +152,13 @@ They are not Python, but they matter when reading the full story:
 
 These files should **not** be treated as mandatory for an ordinary user:
 
-- all `compare_*`
-- all `generate_*reference*`
-- `trace_unet_layer_parity.py`
-- `check_encoder_outputs.py`
-- `measure_ram.py`
-- `test_distillation_loras.py`
-- the AI Hub branch (`export_and_compile_aihub.py`, `export_split_unet.py`)
+- all `debug/compare_*`
+- all `debug/generate_*reference*`
+- `debug/trace_unet_layer_parity.py`
+- `debug/check_encoder_outputs.py`
+- `debug/measure_ram.py`
+- `debug/test_distillation_loras.py`
+- the AI Hub branch (`debug/export_and_compile_aihub.py`, `debug/export_split_unet.py`)
 
 ## Why there are so many of them — and why they are not junk
 

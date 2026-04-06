@@ -5,8 +5,8 @@ This note summarizes the **actual SDXL Lightning UNet structure used in this rep
 It is based on the current repo code, especially:
 
 - `SDXL/export_sdxl_to_onnx.py`
-- `SDXL/export_split_unet.py`
-- `SDXL/quantize_unet.py`
+- `SDXL/debug/export_split_unet.py`
+- `SDXL/debug/quantize_unet.py`
 - `SDXL/LESSONS_LEARNED.md`
 
 ## 1. The real UNet topology in this repo
@@ -69,7 +69,7 @@ These are **not good places for aggressive numeric experiments** unless the enti
 
 ## 3. What is already treated as sensitive in the repo
 
-`SDXL/quantize_unet.py` already excludes the following node families from coarse quantization:
+`SDXL/debug/quantize_unet.py` already excludes the following node families from coarse quantization:
 
 - `conv_in`
 - `conv_out`
@@ -165,7 +165,7 @@ Reason:
 
 The repo already leans in this direction:
 
-- `quantize_unet.py` defaults to `per_channel=True`
+- `debug/quantize_unet.py` defaults to `per_channel=True`
 - `WeightSymmetric=True`
 - calibration default is `percentile`
 
