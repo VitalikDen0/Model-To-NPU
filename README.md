@@ -22,6 +22,16 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 **Current implemented family:** `SDXL/`  
 **Current public beta result:** SDXL generation on a Snapdragon phone NPU with CLIP-L, CLIP-G, split UNet, VAE, Termux runtime, and an Android APK.
 
+## Latest validation snapshot
+
+- **2026-04-06:** practical SDXL full loop was re-validated from checkpoint build to final phone-generated PNG.
+- Checkpoint used: `waiIllustriousSDXL_v160.safetensors`.
+- Final validated output: `NPU/outputs/wai160_phone_native_cfg35_20260406.png`.
+- Updated full walkthroughs are documented in:
+  - [`README_EN.md`](README_EN.md)
+  - [`README_RU.md`](README_RU.md)
+  - [`SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md`](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md)
+
 ## Quick links
 
 - [English documentation](README_EN.md)
@@ -30,6 +40,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - [Live phone-side layout example](examples/phone-sdxl-qnn-layout.md)
 - [SDXL script map (EN)](SDXL/SCRIPTS_OVERVIEW.md)
 - [SDXL script map (RU)](SDXL/SCRIPTS_OVERVIEW_RU.md)
+- [SDXL runbook used files+commands](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md)
 - [Current lessons learned](SDXL/LESSONS_LEARNED.md)
 - [UNet quantization review (EN)](SDXL/UNET_QUANTIZATION_REVIEW.md)
 - [UNet quantization review (RU)](SDXL/UNET_QUANTIZATION_REVIEW_RU.md)

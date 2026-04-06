@@ -34,7 +34,7 @@ This branch is the best match for the current `README`s.
 
 This is the active research branch inside `SDXL/`:
 
-- `convert_lightning_to_qnn.py`
+- `debug/convert_lightning_to_qnn.py`
 - `debug/run_phone_lightning.py`
 - `debug/run_full_phone_pipeline.py`
 - `debug/trace_unet_layer_parity.py`
@@ -68,10 +68,10 @@ If you want the shortest useful route through the repository, start with:
 | `bake_lora_into_unet.py` | Permanently fuses the SDXL-Lightning LoRA into the base UNet. | ✅ Main step |
 | `export_clip_vae_to_onnx.py` | Exports CLIP-L, CLIP-G, and the VAE decoder to ONNX. | ✅ Main step |
 | `export_sdxl_to_onnx.py` | Exports the UNet and related SDXL components to ONNX. | ✅ Main step |
-| `convert_clip_vae_to_qnn.py` | Converts CLIP/VAE ONNX models into QNN artifacts. | ⚠️ Main but dev/layout-sensitive |
-| `convert_lightning_to_qnn.py` | Converts the Lightning UNet into the QNN model pipeline. | ⚠️ Main but still experimental |
-| `debug/quantize_unet.py` | Quantizes the UNet (W8A16 / INT8) from calibration data. | ✅ Main technical step |
-| `generate.py` | Host-side generator/orchestrator that drives parts of the pipeline over ADB. | ⚠️ Useful, but not the simplest public entry |
+| `debug/convert_clip_vae_to_qnn.py` | Converts CLIP/VAE ONNX models into QNN artifacts. | ⚠️ Advanced/debug path |
+| `debug/convert_lightning_to_qnn.py` | Converts the Lightning UNet into the QNN model pipeline. | ⚠️ Advanced/debug path |
+| `run_end_to_end.ps1` | End-to-end wrapper for build/deploy/smoke flow with optional skips. | ✅ Main orchestration helper |
+| `debug/generate.py` | Host-side generator/orchestrator that drives parts of the pipeline over ADB. | ⚠️ Optional debug fallback |
 
 ### Deploy / runtime
 
@@ -79,7 +79,7 @@ If you want the shortest useful route through the repository, start with:
 | --- | --- | --- |
 | `debug/run_phone_lightning.py` | Runs the phone-side Lightning UNet branch through ADB and the QNN runtime. | ⚠️ Experimental runtime |
 | `debug/run_full_phone_pipeline.py` | Runs CLIP + UNet + VAE on the phone as a research full-pipeline branch. | ⚠️ Experimental runtime |
-| `build_android_model_lib_windows.py` | Builds Android `.so` files from QNN model.cpp/model.bin on Windows/NDK. | ⚠️ Important build step, but platform-specific |
+| `debug/build_android_model_lib_windows.py` | Builds Android `.so` files from QNN model.cpp/model.bin on Windows/NDK. | ⚠️ Important build step, but platform-specific |
 | `debug/export_split_unet.py` | Exports/prepares split UNet artifacts for AI Hub and phone-side use. | ⚠️ Alternative runtime branch |
 | `debug/export_and_compile_aihub.py` | Handles export/compile through Qualcomm AI Hub. | ⚠️ Alternative cloud branch |
 
@@ -97,12 +97,15 @@ If you want the shortest useful route through the repository, start with:
 
 | File | Purpose | Status |
 | --- | --- | --- |
-| `verify_clip_vae_onnx.py` | Compares PyTorch and ONNX for CLIP-L/CLIP-G/VAE. | ✅ Useful verification |
-| `verify_e2e_onnx.py` | Runs an end-to-end ONNX sanity check without the phone runtime. | ✅ Useful verification |
+| `debug/verify_clip_vae_onnx.py` | Compares PyTorch and ONNX for CLIP-L/CLIP-G/VAE. | ✅ Useful verification |
+| `debug/verify_e2e_onnx.py` | Runs an end-to-end ONNX sanity check without the phone runtime. | ✅ Useful verification |
 | `debug/verify_vae_quick.py` | Quick VAE ONNX check. | ⚠️ Local technical check |
 | `debug/compare_unet_pytorch_vs_onnx.py` | Compares PyTorch UNet output with ONNX UNet output. | ⚠️ Deep diagnostics |
 | `debug/compare_onnx_vs_phone.py` | Compares ONNX results with phone-side results. | ⚠️ Deep diagnostics |
 | `debug/batch_compare_onnx_vs_phone_saved_steps.py` | Batch-compares saved ONNX and phone step outputs. | ⚠️ Deep diagnostics |
+| `debug/validate_phone_candidate_with_saved_steps.py` | Validates phone-side candidate contexts on saved step inputs and reports parity/perf. | ⚠️ Candidate validation |
+| `debug/evaluate_split_unet_8w8a.py` | Evaluates split-UNet 8W8A candidates and records quality/perf deltas. | ⚠️ Candidate evaluation |
+| `debug/evaluate_unet_8w8a_candidate.py` | Evaluates monolithic UNet 8W8A candidates against known working baselines. | ⚠️ Candidate evaluation |
 | `debug/host_compare_unet_baselines.py` | Compares multiple host-side UNet baselines. | ⚠️ Research diagnostics |
 | `debug/trace_unet_layer_parity.py` | Traces layer-by-layer UNet parity. | ⚠️ Advanced diagnostics |
 | `debug/check_encoder_outputs.py` | Checks split-encoder outputs against a reference. | ⚠️ Internal technical check |
@@ -117,12 +120,12 @@ If you want the shortest useful route through the repository, start with:
 
 | File | Purpose | Status |
 | --- | --- | --- |
-| `rewrite_onnx_instancenorm_to_groupnorm.py` | Rewrites `InstanceNorm` into `GroupNorm` for QNN compatibility. | ✅ Key utility |
-| `rewrite_onnx_shape_reshape_to_static.py` | Makes shape/reshape behavior more static for QAIRT. | ✅ Utility |
-| `rewrite_onnx_gemm_to_matmul.py` | Rewrites `Gemm` into `MatMul` as a workaround. | ✅ Utility |
-| `rewrite_onnx_extmaps_bias_inputs_to_fp16.py` | Rewrites extmaps/extbias inputs to FP16 and removes unnecessary Cast nodes. | ✅ Utility |
-| `qnn_onnx_converter_expanddims_patch.py` | Monkey-patch entrypoint for the QAIRT converter with required fixes. | ⚠️ Low-level workaround |
-| `assess_generated_image.py` | Provides a quick no-reference quality assessment of the final image. | ✅ Useful utility |
+| `debug/rewrite_onnx_instancenorm_to_groupnorm.py` | Rewrites `InstanceNorm` into `GroupNorm` for QNN compatibility. | ✅ Utility (debug branch) |
+| `debug/rewrite_onnx_shape_reshape_to_static.py` | Makes shape/reshape behavior more static for QAIRT. | ✅ Utility (debug branch) |
+| `debug/rewrite_onnx_gemm_to_matmul.py` | Rewrites `Gemm` into `MatMul` as a workaround. | ✅ Utility (debug branch) |
+| `debug/rewrite_onnx_extmaps_bias_inputs_to_fp16.py` | Rewrites extmaps/extbias inputs to FP16 and removes unnecessary Cast nodes. | ✅ Utility (debug branch) |
+| `debug/qnn_onnx_converter_expanddims_patch.py` | Monkey-patch entrypoint for the QAIRT converter with required fixes. | ⚠️ Low-level workaround |
+| `debug/assess_generated_image.py` | Provides a quick no-reference quality assessment of the final image. | ✅ Useful utility |
 
 ### Experimental / alternative
 

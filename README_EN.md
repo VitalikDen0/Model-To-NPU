@@ -3,8 +3,7 @@
 **Languages:** [English](README_EN.md) | [Русский](README_RU.md)
 
 > [!WARNING]
-> This repository is currently undergoing repeated end-to-end re-validation.
-> The layout and commands below reflect the latest known working setup, but a clean full-pass check from PC export to final phone generation is still in progress.
+> The pipeline is still marked beta in some branches, but a full practical loop for SDXL-Lightning was re-validated on **2026-04-06** from checkpoint build to final phone-generated image.
 
 <p align="center">
   <b>Repository for model-to-NPU pipelines on Qualcomm Snapdragon devices</b><br>
@@ -35,8 +34,35 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 - **Repository direction:** multi-model Snapdragon NPU pipelines
 - **Currently implemented family:** `SDXL/`
 - **Current phone app target:** SDXL
-- **Status of scripts:** being re-tested for full end-to-end reproducibility
+- **Status of scripts:** full practical SDXL loop (checkpoint -> image) re-validated on current layout
 - **Status of docs:** updated to the current known layout
+
+## Latest validated full loop (2026-04-06)
+
+Validated path in this session:
+
+1. Build early artifacts from checkpoint (`.safetensors`) on PC.
+2. Use the phone runtime assets under `/data/local/tmp/sdxl_qnn`.
+3. Run native phone-side generation via deployed `phone_gen/generate.py` (Termux Python through ADB/root shell).
+4. Verify final PNG visually (non-garbage output).
+
+Checkpoint used:
+
+- `J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors`
+
+Key produced host artifacts:
+
+- `build/sdxl_work_wai160_20260406/diffusers_pipeline/`
+- `build/sdxl_work_wai160_20260406/unet_lightning_merged/`
+- `build/sdxl_work_wai160_20260406/onnx_clip_vae/`
+- `build/sdxl_work_wai160_20260406/onnx_unet/unet.onnx` + `unet.onnx.data`
+
+Validated final image:
+
+- `NPU/outputs/wai160_phone_native_cfg35_20260406.png`
+- prompt: `orange cat on wooden chair, detailed fur, soft cinematic light, high quality`
+- seed: `777`, steps: `8`, `CFG=3.5`, `--prog-cfg`
+- measured stage times in that run: `UNet ~55.98 s`, `VAE ~3.14 s`, total `~62.0 s`
 
 For a live example of what a deployed phone-side SDXL directory currently looks like, see [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
 There is also a small rooted artifact bundle under [`examples/rooted-phone-sample/`](examples/rooted-phone-sample/) for reference and educational exploration.
@@ -48,6 +74,8 @@ For a dedicated review of the current SDXL UNet structure, split boundaries, and
 For the latest runtime-overhead findings, `mmap` impact, and the post-`0.1.3` control-run numbers, see [`SDXL/UNET_OVERHEAD_REVIEW.md`](SDXL/UNET_OVERHEAD_REVIEW.md) and [`SDXL/UNET_OVERHEAD_REVIEW_RU.md`](SDXL/UNET_OVERHEAD_REVIEW_RU.md).
 
 For a categorized map of every script currently living under `SDXL/`, see [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) and [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
+
+For a single practical file+command runbook used in the latest validated loop, see [`SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md`](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md).
 
 ## Requirements for the current SDXL pipeline
 
@@ -133,10 +161,20 @@ python scripts/build_all.py --checkpoint path/to/model.safetensors
 There is also a careful beta wrapper for the currently documented flow:
 
 ```powershell
-pwsh SDXL/run_end_to_end.ps1 -Checkpoint path/to/model.safetensors -ContextsDir path/to/context_binaries
+pwsh SDXL/run_end_to_end.ps1 -ContextsDir path/to/context_binaries
 ```
 
+If `-Checkpoint` is omitted, the script now asks interactively and defaults to:
+
+- `J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors`
+
 That wrapper intentionally separates the reproducible early build stages from the still-beta runtime/deploy pieces.
+
+For build-only validation (phone disconnected or deploy deferred):
+
+```powershell
+pwsh SDXL/run_end_to_end.ps1 -OutputRoot build/sdxl_work_custom -SkipDeploy -SkipSmokeTest
+```
 
 Or step by step:
 
@@ -154,24 +192,24 @@ python SDXL/export_clip_vae_to_onnx.py
 python SDXL/export_sdxl_to_onnx.py
 
 # 5. Convert to QNN
-python SDXL/convert_clip_vae_to_qnn.py
-python SDXL/convert_lightning_to_qnn.py
+python SDXL/debug/convert_clip_vae_to_qnn.py
+python SDXL/debug/convert_lightning_to_qnn.py
 
 # 6. Build Android model libraries (.so)
-python SDXL/build_android_model_lib_windows.py
+python SDXL/debug/build_android_model_lib_windows.py
 ```
 
 Optional live-preview path for the APK / phone runtime:
 
 ```bash
 # Export the tiny TAESD XL preview decoder
-python SDXL/export_taesd_to_onnx.py --validate
+python SDXL/debug/export_taesd_to_onnx.py --validate
 
 # Deploy the single-file ONNX to the phone runtime
 adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
 
 # Optional: build and deploy TAESD QNN preview assets (preferred preview path)
-python SDXL/convert_taesd_to_qnn.py --backend gpu
+python SDXL/debug/convert_taesd_to_qnn.py --backend gpu
 
 # Optional fallback only (if you want CPU ONNX preview in Termux / APK)
 python -m pip install onnxruntime
@@ -230,11 +268,31 @@ The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast
 APK `v0.2.3` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and now documents the rebuilt QNN TAESD preview path that runs on GPU at roughly **1.0 s** per step.
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
-#### Host-side (from PC via ADB)
+#### Host-side (from PC via ADB, optional debug path)
 
 ```bash
-python SDXL/generate.py "cat on windowsill, masterpiece" --seed 42
+python SDXL/debug/generate.py "cat on windowsill, masterpiece" --seed 42
 ```
+
+If your phone runtime lives at `/data/local/tmp/sdxl_qnn` (rooted layout), set base path explicitly:
+
+```powershell
+$env:SDXL_QNN_BASE='/data/local/tmp/sdxl_qnn'
+python SDXL/debug/generate.py "orange cat on wooden chair, detailed fur" --seed 777 --steps 8 --name wai160_e2e_phonecheck_20260406
+```
+
+This host-side path is useful as a fallback/debug flow when Termux `python3` is unavailable on the phone but ADB + QNN runtime files are present.
+
+## Full-loop checklist (checkpoint -> final PNG)
+
+- Prepare PC environment (`Python 3.10`, required pip packages, QAIRT, ADB).
+- Build early SDXL stages from checkpoint using either `scripts/build_all.py` or `SDXL/run_end_to_end.ps1 -SkipDeploy -SkipSmokeTest`.
+- Ensure phone runtime tree exists and has required `context/`, `bin/`, `lib/`, `model/`, `phone_gen/` files.
+- Generate an image:
+  - Termux standalone (`phone_gen/generate.py`) when `python3` is available on phone.
+  - Optional debug fallback: host-side `SDXL/debug/generate.py` over ADB with correct `SDXL_QNN_BASE`.
+- Verify output quality (visual check or optional utility scripts in `SDXL/debug/`).
+- Only after quality is confirmed, proceed with optional deeper experiments from `SDXL/debug/`.
 
 ## What is actually on the phone right now?
 
@@ -269,19 +327,19 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 │   ├── download_adb.py
 │   └── build_all.py          ← Early-stage SDXL helper (later stages under re-test)
 ├── SDXL/                     ← Current SDXL-specific conversion & build scripts
-│   ├── generate.py           ← Host-side generator (from PC)
 │   ├── bake_lora_into_unet.py
 │   ├── export_clip_vae_to_onnx.py
 │   ├── export_sdxl_to_onnx.py
-│   ├── convert_clip_vae_to_qnn.py
-│   ├── convert_lightning_to_qnn.py
-│   ├── export_taesd_to_onnx.py
-│   ├── convert_taesd_to_qnn.py
-│   ├── build_android_model_lib_windows.py
-│   ├── assess_generated_image.py
-│   ├── verify_clip_vae_onnx.py
-│   ├── verify_e2e_onnx.py
-│   ├── debug/               ← Lab/diagnostic/experimental scripts moved from SDXL root
+│   ├── debug/               ← Lab/diagnostic/experimental scripts
+│   │   ├── assess_generated_image.py
+│   │   ├── verify_clip_vae_onnx.py
+│   │   ├── verify_e2e_onnx.py
+│   │   ├── generate.py
+│   │   ├── convert_clip_vae_to_qnn.py
+│   │   ├── convert_lightning_to_qnn.py
+│   │   ├── export_taesd_to_onnx.py
+│   │   ├── convert_taesd_to_qnn.py
+│   │   └── build_android_model_lib_windows.py
 │   ├── LESSONS_LEARNED.md    ← Pitfalls and solutions
 │   └── LESSONS_LEARNED_RU.md ← Russian lessons-learned counterpart
 └── APK/                      ← Android application

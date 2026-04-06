@@ -1,6 +1,7 @@
 param(
-    [Parameter(Mandatory = $true)]
     [string]$Checkpoint,
+
+    [string]$DefaultCheckpoint = "J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors",
 
     [string]$Python = "python",
     [string]$OutputRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) "build\sdxl_work"),
@@ -22,7 +23,16 @@ $ScriptsDir = Join-Path $RepoRoot "scripts"
 $BuildHelper = Join-Path $ScriptsDir "build_all.py"
 $DeployHelper = Join-Path $ScriptsDir "deploy_to_phone.py"
 $AdbLocal = Join-Path $RepoRoot "adb.exe"
-$Adb = if (Test-Path $AdbLocal) { $AdbLocal } else { "adb" }
+$AdbExternal = "D:\platform-tools\adb.exe"
+$Adb = if (Test-Path $AdbLocal) {
+    $AdbLocal
+}
+elseif (Test-Path $AdbExternal) {
+    $AdbExternal
+}
+else {
+    "adb"
+}
 
 function Invoke-Step {
     param(
@@ -39,7 +49,13 @@ function Invoke-Step {
     Write-Host ("=" * 72)
     Write-Host ("  " + ($Command -join " "))
 
-    & $Command[0] @Command[1..($Command.Length - 1)]
+    $cmdExe = $Command[0]
+    $cmdArgs = @()
+    if ($Command.Length -gt 1) {
+        $cmdArgs = $Command[1..($Command.Length - 1)]
+    }
+
+    & $cmdExe @cmdArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Step failed: $Title (exit code $LASTEXITCODE)"
     }
@@ -48,6 +64,19 @@ function Invoke-Step {
 Write-Host ""
 Write-Host "Model-to-NPU SDXL beta flow"
 Write-Host "Repo root : $RepoRoot"
+
+if ([string]::IsNullOrWhiteSpace($Checkpoint)) {
+    $enteredCheckpoint = Read-Host "Path to SDXL checkpoint (.safetensors) [$DefaultCheckpoint]"
+    if ([string]::IsNullOrWhiteSpace($enteredCheckpoint)) {
+        $Checkpoint = $DefaultCheckpoint
+    }
+    else {
+        $Checkpoint = $enteredCheckpoint.Trim()
+    }
+}
+
+$Checkpoint = $Checkpoint.Trim('"')
+
 Write-Host "Checkpoint: $Checkpoint"
 Write-Host "Output    : $OutputRoot"
 Write-Host "Phone base: $PhoneBase"
@@ -117,6 +146,7 @@ Write-Host ("=" * 72)
 Write-Host "Artifacts (early reproducible stages): $OutputRoot"
 Write-Host ""
 Write-Host "Notes:"
+Write-Host "- If -Checkpoint is omitted, the script asks interactively and defaults to $DefaultCheckpoint."
 Write-Host "- This script follows the current public beta path of the repo."
 Write-Host "- The build step covers checkpoint -> diffusers -> Lightning merge -> ONNX export."
 Write-Host "- The deploy step assumes split context binaries already exist, because that remains the current documented runtime path."
