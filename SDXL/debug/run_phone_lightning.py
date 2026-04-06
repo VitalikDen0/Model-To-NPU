@@ -12,7 +12,9 @@ import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parent.parent
-SDXL_NPU = ROOT / "sdxl_npu"
+EXTERNAL_PLATFORM_TOOLS = ROOT.parent
+DEFAULT_SDXL_NPU = EXTERNAL_PLATFORM_TOOLS / "sdxl_npu"
+SDXL_NPU = DEFAULT_SDXL_NPU if DEFAULT_SDXL_NPU.exists() else (ROOT / "sdxl_npu")
 if str(SDXL_NPU) not in sys.path:
     sys.path.insert(0, str(SDXL_NPU))
 from export_sdxl_to_onnx import (
@@ -23,10 +25,30 @@ from export_sdxl_to_onnx import (
 
 DIFFUSERS_DIR = SDXL_NPU / "diffusers_pipeline"
 MERGED_UNET_DIR = SDXL_NPU / "unet_lightning8step_merged"
-ADB = str(ROOT / "adb.exe")
-DEVICE_ROOT = "/data/local/tmp/sdxl_qnn"
-CONTEXT_BIN = f"{DEVICE_ROOT}/context/unet_lightning8step.serialized.bin.bin"
+ADB_CANDIDATES = [
+    ROOT / "adb.exe",
+    EXTERNAL_PLATFORM_TOOLS / "adb.exe",
+]
+ADB = str(next((p for p in ADB_CANDIDATES if p.exists()), ADB_CANDIDATES[0]))
 OUTPUT_DIR = ROOT / "NPU" / "outputs"
+
+
+def _default_device_root() -> str:
+    return os.environ.get("SDXL_PHONE_DEVICE_ROOT", "/data/local/tmp/sdxl_qnn")
+
+
+def _default_context_bin(device_root: str) -> str:
+    return os.environ.get(
+        "SDXL_PHONE_UNET_CONTEXT",
+        f"{device_root}/context/unet_lightning8step.serialized.bin.bin",
+    )
+
+
+def _default_config_file(device_root: str) -> str:
+    return os.environ.get(
+        "SDXL_PHONE_QNN_CONFIG",
+        f"{device_root}/htp_backend_extensions_lightning.json",
+    )
 
 # ── helpers ──
 
@@ -52,6 +74,14 @@ def to_qnn_input(arr_nchw: np.ndarray) -> bytes:
     else:
         arr_nhwc = arr_nchw
     return arr_nhwc.astype(np.float32).tobytes()
+
+
+def build_phone_env_cmd(device_root: str) -> str:
+    return (
+        f"cd {device_root} && "
+        f"export LD_LIBRARY_PATH={device_root}/lib:{device_root}/bin:{device_root}/model && "
+        f"export ADSP_LIBRARY_PATH='{device_root}/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp' && "
+    )
 
 
 def decode_native_output(raw_path: Path, json_path: Path) -> np.ndarray:
@@ -122,7 +152,18 @@ def main():
     ap.add_argument("--width", type=int, default=1024)
     ap.add_argument("--height", type=int, default=1024)
     ap.add_argument("--output", type=str, default=None)
+    ap.add_argument("--device-root", type=str, default=_default_device_root())
+    ap.add_argument("--context-bin", type=str, default=None)
+    ap.add_argument("--config-file", type=str, default=None)
+    ap.add_argument("--perf-profile", type=str, default=os.environ.get("SDXL_PHONE_QNN_PERF", "burst"))
+    ap.add_argument("--use-mmap", action="store_true")
+    ap.add_argument("--work-subdir", type=str, default="runtime_work_lightning")
     args = ap.parse_args()
+
+    device_root = args.device_root
+    context_bin = args.context_bin or _default_context_bin(device_root)
+    config_file = args.config_file or _default_config_file(device_root)
+    env_cmd = build_phone_env_cmd(device_root)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
@@ -193,8 +234,9 @@ def main():
     print(f"[scheduler] {args.steps} steps, timesteps: {timesteps.tolist()}")
 
     # Prepare device-side work directory
-    work_dir = ROOT / "NPU" / "runtime_work_lightning"
+    work_dir = ROOT / "NPU" / args.work_subdir
     work_dir.mkdir(parents=True, exist_ok=True)
+    device_work_root = f"{device_root}/{args.work_subdir}"
 
     total_phone_ms = 0
 
@@ -231,7 +273,7 @@ def main():
             bias_files.append(fname)
 
         # Build input_list.txt
-        device_step = f"{DEVICE_ROOT}/runtime_work_lightning/step_{step_idx:03d}"
+        device_step = f"{device_work_root}/step_{step_idx:03d}"
         input_names = ["sample.qnn.raw", "encoder_hidden_states.qnn.raw"] + bias_files
         input_line = " ".join(f"{device_step}/{n}" for n in input_names)
         with open(step_dir / "input_list.txt", "w") as f:
@@ -244,17 +286,17 @@ def main():
 
         # Run UNet on phone
         device_out = f"{device_step}/output"
+        config_flag = f" --config_file {config_file}" if config_file else ""
+        mmap_flag = " --use_mmap" if args.use_mmap else ""
         run_cmd = (
-            f"cd {DEVICE_ROOT} && "
-            f"export LD_LIBRARY_PATH={DEVICE_ROOT}/lib:{DEVICE_ROOT}/bin:{DEVICE_ROOT}/model && "
-            f"export ADSP_LIBRARY_PATH='{DEVICE_ROOT}/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp' && "
+            f"{env_cmd}"
             f"mkdir -p {device_out} && "
-            f"{DEVICE_ROOT}/bin/qnn-net-run "
-            f"--retrieve_context {CONTEXT_BIN} "
-            f"--backend {DEVICE_ROOT}/lib/libQnnHtp.so "
+            f"{device_root}/bin/qnn-net-run "
+            f"--retrieve_context {context_bin} "
+            f"--backend {device_root}/lib/libQnnHtp.so "
             f"--input_list {device_step}/input_list.txt "
             f"--output_dir {device_out} "
-            f"--perf_profile burst --log_level warn"
+            f"--perf_profile {args.perf_profile}{config_flag}{mmap_flag} --log_level warn"
         )
 
         t0 = time.time()

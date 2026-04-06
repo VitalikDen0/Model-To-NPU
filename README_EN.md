@@ -123,7 +123,7 @@ python scripts/download_adb.py
 ### 2. Build pipeline
 
 > **Note:** `scripts/build_all.py` currently automates only the earlier repeatable stages and intentionally does **not** blindly run every later QNN/deploy step while those scripts are being re-validated.
-> **Script-scope note:** not every file under `SDXL/` is required for the shortest public happy-path. Some of them are verification, calibration, profiling, or QAIRT/QNN workaround helpers.
+> **Script-scope note:** not every file under `SDXL/` is required for the shortest public happy-path. Most lab/diagnostic scripts are now grouped under `SDXL/debug/`, while `SDXL/` root keeps the practical public flow.
 
 ```bash
 # Experimental helper for the early SDXL stages
@@ -281,6 +281,7 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 │   ├── assess_generated_image.py
 │   ├── verify_clip_vae_onnx.py
 │   ├── verify_e2e_onnx.py
+│   ├── debug/               ← Lab/diagnostic/experimental scripts moved from SDXL root
 │   ├── LESSONS_LEARNED.md    ← Pitfalls and solutions
 │   └── LESSONS_LEARNED_RU.md ← Russian lessons-learned counterpart
 └── APK/                      ← Android application
