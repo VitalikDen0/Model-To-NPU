@@ -1,8 +1,8 @@
 # Model-to-NPU Pipeline for Snapdragon
 
-> [!WARNING]
-> This repository is still going through repeated end-to-end re-validation.
-> The public runtime path is real and working, but some build/conversion branches are still openly marked as beta or experimental.
+> [!TIP]
+> End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
+> Some advanced build/conversion branches remain openly marked as beta or experimental.
 
 <p align="center">
   <a href="README_EN.md"><img src="https://img.shields.io/badge/docs-English-0A66C2?style=for-the-badge" alt="English docs"></a>
