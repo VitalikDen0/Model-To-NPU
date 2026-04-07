@@ -323,7 +323,8 @@ python SDXL/debug/generate.py "orange cat on wooden chair, detailed fur" --seed 
 ├── README.md                 ← стартовая страница с выбором языка
 ├── README_RU.md              ← вы здесь
 ├── README_EN.md              ← English version
-├── LICENSE                   ← Apache 2.0
+├── LICENSE                   ← кастомная source-available лицензия с некоммерческим copyleft
+├── NOTICE                    ← обязательная атрибуция происхождения и исходной идеи
 ├── .gitattributes
 ├── .gitignore
 ├── phone_generate.py         ← standalone-генератор для телефона
@@ -440,7 +441,23 @@ Prompt ──▶│ CLIP-L ──┐                                            
 
 ## Лицензия
 
-Apache 2.0 — см. [LICENSE](LICENSE)
+Этот репозиторий распространяется под **Model-To-NPU Source-Available
+Non-Commercial Reciprocity License 1.0** — см. [LICENSE](LICENSE) и
+[NOTICE](NOTICE).
+
+Коротко по сути:
+
+- проект можно использовать, изучать, изменять и форкать только в
+  **некоммерческих** целях;
+- если вы распространяете форк/производную версию или публично её
+  разворачиваете, нужно открыть полный набор исходников и файлов сборки под
+  **той же лицензией**;
+- обязательна сохранённая атрибуция и явное указание, что исходная идея/
+  концепция идёт от оригинального автора, указанного в [`NOTICE`](NOTICE);
+- закрытые или монетизируемые derivative-версии **запрещены**.
+
+Это **source-available**, а не OSI open source лицензия, потому что
+коммерческое использование запрещено.
 
 Зависимости:
 

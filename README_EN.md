@@ -323,7 +323,8 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 ├── README.md                 ← language landing page
 ├── README_RU.md              ← Russian documentation
 ├── README_EN.md              ← you are here
-├── LICENSE                   ← Apache 2.0
+├── LICENSE                   ← custom source-available non-commercial reciprocity license
+├── NOTICE                    ← mandatory origin/idea attribution notice
 ├── .gitattributes
 ├── .gitignore
 ├── phone_generate.py         ← Standalone generator (runs on phone)
@@ -440,7 +441,22 @@ Prompt ──▶│ CLIP-L ──┐                                            
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE)
+This repository is distributed under the **Model-To-NPU Source-Available
+Non-Commercial Reciprocity License 1.0** — see [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
+
+In short:
+
+- you may use, study, modify, and fork the project for **non-commercial**
+  purposes;
+- if you distribute or publicly deploy a derivative, you must provide the full
+  corresponding source under the **same license**;
+- you must preserve attribution and clearly credit the original idea/concept to
+  the original author identified in [`NOTICE`](NOTICE);
+- closed-source or monetized derivatives are **not permitted**.
+
+This is a **source-available** license model, not an OSI Open Source license,
+because commercial use is prohibited.
 
 Dependencies:
 
