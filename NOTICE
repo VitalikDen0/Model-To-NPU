@@ -1,0 +1,17 @@
+# Model-To-NPU Mandatory Attribution Notice
+
+Required attribution for copies, forks, derivative works, demos, public
+deployments, and user-facing documentation:
+
+English:
+"Original idea and original project concept: VitalikDen0, creator of
+Model-To-NPU."
+
+Russian:
+"Исходная идея и исходная концепция проекта: VitalikDen0, создатель
+Model-To-NPU."
+
+When redistributing or publicly deploying the project or a derivative/fork,
+keep this NOTICE file and reproduce the attribution in a reasonably visible
+place such as a README, project page, About/Credits screen, package metadata,
+or user-facing documentation.

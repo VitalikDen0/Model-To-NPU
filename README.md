@@ -41,6 +41,8 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 - [English documentation](README_EN.md)
 - [Русская документация](README_RU.md)
+- [License and usage terms](LICENSE)
+- [Mandatory attribution notice](NOTICE)
 - [Android app notes](APK/README.md)
 - [Live phone-side layout example](examples/phone-sdxl-qnn-layout.md)
 - [SDXL script map (EN)](SDXL/SCRIPTS_OVERVIEW.md)
@@ -51,6 +53,24 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - [UNet quantization review (RU)](SDXL/UNET_QUANTIZATION_REVIEW_RU.md)
 - [UNet overhead review (EN)](SDXL/UNET_OVERHEAD_REVIEW.md)
 - [UNet overhead review (RU)](SDXL/UNET_OVERHEAD_REVIEW_RU.md)
+
+## License model
+
+This repository now uses a **custom source-available, non-commercial,
+reciprocal license**.
+
+This is **source-available**, not OSI open source, because commercial use is
+prohibited.
+
+In short:
+
+- use, study, modify, and fork are allowed for **non-commercial** purposes;
+- any fork or derivative that is redistributed or publicly deployed must stay
+  **fully open in source form** under the **same license**;
+- required attribution must be preserved, including clear credit that the
+  original project idea/concept comes from the original author identified in
+  [`NOTICE`](NOTICE);
+- closed-source or monetized derivatives are **not permitted**.
 
 ## Changelog
 
