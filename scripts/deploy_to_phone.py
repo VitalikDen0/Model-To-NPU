@@ -150,6 +150,7 @@ def find_optional_taesd_model(repo_root: str) -> str | None:
 
 def find_optional_taesd_gpu_runner() -> str | None:
     candidates = [
+        r"D:\platform-tools\sdxl_npu\qairt_2.44\qairt\2.44.0.260225\bin\aarch64-android\qnn-net-run",
         r"C:\Qualcomm\AIStack\QAIRT\2.31.0.250130\bin\aarch64-android\qnn-net-run",
         r"D:\platform-tools\sdxl_npu\qairt_2.31\qairt\2.31.0.250130\bin\aarch64-android\qnn-net-run",
     ]

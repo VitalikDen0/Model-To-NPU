@@ -1,5 +1,9 @@
 # Model-to-NPU Pipeline for Snapdragon
 
+**⚠️ CRITICAL PERFORMANCE REALITY (current SDXL runtime):** true UNet compute itself is currently about **11.5 s**.
+Most of the larger observed wall-clock time is heavy **runtime-algorithm / driver overhead** (process lifecycle, context reload/init/deinit, orchestration, and surrounding I/O).
+Reducing this overhead is the current top optimization priority.
+
 > [!TIP]
 > End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
 > Some advanced build/conversion branches remain openly marked as beta or experimental.

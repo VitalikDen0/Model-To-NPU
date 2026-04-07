@@ -1,9 +1,19 @@
 {
     "graphs": [
         {
+            "graph_names": ["graph_fwxzvixb"],
+            "vtcm_mb": 8,
+            "hvx_threads": 8
+        },
+        {
+            "graph_names": ["graph_zig5sfa5"],
+            "vtcm_mb": 8,
+            "hvx_threads": 8
+        },
+        {
             "graph_names": ["model"],
             "vtcm_mb": 8,
-            "hvx_threads": 4
+            "hvx_threads": 8
         }
     ]
 }

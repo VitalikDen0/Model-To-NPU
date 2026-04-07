@@ -2,6 +2,12 @@
 
 Focused notes about where wall-clock time is currently lost in the phone-side SDXL runtime.
 
+## Critical top-line (must-read)
+
+- **True UNet compute in the current runtime is about 11.5 s.**
+- The much larger observed UNet/runtime wall-clock time is mostly heavy **runtime-algorithm/driver overhead** (process lifecycle, context reload/init/deinit, orchestration, and related I/O).
+- Current active work is focused on reducing exactly this overhead.
+
 ## Why split UNet is still required
 
 The split is not an arbitrary design choice.

@@ -81,6 +81,27 @@ def _resolve_work_dir() -> str:
     return candidates[-1]
 
 
+def _env_first(keys: tuple[str, ...], default: str = "") -> str:
+    for key in keys:
+        value = os.environ.get(key)
+        if value is not None:
+            return value
+    return default
+
+
+def _env_bool(keys: tuple[str, ...], default: bool) -> bool:
+    raw = _env_first(keys, "1" if default else "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_int(keys: tuple[str, ...], default: int = 0) -> int:
+    raw = _env_first(keys, str(default)).strip()
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 DR = _resolve_base_dir()
 CONTEXTS = {
     "clip_l": f"{DR}/context/clip_l.serialized.bin.bin",
@@ -130,10 +151,12 @@ QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_performance").strip() or "sustained_high_performance"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
-QNN_USE_DAEMON = os.environ.get("SDXL_QNN_USE_DAEMON", "0") == "1"
-QNN_DAEMON_CONTEXT_SCOPE = os.environ.get("SDXL_QNN_DAEMON_CONTEXT_SCOPE", "unet").strip().lower() or "unet"
-QNN_DAEMON_PREWARM = os.environ.get("SDXL_QNN_DAEMON_PREWARM", "1") == "1"
-QNN_DAEMON_CONFIG_FILE = os.environ.get("SDXL_QNN_DAEMON_CONFIG_FILE", "").strip()
+QNN_USE_DAEMON = _env_bool(("SDXL_QNN_USE_DAEMON", "QNN_USE_DAEMON"), False)
+QNN_DAEMON_CONTEXT_SCOPE = _env_first(("SDXL_QNN_DAEMON_CONTEXT_SCOPE", "QNN_DAEMON_CONTEXT_SCOPE"), "unet").strip().lower() or "unet"
+QNN_DAEMON_PREWARM = _env_bool(("SDXL_QNN_DAEMON_PREWARM", "QNN_DAEMON_PREWARM"), True)
+QNN_DAEMON_CONFIG_FILE = _env_first(("SDXL_QNN_DAEMON_CONFIG_FILE", "QNN_DAEMON_CONFIG_FILE"), QNN_CONFIG_FILE).strip()
+QNN_HVX_THREADS = max(0, _env_int(("SDXL_QNN_HVX_THREADS", "QNN_HVX_THREADS"), 0))
+QNN_VTCM_MB = max(0, _env_int(("SDXL_QNN_VTCM_MB", "QNN_VTCM_MB"), 0))
 QNN_CLIP_CACHE = os.environ.get("SDXL_QNN_CLIP_CACHE", "1") == "1"
 QNN_CLIP_CACHE_DIR = os.environ.get("SDXL_QNN_CLIP_CACHE_DIR", f"{DR}/phone_gen/cache/clip")
 PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
@@ -157,6 +180,7 @@ _TAESD_QNN_FAILED = False
 _QNN_PROFILE_INDEX = 0
 _QNN_PROFILE_LOCK = threading.Lock()
 _CLIP_CACHE_NAMESPACE: str | None = None
+_RESOLVED_CONFIG_CACHE: dict[tuple[str, int, int], str] = {}
 
 
 def _log(line: str = "") -> None:
@@ -387,7 +411,15 @@ def _resolve_runtime_artifact(path: str, category: str) -> str:
 def _resolve_qnn_config_path(config_path: str) -> str:
     if not config_path:
         return config_path
-    if not _is_shared_storage_path(config_path):
+
+    cache_key = (config_path, QNN_HVX_THREADS, QNN_VTCM_MB)
+    cached = _RESOLVED_CONFIG_CACHE.get(cache_key)
+    if cached and os.path.exists(cached):
+        return cached
+
+    needs_override = QNN_HVX_THREADS > 0 or QNN_VTCM_MB > 0
+    if not _is_shared_storage_path(config_path) and not needs_override:
+        _RESOLVED_CONFIG_CACHE[cache_key] = config_path
         return config_path
 
     runtime_root = os.path.join(WORK_DIR, "runtime")
@@ -398,7 +430,27 @@ def _resolve_qnn_config_path(config_path: str) -> str:
 
     shared_ext_cfg = os.path.join(os.path.dirname(config_path), "htp_backend_ext_config_lightning.json")
     staged_ext_cfg = os.path.join(runtime_root, os.path.basename(shared_ext_cfg))
+    ext_cfg_payload = None
     if os.path.exists(shared_ext_cfg):
+        try:
+            with open(shared_ext_cfg, "r", encoding="utf-8") as f:
+                ext_cfg_payload = json.load(f)
+        except Exception:
+            ext_cfg_payload = None
+
+    if ext_cfg_payload is not None and isinstance(ext_cfg_payload.get("graphs"), list):
+        for graph in ext_cfg_payload["graphs"]:
+            if not isinstance(graph, dict):
+                continue
+            if QNN_HVX_THREADS > 0:
+                graph["hvx_threads"] = QNN_HVX_THREADS
+            if QNN_VTCM_MB > 0:
+                graph["vtcm_mb"] = QNN_VTCM_MB
+
+    if ext_cfg_payload is not None:
+        with open(staged_ext_cfg, "w", encoding="utf-8") as f:
+            json.dump(ext_cfg_payload, f, indent=4)
+    elif os.path.exists(shared_ext_cfg):
         shutil.copy2(shared_ext_cfg, staged_ext_cfg)
 
     shared_ext_lib = os.path.join(QNN_LIB, "libQnnHtpNetRunExtensions.so")
@@ -413,6 +465,7 @@ def _resolve_qnn_config_path(config_path: str) -> str:
 
     with open(dst, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=4)
+    _RESOLVED_CONFIG_CACHE[cache_key] = dst
     return dst
 
 
@@ -614,6 +667,21 @@ def _write_multi_input_list_once(path: str, rows: list[list[str]] | tuple[tuple[
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(" ".join(row) + "\n")
+
+
+def _write_array_reuse(path: str, arr: np.ndarray, dtype=np.float32) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = np.ascontiguousarray(arr, dtype=dtype).tobytes()
+    target_size = len(payload)
+    try:
+        with open(path, "r+b") as f:
+            f.seek(0)
+            f.write(payload)
+            if os.fstat(f.fileno()).st_size != target_size:
+                f.truncate(target_size)
+    except FileNotFoundError:
+        with open(path, "wb") as f:
+            f.write(payload)
 
 
 def _stretch_sample_view(img: np.ndarray) -> np.ndarray:
@@ -1267,6 +1335,10 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         qnn_mode += ", daemon=off"
     if QNN_CONFIG_FILE:
         qnn_mode += f", config={os.path.basename(QNN_CONFIG_FILE)}"
+    if QNN_HVX_THREADS > 0:
+        qnn_mode += f", hvx={QNN_HVX_THREADS}"
+    if QNN_VTCM_MB > 0:
+        qnn_mode += f", vtcm={QNN_VTCM_MB}"
     if QNN_PROFILING_LEVEL:
         qnn_mode += f", profiling={QNN_PROFILING_LEVEL}"
     _log(qnn_mode)
@@ -1722,8 +1794,8 @@ def _run_unet_split(latent_np, timestep, step_idx, tag):
     smp_path = f"{base}/smp.raw"
     ts_path = f"{base}/ts.raw"
 
-    latent_np.astype(np.float32).tofile(smp_path)
-    np.array([float(timestep)], dtype=np.float32).tofile(ts_path)
+    _write_array_reuse(smp_path, latent_np, dtype=np.float32)
+    _write_array_reuse(ts_path, np.array([float(timestep)], dtype=np.float32), dtype=np.float32)
 
     enc_entries = _enc_dec_inputs(base, smp_path, ts_path)
     il_enc = f"{base}/il_enc.txt"
@@ -1753,11 +1825,10 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx):
     ts_path = f"{cond_base}/ts.raw"
     smp_np = latent_np.astype(np.float32)
     ts_np = np.array([float(timestep)], dtype=np.float32)
-    smp_np.tofile(smp_path)
-    ts_np.tofile(ts_path)
+    _write_array_reuse(smp_path, smp_np, dtype=np.float32)
+    _write_array_reuse(ts_path, ts_np, dtype=np.float32)
     # uncond uses the same values — write them there too
-    smp_np.tofile(f"{uncond_base}/smp.raw")
-    ts_np.tofile(f"{uncond_base}/ts.raw")
+    _write_array_reuse(f"{uncond_base}/smp.raw", smp_np, dtype=np.float32)
 
     enc_out_batch = f"{WORK_DIR}/unet/enc_batch"
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
