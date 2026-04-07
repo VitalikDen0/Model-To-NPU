@@ -1,0 +1,606 @@
+{
+  "version": 2,
+  "description": "Calibration prompts for SDXL UNet INT8 (50 SFW + 50 N-prefixed)",
+  "prompts": [
+    {
+      "id": 1,
+      "type": "SFW",
+      "positive": "Miku, full body, maid costume, 1girl, city street, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 2,
+      "type": "SFW",
+      "positive": "Rem, full body, school uniform, 1girl, classroom, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 3,
+      "type": "SFW",
+      "positive": "Asuna, full body, office outfit, 1girl, rooftop, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 4,
+      "type": "SFW",
+      "positive": "Zero Two, full body, hoodie, 1girl, kitchen, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 5,
+      "type": "SFW",
+      "positive": "Saber, full body, casual outfit, 1girl, shrine, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 6,
+      "type": "SFW",
+      "positive": "Rin Tohsaka, full body, winter coat, 1girl, shopping mall, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 7,
+      "type": "SFW",
+      "positive": "Mikasa, full body, kimono, 1girl, studio room, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 8,
+      "type": "SFW",
+      "positive": "Marin Kitagawa, full body, sportswear, 1girl, cafe, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 9,
+      "type": "SFW",
+      "positive": "Nami, full body, idol outfit, 1girl, office, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 10,
+      "type": "SFW",
+      "positive": "Robin, full body, barista uniform, 1girl, train station, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 11,
+      "type": "SFW",
+      "positive": "Yor Forger, full body, nurse outfit, 1girl, rainy alley, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 12,
+      "type": "SFW",
+      "positive": "Anya Forger, full body, chef uniform, 1girl, snowy street, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 13,
+      "type": "SFW",
+      "positive": "Violet Evergarden, full body, gamer outfit, 1girl, music stage, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 14,
+      "type": "SFW",
+      "positive": "Megumin, full body, detective coat, 1girl, festival street, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 15,
+      "type": "SFW",
+      "positive": "Aqua, full body, fantasy robe, 1girl, library, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 16,
+      "type": "SFW",
+      "positive": "Emilia, full body, streetwear, 1girl, park, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 17,
+      "type": "SFW",
+      "positive": "Kurisu, full body, summer dress, 1girl, bedroom, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 18,
+      "type": "SFW",
+      "positive": "Shinobu, full body, business suit, 1girl, flower garden, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 19,
+      "type": "SFW",
+      "positive": "Kanao, full body, punk outfit, 1girl, beach, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 20,
+      "type": "SFW",
+      "positive": "Nezuko, full body, formal dress, 1girl, arcade, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 21,
+      "type": "SFW",
+      "positive": "Nobara, full body, maid costume, 1girl, city street, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 22,
+      "type": "SFW",
+      "positive": "Maki, full body, school uniform, 1girl, classroom, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 23,
+      "type": "SFW",
+      "positive": "Power, full body, office outfit, 1girl, rooftop, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 24,
+      "type": "SFW",
+      "positive": "Makima, full body, hoodie, 1girl, kitchen, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 25,
+      "type": "SFW",
+      "positive": "Rias, full body, casual outfit, 1girl, shrine, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 26,
+      "type": "SFW",
+      "positive": "Akeno, full body, winter coat, 1girl, shopping mall, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 27,
+      "type": "SFW",
+      "positive": "Lucy, full body, kimono, 1girl, studio room, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 28,
+      "type": "SFW",
+      "positive": "Erza, full body, sportswear, 1girl, cafe, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 29,
+      "type": "SFW",
+      "positive": "Tohru, full body, idol outfit, 1girl, office, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 30,
+      "type": "SFW",
+      "positive": "Kobayashi, full body, barista uniform, 1girl, train station, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 31,
+      "type": "SFW",
+      "positive": "Kaguya, full body, nurse outfit, 1girl, rainy alley, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 32,
+      "type": "SFW",
+      "positive": "Chika, full body, chef uniform, 1girl, snowy street, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 33,
+      "type": "SFW",
+      "positive": "Ai Hoshino, full body, gamer outfit, 1girl, music stage, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 34,
+      "type": "SFW",
+      "positive": "Kana Arima, full body, detective coat, 1girl, festival street, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 35,
+      "type": "SFW",
+      "positive": "Frieren, full body, fantasy robe, 1girl, library, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 36,
+      "type": "SFW",
+      "positive": "Fern, full body, streetwear, 1girl, park, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 37,
+      "type": "SFW",
+      "positive": "Maomao, full body, summer dress, 1girl, bedroom, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 38,
+      "type": "SFW",
+      "positive": "Komi, full body, business suit, 1girl, flower garden, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 39,
+      "type": "SFW",
+      "positive": "Nino Nakano, full body, punk outfit, 1girl, beach, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 40,
+      "type": "SFW",
+      "positive": "Yotsuba Nakano, full body, formal dress, 1girl, arcade, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 41,
+      "type": "SFW",
+      "positive": "Holo, full body, maid costume, 1girl, city street, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 42,
+      "type": "SFW",
+      "positive": "CC, full body, school uniform, 1girl, classroom, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 43,
+      "type": "SFW",
+      "positive": "Eula, full body, office outfit, 1girl, rooftop, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 44,
+      "type": "SFW",
+      "positive": "Raiden Shogun, full body, hoodie, 1girl, kitchen, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 45,
+      "type": "SFW",
+      "positive": "Ganyu, full body, casual outfit, 1girl, shrine, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 46,
+      "type": "SFW",
+      "positive": "Yoimiya, full body, winter coat, 1girl, shopping mall, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 47,
+      "type": "SFW",
+      "positive": "Hu Tao, full body, kimono, 1girl, studio room, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 48,
+      "type": "SFW",
+      "positive": "Keqing, full body, sportswear, 1girl, cafe, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 49,
+      "type": "SFW",
+      "positive": "Ayaka, full body, idol outfit, 1girl, office, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 50,
+      "type": "SFW",
+      "positive": "Nahida, full body, barista uniform, 1girl, train station, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 51,
+      "type": "N",
+      "positive": "N, Shinobu, full body, sportswear, 1girl, library, sunset",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 52,
+      "type": "N",
+      "positive": "N, Kanao, full body, idol outfit, 1girl, kitchen, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 53,
+      "type": "N",
+      "positive": "N, Nezuko, full body, barista uniform, 1girl, music stage, overcast",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 54,
+      "type": "N",
+      "positive": "N, Nobara, full body, nurse outfit, 1girl, classroom, neon light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 55,
+      "type": "N",
+      "positive": "N, Maki, full body, chef uniform, 1girl, rainy alley, window light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 56,
+      "type": "N",
+      "positive": "N, Power, full body, gamer outfit, 1girl, arcade, indoor light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 57,
+      "type": "N",
+      "positive": "N, Makima, full body, detective coat, 1girl, office, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 58,
+      "type": "N",
+      "positive": "N, Rias, full body, fantasy robe, 1girl, flower garden, warm light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 59,
+      "type": "N",
+      "positive": "N, Akeno, full body, streetwear, 1girl, studio room, soft light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 60,
+      "type": "N",
+      "positive": "N, Lucy, full body, summer dress, 1girl, park, night",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 61,
+      "type": "N",
+      "positive": "N, Erza, full body, business suit, 1girl, shrine, sunset",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 62,
+      "type": "N",
+      "positive": "N, Tohru, full body, punk outfit, 1girl, festival street, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 63,
+      "type": "N",
+      "positive": "N, Kobayashi, full body, formal dress, 1girl, rooftop, overcast",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 64,
+      "type": "N",
+      "positive": "N, Kaguya, full body, maid costume, 1girl, snowy street, neon light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 65,
+      "type": "N",
+      "positive": "N, Chika, full body, school uniform, 1girl, city street, window light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 66,
+      "type": "N",
+      "positive": "N, Ai Hoshino, full body, office outfit, 1girl, train station, indoor light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 67,
+      "type": "N",
+      "positive": "N, Kana Arima, full body, hoodie, 1girl, beach, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 68,
+      "type": "N",
+      "positive": "N, Frieren, full body, casual outfit, 1girl, cafe, warm light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 69,
+      "type": "N",
+      "positive": "N, Fern, full body, winter coat, 1girl, bedroom, soft light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 70,
+      "type": "N",
+      "positive": "N, Maomao, full body, kimono, 1girl, shopping mall, night",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 71,
+      "type": "N",
+      "positive": "N, Komi, full body, sportswear, 1girl, library, sunset",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 72,
+      "type": "N",
+      "positive": "N, Nino Nakano, full body, idol outfit, 1girl, kitchen, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 73,
+      "type": "N",
+      "positive": "N, Yotsuba Nakano, full body, barista uniform, 1girl, music stage, overcast",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 74,
+      "type": "N",
+      "positive": "N, Holo, full body, nurse outfit, 1girl, classroom, neon light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 75,
+      "type": "N",
+      "positive": "N, CC, full body, chef uniform, 1girl, rainy alley, window light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 76,
+      "type": "N",
+      "positive": "N, Eula, full body, gamer outfit, 1girl, arcade, indoor light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 77,
+      "type": "N",
+      "positive": "N, Raiden Shogun, full body, detective coat, 1girl, office, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 78,
+      "type": "N",
+      "positive": "N, Ganyu, full body, fantasy robe, 1girl, flower garden, warm light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 79,
+      "type": "N",
+      "positive": "N, Yoimiya, full body, streetwear, 1girl, studio room, soft light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 80,
+      "type": "N",
+      "positive": "N, Hu Tao, full body, summer dress, 1girl, park, night",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 81,
+      "type": "N",
+      "positive": "N, Keqing, full body, business suit, 1girl, shrine, sunset",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 82,
+      "type": "N",
+      "positive": "N, Ayaka, full body, punk outfit, 1girl, festival street, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 83,
+      "type": "N",
+      "positive": "N, Nahida, full body, formal dress, 1girl, rooftop, overcast",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 84,
+      "type": "N",
+      "positive": "N, Kafka, full body, maid costume, 1girl, snowy street, neon light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 85,
+      "type": "N",
+      "positive": "N, Silver Wolf, full body, school uniform, 1girl, city street, window light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 86,
+      "type": "N",
+      "positive": "N, Firefly, full body, office outfit, 1girl, train station, indoor light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 87,
+      "type": "N",
+      "positive": "N, Acheron, full body, hoodie, 1girl, beach, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 88,
+      "type": "N",
+      "positive": "N, March 7th, full body, casual outfit, 1girl, cafe, warm light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 89,
+      "type": "N",
+      "positive": "N, Himeko, full body, winter coat, 1girl, bedroom, soft light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 90,
+      "type": "N",
+      "positive": "N, Bronya, full body, kimono, 1girl, shopping mall, night",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 91,
+      "type": "N",
+      "positive": "N, Seele, full body, sportswear, 1girl, library, sunset",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 92,
+      "type": "N",
+      "positive": "N, Jingliu, full body, idol outfit, 1girl, kitchen, daylight",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 93,
+      "type": "N",
+      "positive": "N, Black Swan, full body, barista uniform, 1girl, music stage, overcast",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 94,
+      "type": "N",
+      "positive": "N, Miku, full body, nurse outfit, 1girl, classroom, neon light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 95,
+      "type": "N",
+      "positive": "N, Rem, full body, chef uniform, 1girl, rainy alley, window light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 96,
+      "type": "N",
+      "positive": "N, Asuna, full body, gamer outfit, 1girl, arcade, indoor light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 97,
+      "type": "N",
+      "positive": "N, Zero Two, full body, detective coat, 1girl, office, cold light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 98,
+      "type": "N",
+      "positive": "N, Saber, full body, fantasy robe, 1girl, flower garden, warm light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 99,
+      "type": "N",
+      "positive": "N, Rin Tohsaka, full body, streetwear, 1girl, studio room, soft light",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    },
+    {
+      "id": 100,
+      "type": "N",
+      "positive": "N, Mikasa, full body, summer dress, 1girl, park, night",
+      "negative": "(worst quality, low quality, normal quality:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, text, watermark, signature, censor, censored, bar"
+    }
+  ]
+}

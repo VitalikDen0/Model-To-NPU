@@ -1,13 +1,13 @@
 # Живой пример SDXL-раскладки на телефоне
 
-Этот файл документирует **реальный снимок структуры каталогов**, собранный **2026-03-30** с подключённого телефона через `adb shell su -c ...`.
+Этот файл документирует **реальный снимок структуры каталогов**, собранный **2026-03-29** с подключённого телефона через `adb shell su -c ...`.
 
 Он отражает **историческую rooted-раскладку**. Текущая основная non-root цель деплоя, описанная в репозитории, — `/sdcard/Download/sdxl_qnn`.
 
-Текущие SDXL context binaries и примеры результатов в этом репозитории рассчитаны именно на **1024×1024**. Поэтому этот снимок тоже следует воспринимать как пример раскладки для 1024×1024, а не как универсальную multi-resolution схему.
-
 Файл включён в репозиторий как пример того, что toolchain уже реально создавал на устройстве.  
 Крупные бинарные файлы в git **не** хранятся — это только инвентаризация и справка.
+
+> **Примечание:** текущий live preview runtime теперь в первую очередь предпочитает rebuilt QNN TAESD preview assets на GPU (`context/taesd_decoder.serialized.bin.bin` вместе с `model/libTAESDDecoder.so`) и откатывается на маленький CPU-side ONNX decoder (`phone_gen/taesd_decoder.onnx`) только когда QNN preview недоступен. Этот rooted-снимок всё ещё полезен как исторический пример раскладки.
 
 ## Базовый путь
 
@@ -31,7 +31,6 @@
 ```text
 clip_l.serialized.bin.bin
 clip_g.serialized.bin.bin
-taesd_decoder.serialized.bin.bin
 unet_encoder_fp16.serialized.bin.bin
 unet_decoder_fp16.serialized.bin.bin
 unet_lightning8step.serialized.bin.bin
@@ -66,8 +65,6 @@ libvae_decoder.so
 - `htp_backend_extensions_*.json`
 - `runtime_work_gen/`
 - helper shell scripts вроде `run_cfg35.sh`, `run_seed15.sh` и `run_test.sh`
-
-Текущий rooted runtime теперь также включает опциональный TAESD preview path, который использует live preview в APK `v0.1.1`.
 
 ## Зачем нужен этот файл
 
