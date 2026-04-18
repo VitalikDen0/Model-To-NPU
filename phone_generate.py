@@ -479,6 +479,7 @@ def _resolve_exec_binary(path: str) -> str:
         return path
 
     dst = os.path.join(WORK_DIR, "bin", os.path.basename(path))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
         needs_copy = (
             not os.path.exists(dst)
@@ -1334,7 +1335,9 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     else:
         qnn_mode += ", daemon=off"
     if QNN_CONFIG_FILE:
-        qnn_mode += f", config={os.path.basename(QNN_CONFIG_FILE)}"
+        qnn_mode += f", backend-ext=requested:{os.path.basename(QNN_CONFIG_FILE)}"
+    else:
+        qnn_mode += ", backend-ext=off"
     if QNN_HVX_THREADS > 0:
         qnn_mode += f", hvx={QNN_HVX_THREADS}"
     if QNN_VTCM_MB > 0:
@@ -1342,6 +1345,10 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     if QNN_PROFILING_LEVEL:
         qnn_mode += f", profiling={QNN_PROFILING_LEVEL}"
     _log(qnn_mode)
+    if QNN_CONFIG_FILE:
+        _log("  [QNN] ~62s-class runs assume the HTP backend-extension fast path is truly active on this deployment")
+    else:
+        _log("  [QNN] backend-extension fast path is off; ~78s-class full runs are expected in this mode")
     if use_cfg:
         _log(f"Neg:    {neg_prompt[:80]}{'...' if len(neg_prompt) > 80 else ''}")
     _log(f"Seed: {seed}, Steps: {steps}, CFG: {cfg_scale}")

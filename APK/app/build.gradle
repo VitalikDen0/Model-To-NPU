@@ -2,6 +2,62 @@ plugins {
     id 'com.android.application'
 }
 
+def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
+def resolveExistingDir = { candidate ->
+    if (candidate == null) {
+        return null
+    }
+    File dir = candidate instanceof File ? candidate : new File(candidate.toString())
+    if (!dir.exists()) {
+        return null
+    }
+    File canonical = dir.canonicalFile
+    File debDir = new File(canonical, "termux_repo/debs")
+    File offlineInstaller = new File(canonical, "termux_repo/install_offline_termux.sh")
+    return debDir.isDirectory() && offlineInstaller.isFile() ? canonical : null
+}
+def modelToNpuRootProp = project.findProperty("modelToNpuRoot")?.toString()
+def modelToNpuRootEnv = System.getenv("MODEL_TO_NPU_ROOT")
+def localToolsCandidates = [
+    modelToNpuRootProp ? new File(modelToNpuRootProp, "local_tools") : null,
+    modelToNpuRootEnv ? new File(modelToNpuRootEnv, "local_tools") : null,
+    new File(project.projectDir, "../../local_tools"),
+    new File("V:/Model-To-NPU/local_tools"),
+]
+def bundledLocalToolsDir = localToolsCandidates.collect(resolveExistingDir).find { it != null }
+
+tasks.register("stageBundledTermuxAssets") {
+    outputs.dir(bundledTermuxAssetsDir)
+    doLast {
+        delete(bundledTermuxAssetsDir)
+        if (bundledLocalToolsDir == null) {
+            logger.warn("Bundled Termux assets disabled: local_tools directory was not found")
+            return
+        }
+
+        logger.lifecycle("Bundling Termux offline assets from ${bundledLocalToolsDir}")
+
+        copy {
+            into bundledTermuxAssetsDir
+            from(new File(bundledLocalToolsDir, "termux_repo/debs")) {
+                into "termux_bundle/debs"
+            }
+            from(new File(bundledLocalToolsDir, "termux_repo/install_offline_termux.sh")) {
+                into "termux_bundle/scripts"
+            }
+            from(new File(bundledLocalToolsDir, "termux_repo/resolved_packages.tsv")) {
+                into "termux_bundle"
+            }
+            from(new File(bundledLocalToolsDir, "termux_bootstrap_sdxl.sh")) {
+                into "termux_bundle/scripts"
+            }
+            from(new File(bundledLocalToolsDir, "termux_run_bootstrap.sh")) {
+                into "termux_bundle/scripts"
+            }
+        }
+    }
+}
+
 android {
     namespace 'com.sdxlnpu.app'
     compileSdk 34
@@ -10,8 +66,8 @@ android {
         applicationId "com.sdxlnpu.app"
         minSdk 28
         targetSdk 34
-        versionCode 12
-        versionName "0.2.3"
+        versionCode 14
+        versionName "0.2.4-beta"
     }
 
     buildTypes {
@@ -25,6 +81,16 @@ android {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
+
+    sourceSets {
+        main {
+            assets.srcDirs += bundledTermuxAssetsDir
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("stageBundledTermuxAssets")
 }
 
 dependencies {

@@ -23,10 +23,12 @@
 
 - для каждой семьи моделей предполагается своя папка;
 - **текущая реализованная папка** — `SDXL/`;
+- ранний исследовательский workspace `WAN 2.1 1.3B/` теперь выделен отдельно под Wan 2.1 T2V 1.3B;
 - **текущее Android-приложение** лежит в `APK/`;
 - общие deploy-скрипты и вспомогательные файлы живут в `scripts/`, `tokenizer/` и в корне.
 
 Сейчас реально реализованный и задокументированный путь — это **Stable Diffusion XL**, работающий **нативно на NPU телефона** (Hexagon HTP). Текущий SDXL pipeline использует CLIP-L, CLIP-G, Split UNet (encoder + decoder) и VAE прямо на устройстве.
+Папка `WAN 2.1 1.3B/` уже добавлена для исследований по Wan, но это **ещё не подтверждённый phone pipeline**.
 
 **Текущее протестированное сочетание:** [WAI Illustrious SDXL v1.60](https://civitai.com/models/827184/wai-illustrious-sdxl?modelVersionId=2514310) + [SDXL-Lightning 8-step LoRA](https://huggingface.co/ByteDance/SDXL-Lightning) (ByteDance)
 
@@ -38,6 +40,7 @@
 
 - **Направление репозитория:** multi-model pipeline'ы под Snapdragon NPU
 - **Сейчас реализованная семья:** `SDXL/`
+- **Исследовательский Wan-workspace:** `WAN 2.1 1.3B/` (поиск кандидатов, helper'ы для загрузки, проверка телефона, 480p-first план)
 - **Текущая цель APK:** SDXL
 - **Статус скриптов:** практический SDXL цикл (checkpoint -> image) повторно подтверждён на текущей структуре
 - **Статус документации:** обновлена под текущую известную структуру
@@ -136,7 +139,7 @@
 Для `v0.2.3` теперь есть два практических маркера скорости:
 
 - **README-visible APK marker (Live Preview ON):** около **78.0 s total**;
-- **последний точный runtime-прогон (Live Preview OFF, тот же `v0.2.3` путь):** **62.0 s total** при `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, со стадиями `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
+- **последний точный runtime-прогон с активным HTP backend-extension fast path (Live Preview OFF, тот же `v0.2.3` путь):** **62.0 s total** при `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, со стадиями `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
 
 Прогрессия шагов UNet в этом точном прогоне:
 
@@ -144,6 +147,8 @@
 - no-guidance шаги 5..8: **5.377 → 5.513 → 5.294 → 5.479 s**.
 
 Live preview через TAESD по-прежнему в первую очередь использует rebuilt **QNN GPU** assets и держится примерно около **1.0 s/шаг**; именно этот preview/UI-overhead и даёт более высокие итоговые цифры на APK-скриншотах по сравнению с no-preview runtime-замером.
+
+Практически это стоит читать так: полный прогон в диапазоне **~77–80 s** остаётся нормальным, если backend-extension fast path отсутствует, реально не активировался или не сработал на задеплоенном runtime; маркер **62.0 s** нужно воспринимать как лучший точный runtime-ориентир для того же пути только при реально активных HTP backend extensions.
 
 В этих полных прогретых прогонах практическая термокартина держалась примерно в диапазоне **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, при кратковременных пиках NPU примерно до **78°C**. Самая первая строка с `CPU=88.8°C` выглядела как краткий скачок сенсора до стабилизации, а не как устойчивое состояние во время генерации.
 
@@ -279,7 +284,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, live-температуры CPU / GPU / NPU и сохранение в галерею.  
-В `v0.2.3` APK доступны опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, запуск phone runtime по умолчанию включает QNN `mmap` + `sustained_high_performance`, при наличии нужных `.json` + `.so` автоматически прокидывается backend-extension config, временные runtime-файлы пишутся в app-private cache вместо общей папки, APK корректно парсит preview-тайминги вида `QNN GPU ...ms`, а документация уже описывает rebuilt QNN TAESD preview path на GPU с реальным временем порядка **1.0 s** на шаг.
+В `v0.2.4` APK сохраняет опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, по умолчанию включает QNN `mmap` + `sustained_high_performance`, фиксирует текущую форму runtime как daemon OFF + async/prestage/prewarm ON, при наличии нужных `.json` + `.so` автоматически прокидывает backend-extension config, пишет временные runtime-файлы в app-private cache вместо общей папки, корректно парсит preview-тайминги вида `QNN GPU ...ms`, а также сначала пробует bundled/offline Python и только потом переключается на root shell, если app process не видит Termux-private `python3`.
 Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
 
 Важно по версиям: speed-критичные изменения часто попадают в `phone_generate.py` (на телефоне это `phone_gen/generate.py`), поэтому одна и та же версия APK может начать работать быстрее после обновления только runtime-скрипта, даже без пересборки APK.
@@ -359,6 +364,11 @@ python SDXL/debug/generate.py "orange cat on wooden chair, detailed fur" --seed 
 │   │   └── build_android_model_lib_windows.py
 │   ├── LESSONS_LEARNED.md    ← подводные камни и решения
 │   └── LESSONS_LEARNED_RU.md ← русская версия lessons learned
+├── WAN 2.1 1.3B/             ← ранний workspace для экспериментов с Wan 2.1 T2V 1.3B
+│   ├── README.md             ← текущая стратегия выбора и старта
+│   ├── wan_tool.py           ← матрица кандидатов, рекомендация, загрузка, adb-проверка телефона
+│   ├── download_wan_assets.py← wrapper для загрузок
+│   └── phone_check.py        ← wrapper для adb-проверки телефона
 └── APK/                      ← Android-приложение
     ├── README.md
     └── app/src/main/
@@ -452,8 +462,8 @@ Non-Commercial Reciprocity License 1.0** — см. [LICENSE](LICENSE) и
 - если вы распространяете форк/производную версию или публично её
   разворачиваете, нужно открыть полный набор исходников и файлов сборки под
   **той же лицензией**;
-- обязательна сохранённая атрибуция и явное указание, что исходная идея/
-  концепция идёт от оригинального автора, указанного в [`NOTICE`](NOTICE);
+- обязательна сохранённая атрибуция согласно требованиям из
+  [`NOTICE`](NOTICE);
 - закрытые или монетизируемые derivative-версии **запрещены**.
 
 Это **source-available**, а не OSI open source лицензия, потому что

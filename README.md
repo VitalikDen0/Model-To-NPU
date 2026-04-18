@@ -24,6 +24,7 @@ Reducing this overhead is the current top optimization priority.
 Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 **Current implemented family:** `SDXL/`  
+**Exploratory Wan workspace:** `WAN 2.1 1.3B/` (research / selection / 480p-first planning)  
 **Current public beta result:** SDXL generation on a Snapdragon phone NPU with CLIP-L, CLIP-G, split UNet, VAE, Termux runtime, and an Android APK.
 
 ## Latest validation snapshot
@@ -31,7 +32,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - **2026-04-06:** practical SDXL full loop was re-validated from checkpoint build to final phone-generated PNG.
 - Checkpoint used: `waiIllustriousSDXL_v160.safetensors`.
 - Final validated output: `NPU/outputs/wai160_phone_native_cfg35_20260406.png`.
-- Latest precise runtime timing (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF): `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, **`62.0 s total`**.
+- Latest precise runtime timing with the active HTP backend-extension fast path (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF): `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, **`62.0 s total`**.
 - Updated full walkthroughs are documented in:
   - [`README_EN.md`](README_EN.md)
   - [`README_RU.md`](README_RU.md)
@@ -44,6 +45,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - [License and usage terms](LICENSE)
 - [Mandatory attribution notice](NOTICE)
 - [Android app notes](APK/README.md)
+- [WAN 2.1 1.3B exploration workspace](WAN%202.1%201.3B/README.md)
 - [Live phone-side layout example](examples/phone-sdxl-qnn-layout.md)
 - [SDXL script map (EN)](SDXL/SCRIPTS_OVERVIEW.md)
 - [SDXL script map (RU)](SDXL/SCRIPTS_OVERVIEW_RU.md)
@@ -67,13 +69,13 @@ In short:
 - use, study, modify, and fork are allowed for **non-commercial** purposes;
 - any fork or derivative that is redistributed or publicly deployed must stay
   **fully open in source form** under the **same license**;
-- required attribution must be preserved, including clear credit that the
-  original project idea/concept comes from the original author identified in
-  [`NOTICE`](NOTICE);
+- required attribution from [`NOTICE`](NOTICE) must be preserved in copies,
+  forks, and public deployments;
 - closed-source or monetized derivatives are **not permitted**.
 
 ## Changelog
 
+- **0.2.4** — APK/runtime/docs were tightened around the current fast-path reality: the launcher now pins daemon OFF and the current async/prestage/prewarm path ON, bundled/offline Python fallback stays wired into the APK bootstrap, `phone_generate.py` now logs whether the HTP backend-extension fast path is requested or fully off, runtime binary staging now creates `WORK_DIR/bin` before copying `qnn-net-run`, the deploy helper can pick up `libQnnHtpV79Skel.so` from sibling `hexagon-v79/unsigned` SDK folders, and the docs now explicitly treat **~78 s** as the normal full-run class when the backend-extension fast path is absent/inactive while **62.0 s** remains the best precise marker when that path is actually active.
 - **0.2.3** — APK/runtime/docs were refreshed around the new fast path: the split-UNet reuse pass now makes the early guided steps decay instead of hovering near a flat ~12 s plateau; the README-visible APK marker is **78.0 s total** (Live Preview ON), while the latest precise runtime-only run reached **62.0 s total** (`CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`) with Live Preview OFF on the same `v0.2.3` path; TAESD live preview now runs through rebuilt QNN GPU assets at roughly **1.0 s** per step instead of the older 5.5–6.0 s CPU path.
 - **0.2.2** — APK/runtime snapshot refreshed for the current validation cycle: TAESD preview wiring was repaired for the QNN path, APK preview timing parsing now handles `QNN GPU` preview lines again, and the deploy/docs/sample notes were synchronized around the current phone runtime layout while early CFG-step tuning remains under active investigation.
 - **0.2.1** — APK now routes transient runtime files (`WORK_DIR`, generated PNGs, and live preview frames) through app-private cache directories instead of shared storage, while keeping the deployed model tree in the public phone path.
@@ -145,7 +147,7 @@ That corresponds to:
 - **38.8s faster** vs `100.8s` (~**38.5%**);
 - **16.0s faster** vs the `78.0s` screenshot marker (~**20.5%**).
 
-In short: **78.0s** remains a valid README-visible APK marker with Live Preview ON, while **62.0s** is the latest precise runtime timing for the same `v0.2.3` path with Live Preview OFF.
+In short: **78.0s** remains a valid README-visible APK marker with Live Preview ON, and roughly **78s-class** full runs are still normal whenever the backend-extension fast path is absent or not effectively active; **62.0s** is the latest precise runtime timing for the same `v0.2.3` path with Live Preview OFF and the fast path active.
 
 ## Runtime updates vs APK version
 
@@ -181,6 +183,7 @@ In short:
 ## Current repository layout
 
 - `SDXL/` — SDXL conversion, calibration, verification, QNN, and runtime experiments;
+- `WAN 2.1 1.3B/` — early Wan 2.1 T2V 1.3B research, candidate selection, download helpers, and phone probing;
 - `APK/` — Android app for on-device generation;
 - `scripts/` — deploy and helper scripts;
 - `tokenizer/` — shared tokenizer files;

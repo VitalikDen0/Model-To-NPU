@@ -23,10 +23,12 @@ This repository is intended to grow into a home for multiple **model-specific pi
 
 - each model family gets its own folder;
 - the **current implemented folder** is `SDXL/`;
+- an early exploratory `WAN 2.1 1.3B/` workspace now exists for Wan 2.1 T2V 1.3B model scouting and preparation;
 - the **current Android app** lives in `APK/`;
 - shared deployment helpers and assets live in `scripts/`, `tokenizer/`, and top-level helpers.
 
 Right now the implemented and documented pipeline is **Stable Diffusion XL** running **natively on the phone NPU** (Hexagon HTP). The working SDXL path uses CLIP-L, CLIP-G, Split UNet (encoder + decoder), and VAE on the device.
+An early `WAN 2.1 1.3B/` folder is now present for Wan-related research, but it is **not yet a validated phone pipeline**.
 
 **Current tested model combination:** [WAI Illustrious SDXL v1.60](https://civitai.com/models/827184/wai-illustrious-sdxl?modelVersionId=2514310) + [SDXL-Lightning 8-step LoRA](https://huggingface.co/ByteDance/SDXL-Lightning) (ByteDance)
 
@@ -38,6 +40,7 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 - **Repository direction:** multi-model Snapdragon NPU pipelines
 - **Currently implemented family:** `SDXL/`
+- **Exploratory Wan workspace:** `WAN 2.1 1.3B/` (candidate scouting, download helpers, phone probing, 480p-first plan)
 - **Current phone app target:** SDXL
 - **Status of scripts:** full practical SDXL loop (checkpoint -> image) re-validated on current layout
 - **Status of docs:** updated to the current known layout
@@ -136,7 +139,7 @@ Fresh `v0.2.0` tuned runs with **live thermal logging**, default `sustained_high
 Fresh `v0.2.3` measurements now have two practical markers:
 
 - **README-visible APK marker (Live Preview ON):** about **78.0 s total**;
-- **latest precise runtime run (Live Preview OFF, same `v0.2.3` path):** **62.0 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
+- **latest precise runtime run with the active HTP backend-extension fast path (Live Preview OFF, same `v0.2.3` path):** **62.0 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
 
 UNet step progression in that precise run:
 
@@ -144,6 +147,8 @@ UNet step progression in that precise run:
 - no-guidance steps 5..8: **5.377 → 5.513 → 5.294 → 5.479 s**.
 
 TAESD live preview still prefers rebuilt **QNN GPU** assets and is currently around **1.0 s/step**; this preview/UI overhead is the main reason APK screenshot-visible totals are higher than no-preview runtime totals.
+
+Practical interpretation: a full run in the **~77–80 s** range is still normal when the backend-extension fast path is absent, ineffective, or simply not actually engaged on the deployed runtime; the **62.0 s** marker should be treated as the best precise runtime figure for the same path only when the HTP backend extensions are genuinely active.
 
 In those warmed-up full runs, the practical thermal envelope stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes observed up to about **78°C**. An early one-line CPU spike to `88.8°C` appeared before the first run stabilized and looks more like a transient sensor jump than the sustained generation state.
 
@@ -279,7 +284,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
-APK `v0.2.3` includes the optional **Live Preview (TAESD)** toggle, the **½-CFG** toggle that keeps CFG only on the first `ceil(steps / 2)` denoising steps when guidance is enabled, enables QNN `mmap` + `sustained_high_performance` by default, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and now documents the rebuilt QNN TAESD preview path that runs on GPU at roughly **1.0 s** per step.
+APK `v0.2.4` keeps the optional **Live Preview (TAESD)** toggle and the **½-CFG** toggle, exports QNN `mmap` + `sustained_high_performance` by default, pins the current daemon-off async/prestage/prewarm runtime shape, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and now also tries bundled/offline Python first before falling back to root shell when the app process cannot see Termux-private `python3`.
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
 
 Performance note: speed-critical runtime changes often land in `phone_generate.py` (deployed as `phone_gen/generate.py`), so the APK version may stay the same while generation gets faster after updating only that runtime script.
@@ -359,6 +364,11 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 │   │   └── build_android_model_lib_windows.py
 │   ├── LESSONS_LEARNED.md    ← Pitfalls and solutions
 │   └── LESSONS_LEARNED_RU.md ← Russian lessons-learned counterpart
+├── WAN 2.1 1.3B/             ← Early Wan 2.1 T2V 1.3B exploration workspace
+│   ├── README.md             ← Current selection and execution strategy
+│   ├── wan_tool.py           ← Candidate matrix, recommendation, download helper, adb phone probe
+│   ├── download_wan_assets.py← Convenience wrapper for downloads
+│   └── phone_check.py        ← Convenience wrapper for adb probing
 └── APK/                      ← Android application
     ├── README.md
     └── app/src/main/
@@ -451,8 +461,8 @@ In short:
   purposes;
 - if you distribute or publicly deploy a derivative, you must provide the full
   corresponding source under the **same license**;
-- you must preserve attribution and clearly credit the original idea/concept to
-  the original author identified in [`NOTICE`](NOTICE);
+- you must preserve the attribution requirements described in
+  [`NOTICE`](NOTICE);
 - closed-source or monetized derivatives are **not permitted**.
 
 This is a **source-available** license model, not an OSI Open Source license,

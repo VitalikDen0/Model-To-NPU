@@ -34,10 +34,13 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,6 +54,10 @@ import java.util.regex.Pattern;
 public class MainActivity extends AppCompatActivity {
 
     private static final String LEGACY_BASE_DIR = SettingsActivity.LEGACY_BASE_DIR;
+    private static final String[] TERMUX_PRIVATE_PREFIXES = new String[] {
+        "/data/data/com.termux/",
+        "/data/user/0/com.termux/",
+    };
 
     private String BASE_DIR;
     private String GEN_SCRIPT;
@@ -81,6 +88,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile Process currentProcess;
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
+    private volatile Boolean rootShellAvailable = null;
 
     // Patterns for parsing generate.py stdout
     private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
@@ -309,7 +317,9 @@ public class MainActivity extends AppCompatActivity {
                              float cfg, String neg, boolean stretch,
                              boolean preview, boolean progCfg, String outName)
             throws IOException, InterruptedException {
-        boolean useRootShell = shouldUseRootShell();
+        ExecutionPlan executionPlan = resolveExecutionPlan();
+        boolean useRootShell = executionPlan.useRootShell;
+        String pythonCommand = executionPlan.pythonCommand;
         if (!useRootShell && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             throw new IOException("Нет доступа к общей папке Downloads. Выдайте приложению доступ ко всем файлам.");
         }
@@ -323,7 +333,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Build shell script (multi-line — no nested-quote issues)
         StringBuilder script = new StringBuilder();
-        script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
+        appendShellEnvironment(script);
         script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
         script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
         script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
@@ -333,6 +343,21 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_SHOW_TEMP=1\n");
         script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
         script.append("export SDXL_QNN_PERF_PROFILE=sustained_high_performance\n");
+        script.append("export SDXL_QNN_USE_DAEMON=0\n");
+        script.append("export SDXL_QNN_ASYNC_PREP=1\n");
+        script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
+        script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=1\n");
+        script.append("export SDXL_QNN_PREWARM_PREVIEW=1\n");
+        script.append("export SDXL_QNN_CLIP_CACHE=1\n");
+        script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
+        script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=1\n");
+        File accelLib = new File(BASE_DIR, "phone_gen/lib/libsdxl_runtime_accel.so");
+        if (accelLib.isFile()) {
+            script.append("export SDXL_QNN_USE_NATIVE_ACCEL=1\n");
+            script.append("export SDXL_QNN_ACCEL_LIB=\"")
+                .append(shellEscape(accelLib.getAbsolutePath()))
+                .append("\"\n");
+        }
         script.append("if [ -f \"").append(shellEscape(BASE_DIR)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
             .append(shellEscape(BASE_DIR)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
         script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(BASE_DIR))
@@ -345,7 +370,7 @@ public class MainActivity extends AppCompatActivity {
             "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n", shellEscape(BASE_DIR)));
         script.append("cd \"").append(shellEscape(BASE_DIR)).append("\"\n");
 
-        script.append("\"").append(shellEscape(PYTHON)).append("\" \"").append(shellEscape(GEN_SCRIPT)).append("\"");
+        script.append("\"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(GEN_SCRIPT)).append("\"");
         script.append(" \"").append(shellEscape(prompt)).append("\"");
         script.append(" --seed ").append(seed);
         script.append(" --steps ").append(steps);
@@ -367,11 +392,15 @@ public class MainActivity extends AppCompatActivity {
         }
         script.append(" 2>&1\n");
 
-        updateStatus("Запуск...", 2);
+        updateStatus(useRootShell ? "Запуск (root shell)..." : "Запуск...", 2);
 
         ProcessBuilder pb;
         if (useRootShell) {
-            pb = new ProcessBuilder(findSu(), "--mount-master");
+            String su = findAvailableSuOrNull();
+            if (su == null) {
+                throw new IOException("Root shell requested, but su binary was not found");
+            }
+            pb = new ProcessBuilder(su, "--mount-master");
         } else {
             pb = new ProcessBuilder("/system/bin/sh");
         }
@@ -532,7 +561,7 @@ public class MainActivity extends AppCompatActivity {
         if (exitCode != 0 && savedPath == null) {
             String hint;
             if (exitCode == 127) {
-                hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках.";
+                hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках или извлеките bundled runtime через Проверку в Настройках.";
             } else if (useRootShell && (exitCode == 1 || exitCode == 13 || exitCode == 126)) {
                 hint = "Root-доступ не предоставлен или окружение Termux недоступно.\nПроверьте Magisk и путь к Python в Настройках.";
             } else if (exitCode == 1 || exitCode == 13 || exitCode == 126) {
@@ -615,18 +644,217 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean shouldUseRootShell() {
-        return BASE_DIR != null && BASE_DIR.startsWith(LEGACY_BASE_DIR);
+        return (BASE_DIR != null && BASE_DIR.startsWith(LEGACY_BASE_DIR))
+            || looksLikePrivatePythonPath(PYTHON);
     }
 
-    private static String findSu() {
+    private void appendShellEnvironment(StringBuilder script) {
+        File bundledPrefix = RuntimeBootstrap.getBundledPrefixDir(this);
+        if (bundledPrefix.isDirectory()) {
+            File bundledBin = new File(bundledPrefix, "bin");
+            File bundledLib = new File(bundledPrefix, "lib");
+            script.append("export PREFIX=\"").append(shellEscape(bundledPrefix.getAbsolutePath())).append("\"\n");
+            script.append("export HOME=\"").append(shellEscape(new File(bundledPrefix, "home").getAbsolutePath())).append("\"\n");
+            script.append("export LD_LIBRARY_PATH=\"")
+                .append(shellEscape(bundledLib.getAbsolutePath()))
+                .append(":$LD_LIBRARY_PATH\"\n");
+            script.append("export PATH=\"")
+                .append(shellEscape(bundledBin.getAbsolutePath()))
+                .append(":/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\"\n");
+            return;
+        }
+        script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
+    }
+
+    private ExecutionPlan resolveExecutionPlan() throws IOException, InterruptedException {
+        String bundledPython = RuntimeBootstrap.findBundledPython(this);
+        LinkedHashSet<String> noRootCandidates = new LinkedHashSet<>();
+        LinkedHashSet<String> rootCandidates = new LinkedHashSet<>();
+
+        addIfPresent(noRootCandidates, bundledPython);
+        if (!looksLikePrivatePythonPath(PYTHON)) {
+            addIfPresent(noRootCandidates, PYTHON);
+        }
+        if (isSimpleCommandName(PYTHON)) {
+            addIfPresent(noRootCandidates, "python3");
+            addIfPresent(noRootCandidates, "python");
+        }
+
+        addIfPresent(rootCandidates, bundledPython);
+        addIfPresent(rootCandidates, PYTHON);
+        addIfPresent(rootCandidates, SettingsActivity.LEGACY_PYTHON);
+        if (isSimpleCommandName(PYTHON)) {
+            addIfPresent(rootCandidates, "python3");
+            addIfPresent(rootCandidates, "python");
+        }
+
+        boolean preferRoot = shouldUseRootShell();
+        if (preferRoot) {
+            ExecutionPlan rootPlan = firstUsablePlan(rootCandidates, true);
+            if (rootPlan != null) {
+                return rootPlan;
+            }
+        }
+
+        ExecutionPlan noRootPlan = firstUsablePlan(noRootCandidates, false);
+        if (noRootPlan != null) {
+            return noRootPlan;
+        }
+
+        if (!preferRoot) {
+            ExecutionPlan rootFallback = firstUsablePlan(rootCandidates, true);
+            if (rootFallback != null) {
+                return rootFallback;
+            }
+        }
+
+        throw new IOException(
+            "Не удалось найти исполняемый Python runtime. Откройте Настройки → Проверить файлы, "
+                + "проверьте путь к Python и, при необходимости, извлеките bundled offline runtime."
+        );
+    }
+
+    private ExecutionPlan firstUsablePlan(Set<String> candidates, boolean useRootShell)
+            throws IOException, InterruptedException {
+        if (useRootShell && !hasWorkingRootShell()) {
+            return null;
+        }
+        for (String candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            String normalized = candidate.trim();
+            if (normalized.isEmpty()) {
+                continue;
+            }
+            if (canExecutePython(useRootShell, normalized)) {
+                return new ExecutionPlan(useRootShell, normalized);
+            }
+        }
+        return null;
+    }
+
+    private boolean canExecutePython(boolean useRootShell, String pythonCommand)
+            throws IOException, InterruptedException {
+        StringBuilder script = new StringBuilder();
+        appendShellEnvironment(script);
+        if (isSimpleCommandName(pythonCommand)) {
+            script.append("if command -v \"")
+                .append(shellEscape(pythonCommand))
+                .append("\" >/dev/null 2>&1; then echo OK; else echo MISS; fi\n");
+        } else {
+            script.append("if [ -x \"")
+                .append(shellEscape(pythonCommand))
+                .append("\" ]; then echo OK; else echo MISS; fi\n");
+        }
+        String output = runShellScriptForOutput(useRootShell, script.toString(), 15);
+        return output.contains("OK");
+    }
+
+    private boolean hasWorkingRootShell() {
+        if (rootShellAvailable != null) {
+            return rootShellAvailable;
+        }
+        try {
+            String output = runShellScriptForOutput(true, "id -u\n", 10);
+            rootShellAvailable = output.contains("0");
+        } catch (Exception e) {
+            rootShellAvailable = false;
+        }
+        return rootShellAvailable;
+    }
+
+    private String runShellScriptForOutput(boolean useRootShell, String script, int timeoutSeconds)
+            throws IOException, InterruptedException {
+        ProcessBuilder pb;
+        if (useRootShell) {
+            String su = findAvailableSuOrNull();
+            if (su == null) {
+                throw new IOException("su binary not found");
+            }
+            pb = new ProcessBuilder(su, "--mount-master");
+        } else {
+            pb = new ProcessBuilder("/system/bin/sh");
+        }
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        try (OutputStream os = process.getOutputStream()) {
+            os.write(script.getBytes("UTF-8"));
+            os.flush();
+        }
+
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append('\n');
+            }
+        }
+
+        boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IOException("shell probe timeout");
+        }
+        return output.toString();
+    }
+
+    private static void addIfPresent(Set<String> target, String value) {
+        if (value == null) {
+            return;
+        }
+        String normalized = value.trim();
+        if (!normalized.isEmpty()) {
+            target.add(normalized);
+        }
+    }
+
+    private static boolean looksLikePrivatePythonPath(String pythonCommand) {
+        if (pythonCommand == null) {
+            return false;
+        }
+        String normalized = pythonCommand.trim();
+        for (String prefix : TERMUX_PRIVATE_PREFIXES) {
+            if (normalized.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isSimpleCommandName(String command) {
+        return command != null
+            && !command.trim().isEmpty()
+            && !command.contains("/")
+            && !command.contains("\\");
+    }
+
+    private static String findAvailableSuOrNull() {
         for (String path : new String[]{
             "/product/bin/su",
             "/sbin/su", "/system/xbin/su", "/system/bin/su",
             "/su/bin/su", "/data/adb/magisk/su"
         }) {
-            if (new File(path).exists()) return path;
+            if (new File(path).exists()) {
+                return path;
+            }
         }
-        return "su";
+        return null;
+    }
+
+    private static final class ExecutionPlan {
+        final boolean useRootShell;
+        final String pythonCommand;
+
+        ExecutionPlan(boolean useRootShell, String pythonCommand) {
+            this.useRootShell = useRootShell;
+            this.pythonCommand = pythonCommand;
+        }
+    }
+
+    private static String findSu() {
+        String available = findAvailableSuOrNull();
+        return available != null ? available : "su";
     }
 
     private void saveImage() {

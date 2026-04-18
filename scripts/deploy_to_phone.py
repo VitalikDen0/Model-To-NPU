@@ -51,10 +51,26 @@ OPTIONAL_QNN_BINS = [
 ]
 
 
+def resolve_qnn_lib_path(qnn_lib_dir: str, lib_name: str) -> str | None:
+    direct = os.path.join(qnn_lib_dir, lib_name)
+    if os.path.exists(direct):
+        return direct
+
+    sibling_candidates = [
+        os.path.join(os.path.dirname(qnn_lib_dir), "hexagon-v79", "unsigned", lib_name),
+        os.path.join(os.path.dirname(os.path.dirname(qnn_lib_dir)), "lib", "hexagon-v79", "unsigned", lib_name),
+    ]
+    for candidate in sibling_candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def phone_dirs(phone_base):
     return [
         f"{phone_base}/context",
         f"{phone_base}/phone_gen/tokenizer",
+        f"{phone_base}/phone_gen/lib",
         f"{phone_base}/phone_gen/work",
         f"{phone_base}/lib",
         f"{phone_base}/bin",
@@ -104,6 +120,32 @@ def find_adb():
                 return c
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
+    return None
+
+
+def detect_default_qnn_lib_dir() -> str | None:
+    candidates = [
+        r"D:\platform-tools\sdxl_npu\qairt_2.44\qairt\2.44.0.260225\lib\aarch64-android",
+        r"C:\Qualcomm\AIStack\QAIRT\2.44.0.260225\lib\aarch64-android",
+        r"D:\platform-tools\sdxl_npu\qairt_2.31\qairt\2.31.0.250130\lib\aarch64-android",
+        r"C:\Qualcomm\AIStack\QAIRT\2.31.0.250130\lib\aarch64-android",
+    ]
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, "libQnnHtp.so")):
+            return candidate
+    return None
+
+
+def detect_default_qnn_bin_dir() -> str | None:
+    candidates = [
+        r"D:\platform-tools\sdxl_npu\qairt_2.44\qairt\2.44.0.260225\bin\aarch64-android",
+        r"C:\Qualcomm\AIStack\QAIRT\2.44.0.260225\bin\aarch64-android",
+        r"D:\platform-tools\sdxl_npu\qairt_2.31\qairt\2.31.0.250130\bin\aarch64-android",
+        r"C:\Qualcomm\AIStack\QAIRT\2.31.0.250130\bin\aarch64-android",
+    ]
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, "qnn-net-run")):
+            return candidate
     return None
 
 
@@ -171,6 +213,17 @@ def find_optional_context_runner(repo_root: str, qnn_bin_dir: str | None) -> str
     return None
 
 
+def find_optional_runtime_accel_lib(repo_root: str) -> str | None:
+    candidates = [
+        os.path.join(repo_root, "NPU", "build", "runtime_accel", "android-arm64", "libsdxl_runtime_accel.so"),
+        os.path.join(repo_root, "phone_gen", "lib", "libsdxl_runtime_accel.so"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Deploy SDXL NPU to phone")
     parser.add_argument("--adb", type=str, default=None,
@@ -208,7 +261,13 @@ def main():
         sys.exit(1)
     serial = args.serial or devices[0]
     phone_base = args.phone_base.rstrip("/")
+    qnn_lib_dir = args.qnn_lib_dir or detect_default_qnn_lib_dir()
+    qnn_bin_dir = args.qnn_bin_dir or detect_default_qnn_bin_dir()
     print(f"Device: {serial}")
+    if qnn_lib_dir:
+        print(f"QNN libs: {qnn_lib_dir}")
+    if qnn_bin_dir:
+        print(f"QNN bins: {qnn_bin_dir}")
 
     # Create directories on phone
     print("\n[1/5] Creating directories...")
@@ -232,37 +291,37 @@ def main():
         print("\n[2/5] Skipping context binaries")
 
     # Push QNN runtime libs
-    if not args.skip_libs and args.qnn_lib_dir:
+    if not args.skip_libs and qnn_lib_dir:
         print("\n[3/5] Pushing QNN runtime libs...")
         for lib in QNN_LIBS:
-            local = os.path.join(args.qnn_lib_dir, lib)
-            if os.path.exists(local):
+            local = resolve_qnn_lib_path(qnn_lib_dir, lib)
+            if local and os.path.exists(local):
                 adb_push(adb, serial, local, f"{phone_base}/lib/{lib}")
             else:
                 print(f"  SKIP {lib} (not found)")
 
         for lib in OPTIONAL_QNN_LIBS:
-            local = os.path.join(args.qnn_lib_dir, lib)
+            local = os.path.join(qnn_lib_dir, lib)
             if os.path.exists(local):
                 adb_push(adb, serial, local, f"{phone_base}/lib/{lib}")
             else:
                 print(f"  SKIP {lib} (optional GPU runtime not found)")
 
         # Push qnn-net-run binary
-        if args.qnn_bin_dir:
-            qnr = os.path.join(args.qnn_bin_dir, "qnn-net-run")
+        if qnn_bin_dir:
+            qnr = os.path.join(qnn_bin_dir, "qnn-net-run")
             if os.path.exists(qnr):
                 adb_push(adb, serial, qnr, f"{phone_base}/bin/qnn-net-run")
                 adb_cmd(adb, serial, "shell", f"chmod 755 {phone_base}/bin/qnn-net-run")
             for bin_name in OPTIONAL_QNN_BINS:
-                local = os.path.join(args.qnn_bin_dir, bin_name)
+                local = os.path.join(qnn_bin_dir, bin_name)
                 if os.path.exists(local):
                     adb_push(adb, serial, local, f"{phone_base}/bin/{bin_name}")
                     adb_cmd(adb, serial, "shell", f"chmod 755 {phone_base}/bin/{bin_name}")
                 else:
                     print(f"  SKIP {bin_name} (optional binary not found)")
     else:
-        print("\n[3/5] Skipping QNN libs (use --qnn-lib-dir)")
+        print("\n[3/5] Skipping QNN libs (use --qnn-lib-dir or keep an auto-detectable QAIRT install)")
 
     # Push phone_generate.py, tokenizer, and optional TAESD preview model
     print("\n[4/5] Pushing phone_generate.py + tokenizer...")
@@ -273,6 +332,19 @@ def main():
         adb_push(adb, serial, gen_py, f"{phone_base}/phone_gen/generate.py")
     else:
         print(f"  ERROR: {gen_py} not found")
+
+    runtime_accel_py = os.path.join(repo_root, "phone_runtime_accel.py")
+    if os.path.exists(runtime_accel_py):
+        adb_push(adb, serial, runtime_accel_py, f"{phone_base}/phone_gen/phone_runtime_accel.py")
+    else:
+        print(f"  SKIP {runtime_accel_py} (optional runtime accelerator wrapper not found)")
+
+    runtime_accel_lib = find_optional_runtime_accel_lib(repo_root)
+    if runtime_accel_lib:
+        adb_push(adb, serial, runtime_accel_lib, f"{phone_base}/phone_gen/lib/libsdxl_runtime_accel.so")
+        adb_cmd(adb, serial, "shell", f"chmod 755 {phone_base}/phone_gen/lib/libsdxl_runtime_accel.so")
+    else:
+        print("  SKIP libsdxl_runtime_accel.so (optional native runtime accelerator not built yet)")
 
     tok_dir = os.path.join(repo_root, "tokenizer")
     for f in ["vocab.json", "merges.txt"]:
@@ -312,7 +384,7 @@ def main():
         (os.path.join(repo_root, "SDXL", "htp_backend_extensions_lightning.json"), f"{phone_base}/htp_backend_extensions_lightning.json", False),
         (os.path.join(repo_root, "SDXL", "htp_backend_ext_config_lightning.json"), f"{phone_base}/htp_backend_ext_config_lightning.json", False),
     ]
-    context_runner = find_optional_context_runner(repo_root, args.qnn_bin_dir)
+    context_runner = find_optional_context_runner(repo_root, qnn_bin_dir)
     if context_runner:
         extra_files.append((context_runner, f"{phone_base}/bin/qnn-context-runner", True))
     else:

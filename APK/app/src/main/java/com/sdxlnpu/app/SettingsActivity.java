@@ -134,6 +134,27 @@ public class SettingsActivity extends AppCompatActivity {
         appendCheck(report, "lib/libQnnHtp.so", qnnLib.isFile(), qnnLib.getAbsolutePath());
         appendCheck(report, "bin/qnn-net-run", qnnRunner.isFile(), qnnRunner.getAbsolutePath());
 
+        report.append("Bundle: ").append(RuntimeBootstrap.describeBundledAssets(this)).append("\n");
+        try {
+            String extractedBundle = RuntimeBootstrap.ensureBundledAssetsExtracted(this);
+            if (extractedBundle != null) {
+                File bundleDir = new File(extractedBundle);
+                File debsDir = new File(bundleDir, "debs");
+                File scriptsDir = new File(bundleDir, "scripts");
+                report.append("Extracted bundle: ").append(extractedBundle).append("\n");
+                appendCheck(report, "bundle/debs/", debsDir.isDirectory(), debsDir.getAbsolutePath());
+                appendCheck(report, "bundle/scripts/", scriptsDir.isDirectory(), scriptsDir.getAbsolutePath());
+                String bundledPython = RuntimeBootstrap.findBundledPython(this);
+                if (bundledPython != null) {
+                    appendCheck(report, "bundle/prefix/bin/python3", true, bundledPython);
+                }
+            }
+        } catch (Exception e) {
+            report.append("Extracted bundle: FAILED\n    ")
+                .append(e.getMessage())
+                .append("\n\n");
+        }
+
         // Show results
         new android.app.AlertDialog.Builder(this)
             .setTitle("Проверка")
