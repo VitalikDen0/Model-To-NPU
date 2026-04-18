@@ -28,6 +28,7 @@ import threading
 import time
 
 import numpy as np
+from phone_runtime_accel import RuntimeTensorArena, get_runtime_accel
 
 # ─── Paths ───
 DEFAULT_BASE_DIR = "/sdcard/Download/sdxl_qnn"
@@ -149,7 +150,7 @@ QNN_PROFILE_ARCHIVE_DIR = os.environ.get("SDXL_QNN_PROFILE_ARCHIVE_DIR", os.path
 QNN_PROFILE_VIEWER = os.environ.get("SDXL_QNN_PROFILE_VIEWER", f"{QNN_BIN_DIR}/qnn-profile-viewer").strip()
 QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
-QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "sustained_high_performance").strip() or "sustained_high_performance"
+QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "burst").strip() or "burst"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
 QNN_USE_DAEMON = _env_bool(("SDXL_QNN_USE_DAEMON", "QNN_USE_DAEMON"), False)
 QNN_DAEMON_CONTEXT_SCOPE = _env_first(("SDXL_QNN_DAEMON_CONTEXT_SCOPE", "QNN_DAEMON_CONTEXT_SCOPE"), "unet").strip().lower() or "unet"
@@ -159,6 +160,12 @@ QNN_HVX_THREADS = max(0, _env_int(("SDXL_QNN_HVX_THREADS", "QNN_HVX_THREADS"), 0
 QNN_VTCM_MB = max(0, _env_int(("SDXL_QNN_VTCM_MB", "QNN_VTCM_MB"), 0))
 QNN_CLIP_CACHE = os.environ.get("SDXL_QNN_CLIP_CACHE", "1") == "1"
 QNN_CLIP_CACHE_DIR = os.environ.get("SDXL_QNN_CLIP_CACHE_DIR", f"{DR}/phone_gen/cache/clip")
+QNN_USE_NATIVE_ACCEL = _env_bool(("SDXL_QNN_USE_NATIVE_ACCEL", "QNN_USE_NATIVE_ACCEL"), True)
+QNN_ACCEL_LIB = _env_first(("SDXL_QNN_ACCEL_LIB", "QNN_ACCEL_LIB"), "").strip()
+QNN_ASYNC_PREP = _env_bool(("SDXL_QNN_ASYNC_PREP", "QNN_ASYNC_PREP"), True)
+QNN_PRESTAGE_RUNTIME = _env_bool(("SDXL_QNN_PRESTAGE_RUNTIME", "QNN_PRESTAGE_RUNTIME"), True)
+QNN_PREWARM_ALL_CONTEXTS = _env_bool(("SDXL_QNN_PREWARM_ALL_CONTEXTS", "QNN_PREWARM_ALL_CONTEXTS"), True)
+QNN_PREWARM_PREVIEW = _env_bool(("SDXL_QNN_PREWARM_PREVIEW", "QNN_PREWARM_PREVIEW"), True)
 PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
 FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "1"))))
 STRETCH_SAMPLE_STRIDE = max(1, int(os.environ.get("SDXL_QNN_STRETCH_SAMPLE_STRIDE", "4")))
@@ -181,6 +188,10 @@ _QNN_PROFILE_INDEX = 0
 _QNN_PROFILE_LOCK = threading.Lock()
 _CLIP_CACHE_NAMESPACE: str | None = None
 _RESOLVED_CONFIG_CACHE: dict[tuple[str, int, int], str] = {}
+_RUNTIME_PREP_LOCK = threading.Lock()
+_RUNTIME_PREP_DONE = False
+_PREVIEW_PREP_DONE = False
+_RUNTIME_ACCEL = get_runtime_accel(prefer_native=QNN_USE_NATIVE_ACCEL, library_path=QNN_ACCEL_LIB)
 
 
 def _log(line: str = "") -> None:
@@ -655,6 +666,95 @@ def _prime_ctx_bg(paths: list[str]) -> list[threading.Thread]:
     return threads
 
 
+def _prime_paths_bg(paths: list[str]) -> list[threading.Thread]:
+    unique_paths = [p for p in dict.fromkeys(paths) if p and os.path.exists(p)]
+    return _prime_ctx_bg(unique_paths)
+
+
+def _collect_runtime_prime_paths(preview: bool) -> list[str]:
+    paths = [
+        CONTEXTS["clip_l"],
+        CONTEXTS["clip_g"],
+        CONTEXTS["encoder"],
+        CONTEXTS["decoder"],
+        CONTEXTS["vae"],
+        QNN_NET_RUN,
+        f"{QNN_LIB}/libQnnHtp.so",
+        DEFAULT_QNN_EXT_LIB,
+        QNN_SYSTEM_LIB,
+    ]
+    if _can_use_qnn_daemon():
+        paths.append(QNN_CONTEXT_RUNNER)
+    if preview and QNN_PREWARM_PREVIEW:
+        paths.extend([
+            TAESD_CONTEXT,
+            TAESD_MODEL,
+            TAESD_QNN_NET_RUN,
+        ])
+    return paths
+
+
+def _prestage_runtime_once(preview: bool = False) -> None:
+    global _RUNTIME_PREP_DONE, _PREVIEW_PREP_DONE
+
+    need_base = QNN_PRESTAGE_RUNTIME and not _RUNTIME_PREP_DONE
+    need_preview = preview and QNN_PREWARM_PREVIEW and not _PREVIEW_PREP_DONE
+    if not need_base and not need_preview:
+        return
+
+    with _RUNTIME_PREP_LOCK:
+        if QNN_PRESTAGE_RUNTIME and not _RUNTIME_PREP_DONE:
+            _ensure_shared_runtime_assets()
+            _resolve_exec_binary(QNN_NET_RUN)
+            _resolve_runtime_artifact(f"{QNN_LIB}/libQnnHtp.so", "lib")
+            if os.path.exists(DEFAULT_QNN_EXT_LIB):
+                _resolve_runtime_artifact(DEFAULT_QNN_EXT_LIB, "lib")
+            if os.path.exists(QNN_SYSTEM_LIB):
+                _resolve_runtime_artifact(QNN_SYSTEM_LIB, "lib")
+            if QNN_CONFIG_FILE:
+                _resolve_qnn_config_path(QNN_CONFIG_FILE)
+            if _can_use_qnn_daemon():
+                _resolve_exec_binary(QNN_CONTEXT_RUNNER)
+            _RUNTIME_PREP_DONE = True
+
+        if preview and QNN_PREWARM_PREVIEW and not _PREVIEW_PREP_DONE:
+            if os.path.exists(TAESD_QNN_NET_RUN):
+                _resolve_exec_binary(TAESD_QNN_NET_RUN)
+            if not TAESD_FORCE_ONNX:
+                try:
+                    _get_taesd_qnn_plan()
+                except Exception:
+                    pass
+            _PREVIEW_PREP_DONE = True
+
+
+def _start_async_runtime_prep(preview: bool) -> list[threading.Thread]:
+    if not QNN_ASYNC_PREP:
+        return []
+
+    threads: list[threading.Thread] = []
+
+    if QNN_PRESTAGE_RUNTIME or (preview and QNN_PREWARM_PREVIEW):
+        prep_thread = threading.Thread(target=_prestage_runtime_once, args=(preview,), daemon=True)
+        prep_thread.start()
+        threads.append(prep_thread)
+
+    prime_targets = _collect_runtime_prime_paths(preview)
+    if not QNN_PREWARM_ALL_CONTEXTS:
+        prime_targets = [
+            CONTEXTS["encoder"],
+            CONTEXTS["decoder"],
+            CONTEXTS["vae"],
+            QNN_NET_RUN,
+            f"{QNN_LIB}/libQnnHtp.so",
+            DEFAULT_QNN_EXT_LIB,
+        ]
+        if preview and QNN_PREWARM_PREVIEW:
+            prime_targets.extend([TAESD_CONTEXT, TAESD_MODEL, TAESD_QNN_NET_RUN])
+    threads.extend(_prime_paths_bg(prime_targets))
+    return threads
+
+
 def _write_input_list_once(path: str, entries: list[str] | tuple[str, ...]) -> None:
     if os.path.exists(path):
         return
@@ -672,8 +772,9 @@ def _write_multi_input_list_once(path: str, rows: list[list[str]] | tuple[tuple[
 
 def _write_array_reuse(path: str, arr: np.ndarray, dtype=np.float32) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    payload = np.ascontiguousarray(arr, dtype=dtype).tobytes()
-    target_size = len(payload)
+    arr_c = np.ascontiguousarray(arr, dtype=dtype)
+    payload = memoryview(arr_c).cast("B")
+    target_size = arr_c.nbytes
     try:
         with open(path, "r+b") as f:
             f.seek(0)
@@ -1310,11 +1411,8 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     if neg_prompt is None:
         neg_prompt = DEFAULT_NEG if use_cfg else ""
 
-    ctx_prime_threads = _prime_ctx_bg([
-        CONTEXTS["encoder"],
-        CONTEXTS["decoder"],
-        CONTEXTS["vae"],
-    ])
+    _ensure_unet_workdirs(use_cfg)
+    runtime_prep_threads = _start_async_runtime_prep(preview)
     daemon_prewarm_threads: list[threading.Thread] = []
     if _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
         daemon_prewarm_threads = _prewarm_qnn_daemons([
@@ -1326,6 +1424,7 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     _log(f"Base:   {DR}")
     _log(f"Work:   {WORK_DIR}")
     _log(f"Out:    {OUTPUT_DIR}")
+    _log(f"Accel:  {_RUNTIME_ACCEL.describe()}")
     qnn_mode = (
         f"QNN:    perf={QNN_PERF_PROFILE}, mmap={'on' if QNN_USE_MMAP else 'off'}, "
         f"log={QNN_LOG_LEVEL}"
@@ -1344,6 +1443,8 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         qnn_mode += f", vtcm={QNN_VTCM_MB}"
     if QNN_PROFILING_LEVEL:
         qnn_mode += f", profiling={QNN_PROFILING_LEVEL}"
+    if QNN_ASYNC_PREP:
+        qnn_mode += ", async-prep=on"
     _log(qnn_mode)
     if QNN_CONFIG_FILE:
         _log("  [QNN] ~62s-class runs assume the HTP backend-extension fast path is truly active on this deployment")
@@ -1377,6 +1478,9 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         steps_offset=1,
     )
     sched.set_timesteps(steps)
+
+    for t in runtime_prep_threads:
+        t.join(timeout=1.0)
 
     # ── 1. CLIP ──
     def run_clip(text, tag):
@@ -1420,8 +1524,6 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         _log(f"[CLIP uncond{uncond_suffix}] L={ms_l2:.0f}ms G={ms_g2:.0f}ms")
         ms_clip += ms_l2 + ms_g2
 
-    for t in ctx_prime_threads:
-        t.join(timeout=0.5)
     for t in daemon_prewarm_threads:
         t.join(timeout=15.0)
 
@@ -1456,9 +1558,7 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     latents = rng.randn(1, 4, 128, 128).astype(np.float32)
     latents = latents * sched.init_noise_sigma
     total_unet_ms = 0
-
-    # Pre-create a single reusable work dir (avoids mkdir overhead per step)
-    _ensure_unet_workdirs(use_cfg)
+    tensor_arena = RuntimeTensorArena(_RUNTIME_ACCEL) if RuntimeTensorArena is not None else None
 
     cfg_cutoff = ((steps + 1) // 2) if (use_cfg and progressive_cfg) else steps
     if progressive_cfg and use_cfg:
@@ -1466,7 +1566,10 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     for si in range(steps):
         t = sched.timesteps[si]
-        lat_in = sched.scale_model_input(latents, si)
+        sigma = float(sched.sigmas[si])
+        sigma_next = float(sched.sigmas[si + 1])
+        lat_in = tensor_arena.scale_model_input(latents, sigma) if tensor_arena is not None else sched.scale_model_input(latents, si)
+        timestep_arr = tensor_arena.timestep_tensor(t) if tensor_arena is not None else None
 
         step_uses_cfg = use_cfg and (si < cfg_cutoff)
 
@@ -1478,10 +1581,12 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
                 f"{WORK_DIR}/unet/cond",
                 f"{WORK_DIR}/unet/uncond",
                 si,
+                timestep_arr=timestep_arr,
             )
-            noise_pred = np_uncond + cfg_scale * (np_cond - np_uncond)
+            latents_next = tensor_arena.step_cfg(np_cond, np_uncond, latents, cfg_scale, sigma, sigma_next) if tensor_arena is not None else sched.step(np_uncond + cfg_scale * (np_cond - np_uncond), si, latents)
         else:
-            noise_pred, ms = _run_unet_split(lat_in, t, si, "cond")
+            noise_pred, ms = _run_unet_split(lat_in, t, si, "cond", timestep_arr=timestep_arr)
+            latents_next = tensor_arena.step(noise_pred, latents, sigma, sigma_next) if tensor_arena is not None else sched.step(noise_pred, si, latents)
 
         total_unet_ms += ms
 
@@ -1494,10 +1599,10 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         cfg_str = " CFG" if step_uses_cfg else ""
         _log(
             f"  [UNet {si+1}/{steps}]{cfg_str}{temp_str} "
-            f"{ms:.0f}ms [{noise_pred.min():.2f}..{noise_pred.max():.2f}]"
+            f"{ms:.0f}ms"
         )
 
-        latents = sched.step(noise_pred, si, latents)
+        latents = latents_next
 
         if preview:
             _start_bg_preview(latents.copy(), si, steps)
@@ -1509,12 +1614,11 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     # ── 4. VAE decode ──
     scaling_factor = 0.13025
-    lat_sc = latents / scaling_factor
 
     vd = f"{WORK_DIR}/vae"
     os.makedirs(vd, exist_ok=True)
     # VAE expects NHWC
-    lat_nhwc = np.transpose(lat_sc, (0, 2, 3, 1)).astype(np.float32)
+    lat_nhwc = tensor_arena.vae_input(latents, scaling_factor) if tensor_arena is not None else np.transpose(latents / scaling_factor, (0, 2, 3, 1)).astype(np.float32)
     lat_nhwc.tofile(f"{vd}/lat.raw")
     _write_input_list_once(f"{vd}/il.txt", [f"{vd}/lat.raw"])
 
@@ -1791,7 +1895,7 @@ def _read_noise_pred(out_dec_dir, result_idx=0):
     return d.reshape(1, 4, 128, 128)
 
 
-def _run_unet_split(latent_np, timestep, step_idx, tag):
+def _run_unet_split(latent_np, timestep, step_idx, tag, *, timestep_arr: np.ndarray | None = None):
     """Run split UNet (encoder + decoder) on NPU — single condition."""
     # Reuse a fixed work dir (step_idx ignored — files overwritten each step)
     base = f"{WORK_DIR}/unet/{tag}"
@@ -1802,7 +1906,7 @@ def _run_unet_split(latent_np, timestep, step_idx, tag):
     ts_path = f"{base}/ts.raw"
 
     _write_array_reuse(smp_path, latent_np, dtype=np.float32)
-    _write_array_reuse(ts_path, np.array([float(timestep)], dtype=np.float32), dtype=np.float32)
+    _write_array_reuse(ts_path, timestep_arr if timestep_arr is not None else np.asarray([float(timestep)], dtype=np.float32), dtype=np.float32)
 
     enc_entries = _enc_dec_inputs(base, smp_path, ts_path)
     il_enc = f"{base}/il_enc.txt"
@@ -1819,7 +1923,7 @@ def _run_unet_split(latent_np, timestep, step_idx, tag):
     return _read_noise_pred(dec_out, 0), ms_enc + ms_dec
 
 
-def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx):
+def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *, timestep_arr: np.ndarray | None = None):
     """Optimized CFG: run cond+uncond as 2-line input_list in ONE subprocess each.
 
     Instead of 4 qnn-net-run calls, we make 2:
@@ -1830,8 +1934,8 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx):
     # Common files (same latent/timestep for both conditions)
     smp_path = f"{cond_base}/smp.raw"
     ts_path = f"{cond_base}/ts.raw"
-    smp_np = latent_np.astype(np.float32)
-    ts_np = np.array([float(timestep)], dtype=np.float32)
+    smp_np = latent_np.astype(np.float32, copy=False)
+    ts_np = timestep_arr if timestep_arr is not None else np.asarray([float(timestep)], dtype=np.float32)
     _write_array_reuse(smp_path, smp_np, dtype=np.float32)
     _write_array_reuse(ts_path, ts_np, dtype=np.float32)
     # uncond uses the same values — write them there too

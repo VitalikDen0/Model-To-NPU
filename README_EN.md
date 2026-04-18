@@ -70,10 +70,14 @@ Validated final image:
 - `NPU/outputs/wai160_phone_native_cfg35_20260406.png`
 - prompt: `orange cat on wooden chair, detailed fur, soft cinematic light, high quality`
 - seed: `777`, steps: `8`, `CFG=3.5`, `--prog-cfg`
-- measured stage times in that run: `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, total `62.0 s`
+- historical pre-reset stage times from that run: `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, total `62.0 s`
 - UNet step progression in that precise run:
   - CFG steps 1..4: `9.765 -> 8.230 -> 8.386 -> 7.936 s`
   - no-guidance steps 5..8: `5.377 -> 5.513 -> 5.294 -> 5.479 s`
+
+That `62.0 s` chain was lost after the later phone factory reset. The run itself was real, but the exact phone-side context/runtime state, screenshots, and extra technical artifacts were not preserved at the time, so the repository can no longer independently reconstruct or prove that exact path from the surviving files alone.
+
+Current rebuilt-phone validation on the same practical `8`-step `CFG=3.5 --prog-cfg` path with Live Preview OFF and the current `burst` + native-runtime-accel defaults is **75.6 s total** (`CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`). Re-running the older pre-`v0.2.4-beta` runtime script on the rebuilt phone still lands in the same **~75.8 s** class, which strongly indicates the missing speedup is not a recent Python-side regression.
 
 For a live example of what a deployed phone-side SDXL directory currently looks like, see [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
 There is also a small rooted artifact bundle under [`examples/rooted-phone-sample/`](examples/rooted-phone-sample/) for reference and educational exploration.
@@ -136,19 +140,22 @@ Fresh `v0.2.0` tuned runs with **live thermal logging**, default `sustained_high
 - run 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
 - run 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
 
-Fresh `v0.2.3` measurements now have two practical markers:
+Fresh SDXL timings should now be read as three separate markers:
 
 - **README-visible APK marker (Live Preview ON):** about **78.0 s total**;
-- **latest precise runtime run with the active HTP backend-extension fast path (Live Preview OFF, same `v0.2.3` path):** **62.0 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
+- **current rebuilt-phone local review (Live Preview OFF, `burst` + native runtime accel):** **75.6 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`;
+- **historical pre-reset fast-path note:** **62.0 s total** on the old `v0.2.3` path with stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
 
-UNet step progression in that precise run:
+UNet step progression in the historical `62.0 s` run:
 
 - CFG steps 1..4: **9.765 → 8.230 → 8.386 → 7.936 s**;
 - no-guidance steps 5..8: **5.377 → 5.513 → 5.294 → 5.479 s**.
 
 TAESD live preview still prefers rebuilt **QNN GPU** assets and is currently around **1.0 s/step**; this preview/UI overhead is the main reason APK screenshot-visible totals are higher than no-preview runtime totals.
 
-Practical interpretation: a full run in the **~77–80 s** range is still normal when the backend-extension fast path is absent, ineffective, or simply not actually engaged on the deployed runtime; the **62.0 s** marker should be treated as the best precise runtime figure for the same path only when the HTP backend extensions are genuinely active.
+Recent overhead re-checks also showed that moving the runtime tree back to `/data/local/tmp/sdxl_qnn`, re-running the older pre-`v0.2.4-beta` Python runtime, and re-testing the custom daemon path did **not** recover the old `62 s` chain. The daemon path currently hangs in the rebuilt environment, and the exact split-context/model artifact state that originally produced the faster run was not preserved before the reset.
+
+Practical interpretation: a full run in the **~75–78 s** range is now the current rebuilt-phone reality; the **62.0 s** marker should be treated only as a historical pre-reset runtime figure, not as a guaranteed current expectation.
 
 In those warmed-up full runs, the practical thermal envelope stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes observed up to about **78°C**. An early one-line CPU spike to `88.8°C` appeared before the first run stabilized and looks more like a transient sensor jump than the sustained generation state.
 
@@ -270,7 +277,7 @@ python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "1girl, upper body, looking at vi
 The current runtime defaults to:
 
 - `SDXL_QNN_USE_MMAP=1`
-- `SDXL_QNN_PERF_PROFILE=sustained_high_performance`
+- `SDXL_QNN_PERF_PROFILE=burst`
 - live CPU / GPU / NPU logging when `SDXL_SHOW_TEMP=1`
 
 If both `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` exist in the deployed phone directory, `phone_generate.py` now auto-enables `SDXL_QNN_CONFIG_FILE` even for direct Termux runs.
@@ -284,8 +291,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK provides a full GUI: prompt, negative prompt, CFG, steps, seed, contrast stretching, progress bar, live CPU / GPU / NPU temperatures, and save to gallery.  
-APK `v0.2.4` keeps the optional **Live Preview (TAESD)** toggle and the **½-CFG** toggle, exports QNN `mmap` + `sustained_high_performance` by default, pins the current daemon-off async/prestage/prewarm runtime shape, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and now also tries bundled/offline Python first before falling back to root shell when the app process cannot see Termux-private `python3`.
+APK `v0.2.5` keeps the optional **Live Preview (TAESD)** toggle and the **½-CFG** toggle, exports QNN `mmap` + `burst` by default for the currently validated OnePlus 13 path, pins the current daemon-off async/prestage/prewarm runtime shape, auto-exports the backend-extension config when the required `.json` + `.so` are present in the deployed path, stages the optional `libsdxl_runtime_accel.so` out of shared storage before Android `ctypes` loads it, writes transient runtime files through app-private cache directories instead of shared storage, restores APK-side parsing for `QNN GPU` preview timing lines, and still tries bundled/offline Python first before falling back to root shell when the app process cannot see Termux-private `python3`.
 The current default shared path is `/sdcard/Download/sdxl_qnn`; use ⚙️ Settings if you want a different layout.
+
+Fresh local review timing on that path (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF) reached **75.6 s total** with `burst` + native runtime accel; the `basic`-profile rerun stayed at **75.2 s total**, and the burst/native PNG stayed byte-identical between the normal and profiled runs.
 
 Performance note: speed-critical runtime changes often land in `phone_generate.py` (deployed as `phone_gen/generate.py`), so the APK version may stay the same while generation gets faster after updating only that runtime script.
 
@@ -328,8 +337,8 @@ The current default deploy target is `/sdcard/Download/sdxl_qnn`, but the live d
 ├── README.md                 ← language landing page
 ├── README_RU.md              ← Russian documentation
 ├── README_EN.md              ← you are here
-├── LICENSE                   ← custom source-available non-commercial reciprocity license
-├── NOTICE                    ← mandatory origin/idea attribution notice
+├── LICENSE                   ← PolyForm Noncommercial License 1.0.0 text
+├── NOTICE                    ← required attribution / notice lines
 ├── .gitattributes
 ├── .gitignore
 ├── phone_generate.py         ← Standalone generator (runs on phone)
@@ -451,22 +460,20 @@ Prompt ──▶│ CLIP-L ──┐                                            
 
 ## License
 
-This repository is distributed under the **Model-To-NPU Source-Available
-Non-Commercial Reciprocity License 1.0** — see [LICENSE](LICENSE) and
-[NOTICE](NOTICE).
+This repository is distributed under the **PolyForm Noncommercial License
+1.0.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 In short:
 
 - you may use, study, modify, and fork the project for **non-commercial**
   purposes;
-- if you distribute or publicly deploy a derivative, you must provide the full
-  corresponding source under the **same license**;
-- you must preserve the attribution requirements described in
-  [`NOTICE`](NOTICE);
-- closed-source or monetized derivatives are **not permitted**.
+- redistributions must include the PolyForm terms (or the canonical PolyForm
+  URL) together with the `Required Notice:` lines from [`NOTICE`](NOTICE);
+- third-party dependencies keep their own licenses and must still be respected
+  separately.
 
-This is a **source-available** license model, not an OSI Open Source license,
-because commercial use is prohibited.
+This is a **source-available / non-commercial** license model, not an OSI Open
+Source license, because commercial use is prohibited.
 
 Dependencies:
 

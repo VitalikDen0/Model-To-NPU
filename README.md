@@ -32,7 +32,9 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - **2026-04-06:** practical SDXL full loop was re-validated from checkpoint build to final phone-generated PNG.
 - Checkpoint used: `waiIllustriousSDXL_v160.safetensors`.
 - Final validated output: `NPU/outputs/wai160_phone_native_cfg35_20260406.png`.
-- Latest precise runtime timing with the active HTP backend-extension fast path (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF): `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, **`62.0 s total`**.
+- Historical pre-reset best-known runtime-only note: `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, **`62.0 s total`**.
+- That `62.0 s` chain was lost after the phone was factory-reset. The tests were real, but the exact phone-side context/runtime state, screenshots, and extra technical artifacts were not preserved at the time, so the repository can no longer independently reconstruct or prove that exact path from the surviving files alone.
+- Current rebuilt-phone validated local review (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF, `burst` + native runtime accel): `CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`, **`75.6 s total`**. Re-running the older pre-`v0.2.4-beta` runtime code on the rebuilt phone still lands in the same **`~75.8 s`** class, which confirms the lost speedup is not a recent Python-side regression.
 - Updated full walkthroughs are documented in:
   - [`README_EN.md`](README_EN.md)
   - [`README_RU.md`](README_RU.md)
@@ -58,25 +60,25 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 ## License model
 
-This repository now uses a **custom source-available, non-commercial,
-reciprocal license**.
+This repository is now distributed under the
+**PolyForm Noncommercial License 1.0.0**.
 
-This is **source-available**, not OSI open source, because commercial use is
-prohibited.
+This is **source-available / non-commercial**, not OSI open source, because
+commercial use is prohibited.
 
 In short:
 
 - use, study, modify, and fork are allowed for **non-commercial** purposes;
-- any fork or derivative that is redistributed or publicly deployed must stay
-  **fully open in source form** under the **same license**;
-- required attribution from [`NOTICE`](NOTICE) must be preserved in copies,
-  forks, and public deployments;
-- closed-source or monetized derivatives are **not permitted**.
+- redistributions must include the PolyForm terms (or their canonical URL) and
+  the `Required Notice:` lines from [`NOTICE`](NOTICE);
+- third-party components keep their own licenses and must be respected
+  separately.
 
 ## Changelog
 
-- **0.2.4** — APK/runtime/docs were tightened around the current fast-path reality: the launcher now pins daemon OFF and the current async/prestage/prewarm path ON, bundled/offline Python fallback stays wired into the APK bootstrap, `phone_generate.py` now logs whether the HTP backend-extension fast path is requested or fully off, runtime binary staging now creates `WORK_DIR/bin` before copying `qnn-net-run`, the deploy helper can pick up `libQnnHtpV79Skel.so` from sibling `hexagon-v79/unsigned` SDK folders, and the docs now explicitly treat **~78 s** as the normal full-run class when the backend-extension fast path is absent/inactive while **62.0 s** remains the best precise marker when that path is actually active.
-- **0.2.3** — APK/runtime/docs were refreshed around the new fast path: the split-UNet reuse pass now makes the early guided steps decay instead of hovering near a flat ~12 s plateau; the README-visible APK marker is **78.0 s total** (Live Preview ON), while the latest precise runtime-only run reached **62.0 s total** (`CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`) with Live Preview OFF on the same `v0.2.3` path; TAESD live preview now runs through rebuilt QNN GPU assets at roughly **1.0 s** per step instead of the older 5.5–6.0 s CPU path.
+- **0.2.5** — current local review build prepared for release: the phone runtime and APK default to QNN `burst` on the rebuilt OnePlus 13 path, the optional native runtime accelerator stages its `.so` out of shared storage before Android `ctypes` loads it, and the fresh review run for the standard `8`-step `CFG=3.5 --prog-cfg` path reached **75.6 s total** (`CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`) while the `basic` rerun stayed effectively the same at **75.2 s total**.
+- **0.2.4-beta** — transition snapshot between the old `v0.2.3` fast-path era and the current rebuilt-phone validation cycle: bundled/offline runtime assets stayed integrated into the APK path, the phone runtime gained an optional native C accelerator for scheduler/layout hot spots, but the exact APK artifact for this snapshot was not attached to GitHub Releases in time and is no longer preserved locally as a standalone historical build.
+- **0.2.3** — historical pre-reset fast-path marker: the split-UNet reuse pass made the early guided steps decay instead of hovering near a flat ~12 s plateau; the README-visible APK marker stayed around **78.0 s total** (Live Preview ON), and a runtime-only run once reached **62.0 s total** (`CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`) with Live Preview OFF. That run was real, but the exact phone-side state and supporting technical artifacts were not archived before the later factory reset, so it is now historical rather than reproducible.
 - **0.2.2** — APK/runtime snapshot refreshed for the current validation cycle: TAESD preview wiring was repaired for the QNN path, APK preview timing parsing now handles `QNN GPU` preview lines again, and the deploy/docs/sample notes were synchronized around the current phone runtime layout while early CFG-step tuning remains under active investigation.
 - **0.2.1** — APK now routes transient runtime files (`WORK_DIR`, generated PNGs, and live preview frames) through app-private cache directories instead of shared storage, while keeping the deployed model tree in the public phone path.
 - **0.2.0** — phone runtime and APK now show live **CPU / GPU / NPU** temperatures, default to QNN `sustained_high_performance`, auto-enable HTP backend extensions when `libQnnHtpNetRunExtensions.so` is deployed, and the current full `8`-step progressive-CFG best path reached about **79.7–80.6s total** on OnePlus 13.
@@ -134,20 +136,20 @@ All gallery samples and the currently documented phone-side examples are **1024�
 </table>
 <!-- markdownlint-enable MD033 -->
 
-Compared with the earlier public on-device screenshots and the latest precise `v0.2.3` runtime run:
+Compared with the earlier public on-device screenshots and the current rebuilt-phone validation:
 
 - **273.6s → 78.0s total** (README-visible APK screenshot marker, Live Preview ON);
-- **273.6s → 62.0s total** (latest precise runtime run, Live Preview OFF);
-- **100.8s → 62.0s total**;
-- **78.0s → 62.0s total** on the same `v0.2.3` generation path when running without live-preview overhead.
+- **273.6s → 75.6s total** (current rebuilt-phone local review, Live Preview OFF, `burst` + native runtime accel);
+- **100.8s → 75.6s total**;
+- **historical pre-reset note:** **62.0s total** on the old `v0.2.3` fast path, not currently reproducible after the factory reset.
 
 That corresponds to:
 
-- **211.6s faster** vs `273.6s` (~**77.3%**);
-- **38.8s faster** vs `100.8s` (~**38.5%**);
-- **16.0s faster** vs the `78.0s` screenshot marker (~**20.5%**).
+- **198.0s faster** vs `273.6s` (~**72.4%**);
+- **25.2s faster** vs `100.8s` (~**25.0%**);
+- **2.4s faster** vs the `78.0s` screenshot marker (~**3.1%**).
 
-In short: **78.0s** remains a valid README-visible APK marker with Live Preview ON, and roughly **78s-class** full runs are still normal whenever the backend-extension fast path is absent or not effectively active; **62.0s** is the latest precise runtime timing for the same `v0.2.3` path with Live Preview OFF and the fast path active.
+In short: **78.0s** remains a valid public APK screenshot marker with Live Preview ON, **75.6s** is the current rebuilt-phone validated local review, and **62.0s** should now be read only as a historical pre-reset note whose exact chain could not be restored after the factory reset.
 
 ## Runtime updates vs APK version
 

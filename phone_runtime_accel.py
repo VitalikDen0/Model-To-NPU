@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -72,6 +73,38 @@ def _candidate_library_paths(explicit_path: str = "") -> list[str]:
     return ordered
 
 
+def _is_shared_storage_path(path: str) -> bool:
+    normalized = os.path.abspath(path).replace("\\", "/")
+    return normalized.startswith("/sdcard/") or normalized.startswith("/storage/emulated/")
+
+
+def _stage_shared_library(path: str) -> str:
+    if not _is_shared_storage_path(path):
+        return path
+
+    stage_root = os.environ.get(
+        "SDXL_QNN_ACCEL_STAGE_DIR",
+        os.path.join(tempfile.gettempdir(), "sdxl_runtime_accel"),
+    )
+    os.makedirs(stage_root, exist_ok=True)
+    staged_path = os.path.join(stage_root, os.path.basename(path))
+    try:
+        needs_copy = (
+            not os.path.exists(staged_path)
+            or os.path.getsize(staged_path) != os.path.getsize(path)
+            or os.path.getmtime(staged_path) < os.path.getmtime(path)
+        )
+    except Exception:
+        needs_copy = True
+    if needs_copy:
+        shutil.copy2(path, staged_path)
+        try:
+            os.chmod(staged_path, 0o755)
+        except Exception:
+            pass
+    return staged_path
+
+
 class RuntimeAccel:
     def __init__(self, prefer_native: bool = True, library_path: str = "") -> None:
         self.native_enabled = False
@@ -89,18 +122,19 @@ class RuntimeAccel:
             if not os.path.exists(candidate):
                 continue
             try:
+                load_candidate = _stage_shared_library(candidate)
                 if os.name == "nt" and hasattr(os, "add_dll_directory"):
-                    candidate_dir = os.path.dirname(candidate)
+                    candidate_dir = os.path.dirname(load_candidate)
                     self._dll_dirs.append(os.add_dll_directory(candidate_dir))
                     gcc_path = shutil.which("gcc")
                     if gcc_path:
                         gcc_dir = os.path.dirname(gcc_path)
                         if gcc_dir and os.path.normcase(gcc_dir) != os.path.normcase(candidate_dir):
                             self._dll_dirs.append(os.add_dll_directory(gcc_dir))
-                lib = ctypes.CDLL(candidate)
+                lib = ctypes.CDLL(load_candidate)
                 self._configure(lib)
                 self._lib = lib
-                self.library_path = candidate
+                self.library_path = load_candidate
                 self.native_enabled = True
                 self.load_error = ""
                 return

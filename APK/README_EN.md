@@ -13,7 +13,11 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.2.3`**.
+Current documented APK version: **`0.2.5`**.
+
+Fresh local review on OnePlus 13 for the standard path (`seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`, Live Preview OFF) reached **75.6 s total** with `burst` + native runtime accel; the rerun with `basic` profiling stayed effectively the same at **75.2 s total**.
+
+Historical note: the older best-known **62.0 s** runtime result belonged to the pre-reset phone state. The run itself was real, but after the later factory reset the exact phone-side context/runtime state, screenshots, and supporting technical artifacts were not preserved, so the repository can no longer honestly reproduce or independently prove that exact chain as a current result.
 
 Important: in this stack, performance is primarily driven by `phone_generate.py` (deployed on phone as `phone_gen/generate.py`), so the same APK version can get faster after updating only that runtime script.
 
@@ -128,17 +132,20 @@ The session-validated `v0.1.3` control run (`1024×1024`, `8` steps, `CFG=1.0`, 
 
 The current best session-validated `v0.2.0` path with `sustained_high_performance`, backend extensions, and `--prog-cfg` (`8` steps, `CFG=3.5`) reached **79.7–80.6 s total** on OnePlus 13. During those full runs, live thermals typically stayed around **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, with short NPU spikes seen up to roughly **78°C**.
 
-For `v0.2.3`, it is useful to track two practical markers:
+For the current APK/runtime state, it is more accurate to track three practical markers:
 
 - APK screenshot marker (Live Preview ON): about **78.0 s total**;
-- precise runtime measurement (Live Preview OFF, same `v0.2.3` path): **62.0 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
+- current rebuilt-phone local review (Live Preview OFF, `burst` + native runtime accel): **75.6 s total** with `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, and stage times `CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`;
+- historical pre-reset fast-path note: **62.0 s total** on the old `v0.2.3` path with stage times `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
 
-UNet step progression in that precise run:
+UNet step progression in the historical `62.0 s` run:
 
 - CFG steps 1..4: **9.765 → 8.230 → 8.386 → 7.936 s**;
 - no-guidance steps 5..8: **5.377 → 5.513 → 5.294 → 5.479 s**.
 
 TAESD live preview on rebuilt **QNN GPU** assets is still around **1.0 s** per step (vs older **5.5–6.0 s** CPU preview), and this preview/UI overhead is the main reason APK screenshot-visible totals are higher than no-preview runtime totals.
+
+Recent overhead re-checks also showed that moving the runtime tree back to `/data/local/tmp/sdxl_qnn`, re-running the older pre-`v0.2.4-beta` Python runtime, and trying the custom daemon path again did **not** recover the old `62 s` chain. In the rebuilt environment the daemon path currently hangs, and the original split-context/model artifact state that once produced the faster run was not preserved before the reset.
 
 ## Files on the phone
 
@@ -170,7 +177,7 @@ TAESD live preview on rebuilt **QNN GPU** assets is still around **1.0 s** per s
 - APK version and runtime speed do not always move in lockstep: speed-ups can come from updated `phone_generate.py` even when the APK version number is unchanged.
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
-- APK `v0.2.3` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=sustained_high_performance`, enables live thermal logging, auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present, routes transient `WORK_DIR` / preview / output files into the app cache to reduce shared-storage overhead, and correctly parses preview timing lines in the `QNN GPU ...ms` format;
+- APK `v0.2.5` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=burst`, hard-disables the current daemon fast path (`SDXL_QNN_USE_DAEMON=0`), enables async/prestage/prewarm flags for the current Python runtime, enables live thermal logging, auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present, routes transient `WORK_DIR` / preview / output files into the app cache to reduce shared-storage overhead, disables extra final PNG compression to shave a bit of save overhead, and correctly parses preview timing lines in the `QNN GPU ...ms` format;
 - Live Preview now prefers rebuilt QNN TAESD preview assets (`taesd_decoder.serialized.bin.bin` and/or `model/libTAESDDecoder.so`) on the GPU backend, runs there at roughly **1.0 s** per step, and falls back to `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime` only when QNN preview is unavailable or fails;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;
 - the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;

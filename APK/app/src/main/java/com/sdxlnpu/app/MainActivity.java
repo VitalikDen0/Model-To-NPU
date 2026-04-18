@@ -342,7 +342,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
         script.append("export SDXL_SHOW_TEMP=1\n");
         script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
-        script.append("export SDXL_QNN_PERF_PROFILE=sustained_high_performance\n");
+        script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
         script.append("export SDXL_QNN_USE_DAEMON=0\n");
         script.append("export SDXL_QNN_ASYNC_PREP=1\n");
         script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
@@ -350,7 +350,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_PREWARM_PREVIEW=1\n");
         script.append("export SDXL_QNN_CLIP_CACHE=1\n");
         script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
-        script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=1\n");
+        script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
         File accelLib = new File(BASE_DIR, "phone_gen/lib/libsdxl_runtime_accel.so");
         if (accelLib.isFile()) {
             script.append("export SDXL_QNN_USE_NATIVE_ACCEL=1\n");
