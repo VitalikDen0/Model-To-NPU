@@ -69,7 +69,11 @@
 
 Замерено на OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Текущая (v0.4.0) — Переменное разрешение + автономный APK
+### Текущая (v0.4.1) — bugfix APK runtime payload
+
+APK теперь несёт внутри актуальный phone-side runtime payload и предпочитает свои `generate.py`, `qnn-multi-context-server` и optional native accel library. Это убирает проблему со старыми скриптами на `/sdcard`, которые не понимали новые `--width` / `--height` и падали с `argparse` exit code `2`, при этом свежий fast-path остаётся доступен прямо через APK.
+
+### v0.4.0 — Переменное разрешение + автономный APK
 
 Поддержка переменного разрешения (512×512 до 1536×1536, любое кратное 8). Каталоги QNN-контекстов по разрешению. Выбор разрешения в APK. `build_termux_prefix.py` для извлечения standalone-префикса.
 

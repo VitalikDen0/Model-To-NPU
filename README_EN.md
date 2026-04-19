@@ -69,7 +69,11 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Current (v0.4.0) — Variable resolution + self-contained APK
+### Current (v0.4.1) — APK runtime payload bugfix
+
+The APK now bundles the current phone-side runtime payload and prefers its own `generate.py`, `qnn-multi-context-server`, and optional native accel library. That fixes stale `/sdcard` scripts rejecting new `--width` / `--height` arguments with `argparse` exit code `2`, while keeping the latest fast-path logic available through the APK.
+
+### v0.4.0 — Variable resolution + self-contained APK
 
 Variable resolution support (512×512 to 1536×1536, any multiple of 8). Per-resolution QNN context directories. APK resolution picker. `build_termux_prefix.py` for standalone prefix extraction.
 

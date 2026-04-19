@@ -340,6 +340,8 @@ public class MainActivity extends AppCompatActivity {
         ExecutionPlan executionPlan = resolveExecutionPlan();
         boolean useRootShell = executionPlan.useRootShell;
         String pythonCommand = executionPlan.pythonCommand;
+        File bundledRuntimePayloadDir = getBundledRuntimePayloadDirOrNull();
+        String generatorScript = resolveGeneratorScriptPath(bundledRuntimePayloadDir);
         if (!useRootShell && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             throw new IOException("Нет доступа к общей папке Downloads. Выдайте приложению доступ ко всем файлам.");
         }
@@ -373,12 +375,36 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_CLIP_CACHE=1\n");
         script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
         script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
-        File accelLib = new File(BASE_DIR, "phone_gen/lib/libsdxl_runtime_accel.so");
+        File accelLib = bundledRuntimePayloadDir != null
+            ? new File(bundledRuntimePayloadDir, "phone_gen/lib/libsdxl_runtime_accel.so")
+            : new File(BASE_DIR, "phone_gen/lib/libsdxl_runtime_accel.so");
         if (accelLib.isFile()) {
             script.append("export SDXL_QNN_USE_NATIVE_ACCEL=1\n");
             script.append("export SDXL_QNN_ACCEL_LIB=\"")
                 .append(shellEscape(accelLib.getAbsolutePath()))
                 .append("\"\n");
+        }
+        if (bundledRuntimePayloadDir != null) {
+            File bundledServer = new File(bundledRuntimePayloadDir, "bin/qnn-multi-context-server");
+            if (bundledServer.isFile()) {
+                script.append("export SDXL_QNN_SERVER_BIN=\"")
+                    .append(shellEscape(bundledServer.getAbsolutePath()))
+                    .append("\"\n");
+            }
+
+            File bundledDaemon = new File(bundledRuntimePayloadDir, "bin/qnn-context-runner");
+            if (bundledDaemon.isFile()) {
+                script.append("export SDXL_QNN_DAEMON_BIN=\"")
+                    .append(shellEscape(bundledDaemon.getAbsolutePath()))
+                    .append("\"\n");
+            }
+
+            File bundledTaesdOnnx = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.onnx");
+            if (bundledTaesdOnnx.isFile()) {
+                script.append("export SDXL_QNN_TAESD_ONNX=\"")
+                    .append(shellEscape(bundledTaesdOnnx.getAbsolutePath()))
+                    .append("\"\n");
+            }
         }
         script.append("if [ -f \"").append(shellEscape(BASE_DIR)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
             .append(shellEscape(BASE_DIR)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
@@ -392,7 +418,7 @@ public class MainActivity extends AppCompatActivity {
             "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n", shellEscape(BASE_DIR)));
         script.append("cd \"").append(shellEscape(BASE_DIR)).append("\"\n");
 
-        script.append("\"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(GEN_SCRIPT)).append("\"");
+        script.append("\"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
         script.append(" \"").append(shellEscape(prompt)).append("\"");
         script.append(" --seed ").append(seed);
         script.append(" --steps ").append(steps);
@@ -586,6 +612,9 @@ public class MainActivity extends AppCompatActivity {
             String hint;
             if (exitCode == 127) {
                 hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках или извлеките bundled runtime через Проверку в Настройках.";
+            } else if (exitCode == 2 && rawLog.toString().contains("unrecognized arguments")) {
+                hint = "Python runtime запустился, но phone-side generate.py не понял новые аргументы.\n"
+                    + "Обычно это означает устаревший runtime на телефоне. Обновите APK до свежей версии: она запускает bundled generate.py и актуальные fast-path бинарники.";
             } else if (useRootShell && (exitCode == 1 || exitCode == 13 || exitCode == 126)) {
                 hint = "Root-доступ не предоставлен или окружение Termux недоступно.\nПроверьте Magisk и путь к Python в Настройках.";
             } else if (exitCode == 1 || exitCode == 13 || exitCode == 126) {
@@ -691,6 +720,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private ExecutionPlan resolveExecutionPlan() throws IOException, InterruptedException {
+        try {
+            RuntimeBootstrap.ensureBundledAssetsExtracted(this);
+        } catch (IOException ignored) {
+            // Fall back to external Python discovery if bundle extraction failed.
+        }
+
         String bundledPython = RuntimeBootstrap.findBundledPython(this);
         LinkedHashSet<String> noRootCandidates = new LinkedHashSet<>();
         LinkedHashSet<String> rootCandidates = new LinkedHashSet<>();
@@ -879,6 +914,22 @@ public class MainActivity extends AppCompatActivity {
     private static String findSu() {
         String available = findAvailableSuOrNull();
         return available != null ? available : "su";
+    }
+
+    private File getBundledRuntimePayloadDirOrNull() throws IOException {
+        RuntimeBootstrap.ensureBundledAssetsExtracted(this);
+        File payloadDir = RuntimeBootstrap.getBundledRuntimePayloadDir(this);
+        return payloadDir.isDirectory() ? payloadDir : null;
+    }
+
+    private String resolveGeneratorScriptPath(File bundledRuntimePayloadDir) {
+        if (bundledRuntimePayloadDir != null) {
+            File bundledGenerator = new File(bundledRuntimePayloadDir, "phone_gen/generate.py");
+            if (bundledGenerator.isFile()) {
+                return bundledGenerator.getAbsolutePath();
+            }
+        }
+        return GEN_SCRIPT;
     }
 
     private void saveImage() {

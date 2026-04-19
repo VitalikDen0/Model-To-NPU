@@ -16,11 +16,28 @@ def resolveExistingDir = { candidate ->
     File offlineInstaller = new File(canonical, "termux_repo/install_offline_termux.sh")
     return debDir.isDirectory() && offlineInstaller.isFile() ? canonical : null
 }
+def resolveRepoRoot = { candidate ->
+    if (candidate == null) {
+        return null
+    }
+    File dir = candidate instanceof File ? candidate : new File(candidate.toString())
+    if (!dir.exists()) {
+        return null
+    }
+    File canonical = dir.canonicalFile
+    return new File(canonical, "phone_generate.py").isFile() ? canonical : null
+}
 def modelToNpuRootProp = project.findProperty("modelToNpuRoot")?.toString()
 def modelToNpuRootEnv = System.getenv("MODEL_TO_NPU_ROOT")
+def repoRootCandidates = [
+    modelToNpuRootProp ? new File(modelToNpuRootProp) : null,
+    modelToNpuRootEnv ? new File(modelToNpuRootEnv) : null,
+    new File(project.projectDir, "../.."),
+    new File("V:/Model-To-NPU"),
+]
+def bundledRepoRoot = repoRootCandidates.collect(resolveRepoRoot).find { it != null }
 def localToolsCandidates = [
-    modelToNpuRootProp ? new File(modelToNpuRootProp, "local_tools") : null,
-    modelToNpuRootEnv ? new File(modelToNpuRootEnv, "local_tools") : null,
+    bundledRepoRoot ? new File(bundledRepoRoot, "local_tools") : null,
     new File(project.projectDir, "../../local_tools"),
     new File("V:/Model-To-NPU/local_tools"),
 ]
@@ -32,28 +49,88 @@ tasks.register("stageBundledTermuxAssets") {
         delete(bundledTermuxAssetsDir)
         if (bundledLocalToolsDir == null) {
             logger.warn("Bundled Termux assets disabled: local_tools directory was not found")
-            return
+        } else {
+            logger.lifecycle("Bundling Termux offline assets from ${bundledLocalToolsDir}")
+
+            copy {
+                into bundledTermuxAssetsDir
+                from(new File(bundledLocalToolsDir, "termux_repo/debs")) {
+                    into "termux_bundle/debs"
+                }
+                from(new File(bundledLocalToolsDir, "termux_repo/install_offline_termux.sh")) {
+                    into "termux_bundle/scripts"
+                }
+                from(new File(bundledLocalToolsDir, "termux_repo/resolved_packages.tsv")) {
+                    into "termux_bundle"
+                }
+                from(new File(bundledLocalToolsDir, "termux_bootstrap_sdxl.sh")) {
+                    into "termux_bundle/scripts"
+                }
+                from(new File(bundledLocalToolsDir, "termux_run_bootstrap.sh")) {
+                    into "termux_bundle/scripts"
+                }
+            }
         }
 
-        logger.lifecycle("Bundling Termux offline assets from ${bundledLocalToolsDir}")
+        if (bundledRepoRoot == null) {
+            logger.warn("Bundled phone runtime payload disabled: repo root was not found")
+        } else {
+            logger.lifecycle("Bundling phone runtime payload from ${bundledRepoRoot}")
 
-        copy {
-            into bundledTermuxAssetsDir
-            from(new File(bundledLocalToolsDir, "termux_repo/debs")) {
-                into "termux_bundle/debs"
+            copy {
+                into bundledTermuxAssetsDir
+                from(new File(bundledRepoRoot, "phone_generate.py")) {
+                    into "termux_bundle/runtime_payload/phone_gen"
+                    rename { "generate.py" }
+                }
+                from(new File(bundledRepoRoot, "phone_runtime_accel.py")) {
+                    into "termux_bundle/runtime_payload/phone_gen"
+                }
+                from(new File(bundledRepoRoot, "tokenizer")) {
+                    into "termux_bundle/runtime_payload/phone_gen/tokenizer"
+                    include "vocab.json", "merges.txt"
+                }
+                from(new File(bundledRepoRoot, "SDXL")) {
+                    into "termux_bundle/runtime_payload"
+                    include "htp_backend_extensions_lightning.json", "htp_backend_ext_config_lightning.json"
+                }
             }
-            from(new File(bundledLocalToolsDir, "termux_repo/install_offline_termux.sh")) {
-                into "termux_bundle/scripts"
+
+            [
+                [file: new File(bundledRepoRoot, "NPU/out/arm64-v8a/qnn-multi-context-server"), into: "termux_bundle/runtime_payload/bin"],
+                [file: new File(bundledRepoRoot, "NPU/out/arm64-v8a/qnn-context-runner"), into: "termux_bundle/runtime_payload/bin"],
+                [file: new File(bundledRepoRoot, "NPU/build/runtime_accel/android-arm64/libsdxl_runtime_accel.so"), into: "termux_bundle/runtime_payload/phone_gen/lib"],
+            ].each { entry ->
+                if (entry.file.isFile()) {
+                    copy {
+                        into bundledTermuxAssetsDir
+                        from(entry.file) {
+                            into entry.into
+                        }
+                    }
+                } else {
+                    logger.lifecycle("Skipping optional bundled runtime file: ${entry.file}")
+                }
             }
-            from(new File(bundledLocalToolsDir, "termux_repo/resolved_packages.tsv")) {
-                into "termux_bundle"
+
+            def taesdCandidates = [
+                new File(bundledRepoRoot, "examples/rooted-phone-sample/phone_gen/taesd_decoder.onnx"),
+                new File("D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx"),
+                new File("D:/platform-tools/NPU/taesd_decoder/taesd_decoder.onnx"),
+            ]
+            def taesdOnnx = taesdCandidates.find { it.isFile() }
+            if (taesdOnnx != null) {
+                copy {
+                    into bundledTermuxAssetsDir
+                    from(taesdOnnx) {
+                        into "termux_bundle/runtime_payload/phone_gen"
+                    }
+                }
             }
-            from(new File(bundledLocalToolsDir, "termux_bootstrap_sdxl.sh")) {
-                into "termux_bundle/scripts"
-            }
-            from(new File(bundledLocalToolsDir, "termux_run_bootstrap.sh")) {
-                into "termux_bundle/scripts"
-            }
+
+            def payloadVersionFile = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload/.runtime_payload_version")
+            payloadVersionFile.parentFile.mkdirs()
+            payloadVersionFile.text = "apk-runtime-v0.4.1\n"
         }
     }
 }
@@ -66,8 +143,8 @@ android {
         applicationId "com.sdxlnpu.app"
         minSdk 28
         targetSdk 34
-        versionCode 17
-        versionName "0.4.0"
+        versionCode 18
+        versionName "0.4.1"
     }
 
     buildTypes {

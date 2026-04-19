@@ -16,8 +16,9 @@ import java.nio.charset.StandardCharsets;
 final class RuntimeBootstrap {
 
     private static final String ASSET_ROOT = "termux_bundle";
+    private static final String RUNTIME_PAYLOAD_DIR = "runtime_payload";
     private static final String VERSION_MARKER = ".bundle_version";
-    private static final String BUNDLE_LAYOUT_VERSION = "termux-bundle-v1";
+    private static final String BUNDLE_LAYOUT_VERSION = "termux-bundle-v2";
     private static final int COPY_BUFFER_SIZE = 1024 * 1024;
 
     private RuntimeBootstrap() {
@@ -38,6 +39,10 @@ final class RuntimeBootstrap {
 
     static File getBundledPrefixDir(Context context) {
         return new File(getBundleDir(context), "prefix");
+    }
+
+    static File getBundledRuntimePayloadDir(Context context) {
+        return new File(getBundleDir(context), RUNTIME_PAYLOAD_DIR);
     }
 
     static String findBundledPython(Context context) {
@@ -103,6 +108,30 @@ final class RuntimeBootstrap {
                 }
             }
         }
+
+        File runtimeBinDir = new File(bundleDir, RUNTIME_PAYLOAD_DIR + "/bin");
+        if (runtimeBinDir.isDirectory()) {
+            File[] files = runtimeBinDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile()) {
+                        f.setExecutable(true, false);
+                    }
+                }
+            }
+        }
+
+        File runtimeLibDir = new File(bundleDir, RUNTIME_PAYLOAD_DIR + "/phone_gen/lib");
+        if (runtimeLibDir.isDirectory()) {
+            File[] files = runtimeLibDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().endsWith(".so")) {
+                        f.setExecutable(true, false);
+                    }
+                }
+            }
+        }
     }
 
     static String describeBundledAssets(Context context) {
@@ -112,9 +141,12 @@ final class RuntimeBootstrap {
         try {
             String[] debs = context.getAssets().list(ASSET_ROOT + "/debs");
             String[] scripts = context.getAssets().list(ASSET_ROOT + "/scripts");
+            String[] runtimePayload = context.getAssets().list(ASSET_ROOT + "/" + RUNTIME_PAYLOAD_DIR);
             int debCount = debs != null ? debs.length : 0;
             int scriptCount = scripts != null ? scripts.length : 0;
-            return "Bundled offline runtime: " + debCount + " debs, " + scriptCount + " scripts";
+            int runtimePayloadCount = runtimePayload != null ? runtimePayload.length : 0;
+            return "Bundled offline runtime: " + debCount + " debs, " + scriptCount
+                + " scripts, runtime payload=" + runtimePayloadCount;
         } catch (IOException e) {
             return "Bundled offline runtime: available, but asset listing failed (" + e.getMessage() + ")";
         }

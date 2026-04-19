@@ -141,9 +141,14 @@ public class SettingsActivity extends AppCompatActivity {
                 File bundleDir = new File(extractedBundle);
                 File debsDir = new File(bundleDir, "debs");
                 File scriptsDir = new File(bundleDir, "scripts");
+                File runtimePayloadDir = RuntimeBootstrap.getBundledRuntimePayloadDir(this);
                 report.append("Extracted bundle: ").append(extractedBundle).append("\n");
                 appendCheck(report, "bundle/debs/", debsDir.isDirectory(), debsDir.getAbsolutePath());
                 appendCheck(report, "bundle/scripts/", scriptsDir.isDirectory(), scriptsDir.getAbsolutePath());
+                appendCheck(report, "bundle/runtime_payload/", runtimePayloadDir.isDirectory(), runtimePayloadDir.getAbsolutePath());
+                appendCheck(report, "bundle/runtime_payload/phone_gen/generate.py",
+                    new File(runtimePayloadDir, "phone_gen/generate.py").isFile(),
+                    new File(runtimePayloadDir, "phone_gen/generate.py").getAbsolutePath());
                 String bundledPython = RuntimeBootstrap.findBundledPython(this);
                 if (bundledPython != null) {
                     appendCheck(report, "bundle/prefix/bin/python3", true, bundledPython);

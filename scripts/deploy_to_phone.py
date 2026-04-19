@@ -19,7 +19,7 @@ import time
 
 DEFAULT_PHONE_BASE = "/sdcard/Download/sdxl_qnn"
 
-# Expected context binary files
+# Legacy flat context binary files
 CONTEXT_FILES = [
     "clip_l.serialized.bin.bin",
     "clip_g.serialized.bin.bin",
@@ -213,6 +213,39 @@ def find_optional_context_runner(repo_root: str, qnn_bin_dir: str | None) -> str
     return None
 
 
+def find_optional_multi_context_server(repo_root: str) -> str | None:
+    candidates = [
+        os.path.join(repo_root, "NPU", "out", "arm64-v8a", "qnn-multi-context-server"),
+        os.path.join(repo_root, "NPU", "build", "context_runner_sampleapp", "libs", "arm64-v8a", "qnn-multi-context-server"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def iter_context_pushes(ctx_dir: str):
+    pushes: list[tuple[str, str]] = []
+    for root, _dirs, files in os.walk(ctx_dir):
+        rel_root = os.path.relpath(root, ctx_dir)
+        for name in sorted(files):
+            if not name.endswith(".serialized.bin.bin"):
+                continue
+            local = os.path.join(root, name)
+            rel = name if rel_root in (".", "") else os.path.join(rel_root, name).replace("\\", "/")
+            pushes.append((local, rel))
+
+    if pushes:
+        return pushes
+
+    # Fallback for older flat layouts if os.walk found nothing.
+    for name in CONTEXT_FILES:
+        local = os.path.join(ctx_dir, name)
+        if os.path.exists(local):
+            pushes.append((local, name))
+    return pushes
+
+
 def find_optional_runtime_accel_lib(repo_root: str) -> str | None:
     candidates = [
         os.path.join(repo_root, "NPU", "build", "runtime_accel", "android-arm64", "libsdxl_runtime_accel.so"),
@@ -281,12 +314,15 @@ def main():
         if not os.path.isdir(ctx_dir):
             print(f"ERROR: Contexts directory not found: {ctx_dir}")
             sys.exit(1)
-        for f in CONTEXT_FILES:
-            local = os.path.join(ctx_dir, f)
-            if os.path.exists(local):
-                adb_push(adb, serial, local, f"{phone_base}/context/{f}")
-            else:
-                print(f"  SKIP {f} (not found)")
+        context_pushes = iter_context_pushes(ctx_dir)
+        if not context_pushes:
+            print(f"ERROR: No .serialized.bin.bin files found under {ctx_dir}")
+            sys.exit(1)
+        for local, rel in context_pushes:
+            remote = f"{phone_base}/context/{rel}"
+            remote_dir = os.path.dirname(remote).replace("\\", "/")
+            adb_cmd(adb, serial, "shell", f"mkdir -p {remote_dir}")
+            adb_push(adb, serial, local, remote)
     else:
         print("\n[2/5] Skipping context binaries")
 
@@ -384,6 +420,11 @@ def main():
         (os.path.join(repo_root, "SDXL", "htp_backend_extensions_lightning.json"), f"{phone_base}/htp_backend_extensions_lightning.json", False),
         (os.path.join(repo_root, "SDXL", "htp_backend_ext_config_lightning.json"), f"{phone_base}/htp_backend_ext_config_lightning.json", False),
     ]
+    multi_context_server = find_optional_multi_context_server(repo_root)
+    if multi_context_server:
+        extra_files.append((multi_context_server, f"{phone_base}/bin/qnn-multi-context-server", True))
+    else:
+        print("  SKIP qnn-multi-context-server (optional persistent multi-context server not found locally)")
     context_runner = find_optional_context_runner(repo_root, qnn_bin_dir)
     if context_runner:
         extra_files.append((context_runner, f"{phone_base}/bin/qnn-context-runner", True))
