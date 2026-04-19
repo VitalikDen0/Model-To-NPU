@@ -69,7 +69,11 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Current (v0.3.0) — Persistent multi-context server
+### Current (v0.4.0) — Variable resolution + self-contained APK
+
+Variable resolution support (512×512 to 1536×1536, any multiple of 8). Per-resolution QNN context directories. APK resolution picker. `build_termux_prefix.py` for standalone prefix extraction.
+
+### v0.3.0 — Persistent multi-context server
 
 `seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
 

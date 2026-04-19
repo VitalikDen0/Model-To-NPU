@@ -66,6 +66,8 @@ public class MainActivity extends AppCompatActivity {
 
     private EditText promptInput;
     private EditText negPromptInput;
+    private EditText widthInput;
+    private EditText heightInput;
     private EditText seedInput;
     private SeekBar stepsSeekBar;
     private TextView stepsLabel;
@@ -110,6 +112,8 @@ public class MainActivity extends AppCompatActivity {
 
         promptInput = findViewById(R.id.promptInput);
         negPromptInput = findViewById(R.id.negPromptInput);
+        widthInput = findViewById(R.id.widthInput);
+        heightInput = findViewById(R.id.heightInput);
         seedInput = findViewById(R.id.seedInput);
         stepsSeekBar = findViewById(R.id.stepsSeekBar);
         stepsLabel = findViewById(R.id.stepsLabel);
@@ -236,6 +240,21 @@ public class MainActivity extends AppCompatActivity {
         // Build output name
         String outName = "apk_s" + seed;
 
+        // Resolution
+        int imgWidth = 1024;
+        int imgHeight = 1024;
+        try {
+            String wStr = widthInput.getText().toString().trim();
+            String hStr = heightInput.getText().toString().trim();
+            if (!wStr.isEmpty()) imgWidth = Integer.parseInt(wStr);
+            if (!hStr.isEmpty()) imgHeight = Integer.parseInt(hStr);
+        } catch (NumberFormatException ignored) {}
+        // Round to nearest multiple of 8
+        imgWidth = Math.max(256, (imgWidth / 8) * 8);
+        imgHeight = Math.max(256, (imgHeight / 8) * 8);
+        final int finalWidth = imgWidth;
+        final int finalHeight = imgHeight;
+
         generateButton.setEnabled(false);
         stopButton.setVisibility(View.VISIBLE);
         progressBar.setVisibility(View.VISIBLE);
@@ -249,7 +268,7 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName);
+                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight);
             } catch (Exception e) {
                 mainHandler.post(() -> {
                     latestTempStatus = "";
@@ -315,7 +334,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void runPipeline(String prompt, long seed, int steps,
                              float cfg, String neg, boolean stretch,
-                             boolean preview, boolean progCfg, String outName)
+                             boolean preview, boolean progCfg, String outName,
+                             int imgWidth, int imgHeight)
             throws IOException, InterruptedException {
         ExecutionPlan executionPlan = resolveExecutionPlan();
         boolean useRootShell = executionPlan.useRootShell;
@@ -338,6 +358,8 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
         script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
         script.append("export SDXL_QNN_PREVIEW_PNG=\"").append(shellEscape(previewPath)).append("\"\n");
+        script.append("export SDXL_QNN_WIDTH=").append(imgWidth).append("\n");
+        script.append("export SDXL_QNN_HEIGHT=").append(imgHeight).append("\n");
         script.append("export SDXL_QNN_USE_MMAP=1\n");
         script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
         script.append("export SDXL_SHOW_TEMP=1\n");
@@ -374,6 +396,8 @@ public class MainActivity extends AppCompatActivity {
         script.append(" \"").append(shellEscape(prompt)).append("\"");
         script.append(" --seed ").append(seed);
         script.append(" --steps ").append(steps);
+        script.append(" --width ").append(imgWidth);
+        script.append(" --height ").append(imgHeight);
         script.append(" --name ").append(outName);
         if (cfg > 1.0f) {
             script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));

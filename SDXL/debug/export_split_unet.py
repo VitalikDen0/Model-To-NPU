@@ -33,23 +33,23 @@ JOB_DEC_FILE = ROOT / "NPU" / "aihub_job_decoder.txt"
 
 DEVICE_NAME = "Snapdragon 8 Elite QRD"
 
-# Skip connection shapes at 1024x1024 (latent 128x128)
-# skip_0..2: [1, 320, 128, 128]
-# skip_3:    [1, 320, 64, 64]
-# skip_4..5: [1, 640, 64, 64]
-# skip_6:    [1, 640, 32, 32]
-# skip_7..8: [1, 1280, 32, 32]
-SKIP_SHAPES = [
-    (1, 320, 128, 128),  # skip_0 (conv_in)
-    (1, 320, 128, 128),  # skip_1 (down0 res0)
-    (1, 320, 128, 128),  # skip_2 (down0 res1)
-    (1, 320, 64, 64),    # skip_3 (down0 downsample)
-    (1, 640, 64, 64),    # skip_4 (down1 res0)
-    (1, 640, 64, 64),    # skip_5 (down1 res1)
-    (1, 640, 32, 32),    # skip_6 (down1 downsample)
-    (1, 1280, 32, 32),   # skip_7 (down2 res0)
-    (1, 1280, 32, 32),   # skip_8 (down2 res1)
-]
+def compute_skip_shapes(width: int = 1024, height: int = 1024) -> list[tuple[int, ...]]:
+    """Compute skip connection shapes for a given image resolution."""
+    lh, lw = height // 8, width // 8
+    return [
+        (1, 320, lh, lw),            # skip_0 (conv_in)
+        (1, 320, lh, lw),            # skip_1 (down0 res0)
+        (1, 320, lh, lw),            # skip_2 (down0 res1)
+        (1, 320, lh // 2, lw // 2),  # skip_3 (down0 downsample)
+        (1, 640, lh // 2, lw // 2),  # skip_4 (down1 res0)
+        (1, 640, lh // 2, lw // 2),  # skip_5 (down1 res1)
+        (1, 640, lh // 4, lw // 4),  # skip_6 (down1 downsample)
+        (1, 1280, lh // 4, lw // 4), # skip_7 (down2 res0)
+        (1, 1280, lh // 4, lw // 4), # skip_8 (down2 res1)
+    ]
+
+# Default for backward compat
+SKIP_SHAPES = compute_skip_shapes(1024, 1024)
 
 
 class SDXLUNetEncoder(nn.Module):
@@ -151,7 +151,7 @@ class SDXLUNetDecoder(nn.Module):
         return sample
 
 
-def export_onnx():
+def export_onnx(width: int = 1024, height: int = 1024):
     """Export encoder and decoder halves as separate ONNX models."""
     from diffusers import UNet2DConditionModel
 
@@ -166,7 +166,9 @@ def export_onnx():
     encoder = SDXLUNetEncoder(unet)
     encoder.eval()
 
-    sample = torch.randn(1, 4, 128, 128, dtype=torch.float32)
+    latent_h, latent_w = height // 8, width // 8
+    skip_shapes = compute_skip_shapes(width, height)
+    sample = torch.randn(1, 4, latent_h, latent_w, dtype=torch.float32)
     timestep = torch.tensor([999.0], dtype=torch.float32)
     enc_states = torch.randn(1, 77, 2048, dtype=torch.float32)
     text_embeds = torch.randn(1, 1280, dtype=torch.float32)
@@ -222,8 +224,8 @@ def export_onnx():
     decoder = SDXLUNetDecoder(unet)
     decoder.eval()
 
-    mid_out = torch.randn(1, 1280, 32, 32, dtype=torch.float32)
-    skips = [torch.randn(*s, dtype=torch.float32) for s in SKIP_SHAPES]
+    mid_out = torch.randn(1, 1280, latent_h // 4, latent_w // 4, dtype=torch.float32)
+    skips = [torch.randn(*s, dtype=torch.float32) for s in skip_shapes]
     temb = torch.randn(1, 1280, dtype=torch.float32)
 
     with torch.no_grad():
@@ -348,6 +350,8 @@ def download_contexts():
 
 def main():
     ap = argparse.ArgumentParser(description="Export split Lightning UNet → AI Hub")
+    ap.add_argument("--resolution", type=str, default="1024x1024",
+                    help="Image resolution WxH, e.g. 1024x1024")
     ap.add_argument("--export", action="store_true", help="Export both ONNX halves")
     ap.add_argument("--compile", action="store_true", help="Submit both to AI Hub")
     ap.add_argument("--compile-encoder", action="store_true")
@@ -360,8 +364,12 @@ def main():
         ap.print_help()
         return
 
+    # Parse resolution
+    w_str, h_str = a.resolution.lower().split("x")
+    res_w, res_h = int(w_str), int(h_str)
+
     if a.export:
-        export_onnx()
+        export_onnx(width=res_w, height=res_h)
     if a.compile:
         submit_compile("both")
     if a.compile_encoder:

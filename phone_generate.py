@@ -104,13 +104,59 @@ def _env_int(keys: tuple[str, ...], default: int = 0) -> int:
 
 
 DR = _resolve_base_dir()
-CONTEXTS = {
-    "clip_l": f"{DR}/context/clip_l.serialized.bin.bin",
-    "clip_g": f"{DR}/context/clip_g.serialized.bin.bin",
-    "encoder": f"{DR}/context/unet_encoder_fp16.serialized.bin.bin",
-    "decoder": f"{DR}/context/unet_decoder_fp16.serialized.bin.bin",
-    "vae": f"{DR}/context/vae_decoder.serialized.bin.bin",
-}
+
+# Default resolution — overridden by --width / --height CLI args
+_IMAGE_WIDTH = int(os.environ.get("SDXL_QNN_WIDTH", "1024"))
+_IMAGE_HEIGHT = int(os.environ.get("SDXL_QNN_HEIGHT", "1024"))
+
+# Standard SDXL aspect-ratio buckets (width × height, all divisible by 8)
+SDXL_RESOLUTIONS = [
+    (512, 512),
+    (768, 768),
+    (1024, 1024),
+    (1152, 896), (896, 1152),
+    (1216, 832), (832, 1216),
+    (1344, 768), (768, 1344),
+    (1536, 640), (640, 1536),
+    (1280, 1280),
+    (1536, 1536),
+]
+
+
+def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
+    """Build context paths for a given resolution.
+
+    CLIP contexts are resolution-independent (always shared).
+    UNet encoder/decoder and VAE have per-resolution contexts.
+
+    Directory layout (multi-resolution):
+        context/clip_l.serialized.bin.bin
+        context/clip_g.serialized.bin.bin
+        context/1024x1024/unet_encoder_fp16.serialized.bin.bin
+        context/1024x1024/unet_decoder_fp16.serialized.bin.bin
+        context/1024x1024/vae_decoder.serialized.bin.bin
+
+    For backward compatibility: if the resolution is 1024×1024 and the
+    resolution-scoped directory doesn't exist, fall back to flat layout.
+    """
+    ctx = {
+        "clip_l": f"{DR}/context/clip_l.serialized.bin.bin",
+        "clip_g": f"{DR}/context/clip_g.serialized.bin.bin",
+    }
+    res_dir = f"{DR}/context/{width}x{height}"
+    if os.path.isdir(res_dir):
+        ctx["encoder"] = f"{res_dir}/unet_encoder_fp16.serialized.bin.bin"
+        ctx["decoder"] = f"{res_dir}/unet_decoder_fp16.serialized.bin.bin"
+        ctx["vae"] = f"{res_dir}/vae_decoder.serialized.bin.bin"
+    else:
+        # Legacy flat layout (default 1024×1024)
+        ctx["encoder"] = f"{DR}/context/unet_encoder_fp16.serialized.bin.bin"
+        ctx["decoder"] = f"{DR}/context/unet_decoder_fp16.serialized.bin.bin"
+        ctx["vae"] = f"{DR}/context/vae_decoder.serialized.bin.bin"
+    return ctx
+
+
+CONTEXTS = _resolve_contexts(_IMAGE_WIDTH, _IMAGE_HEIGHT)
 TOKENIZER_DIR = f"{DR}/phone_gen/tokenizer"
 OUTPUT_DIR = os.environ.get("SDXL_QNN_OUTPUT_DIR", f"{DR}/outputs")
 WORK_DIR = _resolve_work_dir()
@@ -153,6 +199,8 @@ QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "burst").strip() or "burst"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
 QNN_USE_DAEMON = _env_bool(("SDXL_QNN_USE_DAEMON", "QNN_USE_DAEMON"), False)
+QNN_USE_SERVER = _env_bool(("SDXL_QNN_USE_SERVER", "QNN_USE_SERVER"), True)
+QNN_SERVER_BIN = os.environ.get("SDXL_QNN_SERVER_BIN", f"{QNN_BIN_DIR}/qnn-multi-context-server")
 QNN_DAEMON_CONTEXT_SCOPE = _env_first(("SDXL_QNN_DAEMON_CONTEXT_SCOPE", "QNN_DAEMON_CONTEXT_SCOPE"), "unet").strip().lower() or "unet"
 QNN_DAEMON_PREWARM = _env_bool(("SDXL_QNN_DAEMON_PREWARM", "QNN_DAEMON_PREWARM"), True)
 QNN_DAEMON_CONFIG_FILE = _env_first(("SDXL_QNN_DAEMON_CONFIG_FILE", "QNN_DAEMON_CONFIG_FILE"), QNN_CONFIG_FILE).strip()
@@ -167,7 +215,7 @@ QNN_PRESTAGE_RUNTIME = _env_bool(("SDXL_QNN_PRESTAGE_RUNTIME", "QNN_PRESTAGE_RUN
 QNN_PREWARM_ALL_CONTEXTS = _env_bool(("SDXL_QNN_PREWARM_ALL_CONTEXTS", "QNN_PREWARM_ALL_CONTEXTS"), True)
 QNN_PREWARM_PREVIEW = _env_bool(("SDXL_QNN_PREWARM_PREVIEW", "QNN_PREWARM_PREVIEW"), True)
 PREVIEW_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_PREVIEW_PNG_COMPRESS", "0"))))
-FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "1"))))
+FINAL_PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get("SDXL_QNN_FINAL_PNG_COMPRESS", "0"))))
 STRETCH_SAMPLE_STRIDE = max(1, int(os.environ.get("SDXL_QNN_STRETCH_SAMPLE_STRIDE", "4")))
 TAESD_BACKEND = os.environ.get("SDXL_QNN_TAESD_BACKEND", "gpu").strip().lower() or "gpu"
 TAESD_BACKEND_LIB = os.environ.get("SDXL_QNN_TAESD_BACKEND_LIB", "").strip()
@@ -178,6 +226,7 @@ _TEMP_SENSOR_CACHE: dict[str, list[tuple[str, str]]] | None = None
 _TEMP_MONITOR_STOP: threading.Event | None = None
 _TEMP_MONITOR_THREAD: threading.Thread | None = None
 _QNN_DAEMONS: dict[tuple[str, bool], "_QnnContextDaemon"] = {}
+_QNN_SERVER: "_QnnMultiContextServer | None" = None
 _EXEC_BIN_CACHE: dict[str, str] = {}
 _RUNTIME_FILE_CACHE: dict[str, str] = {}
 _SHARED_RUNTIME_STAGED = False
@@ -1311,6 +1360,227 @@ def _shutdown_qnn_daemons() -> None:
 
 atexit.register(_shutdown_qnn_daemons)
 
+
+# ─── Multi-context persistent QNN server ───
+
+class _QnnMultiContextServer:
+    """Manages a single qnn-multi-context-server process with stdin/stdout protocol."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen[str] | None = None
+        self._loaded: dict[str, str] = {}  # ctx_path -> id
+        self._lock = threading.Lock()
+        self._id_counter = 0
+        self._stderr_thread: threading.Thread | None = None
+        self._stderr_tail: list[str] = []
+
+    def _next_id(self, ctx_path: str) -> str:
+        self._id_counter += 1
+        base = os.path.basename(ctx_path).replace(".serialized.bin.bin", "").replace(".", "_")
+        return f"{base}_{self._id_counter}"
+
+    def _capture_stderr(self) -> None:
+        if self.proc is None or self.proc.stderr is None:
+            return
+        try:
+            for raw_line in self.proc.stderr:
+                line = raw_line.rstrip()
+                if not line:
+                    continue
+                self._stderr_tail.append(line)
+                if len(self._stderr_tail) > 40:
+                    self._stderr_tail = self._stderr_tail[-40:]
+                _log(f"  [QNN srv] {line}")
+        except Exception:
+            pass
+
+    def start(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            return
+
+        # Use /data/local/tmp paths directly for mmap/dlopen compatibility
+        data_base = "/data/local/tmp/sdxl_qnn"
+        if os.path.isdir(data_base):
+            server_bin = f"{data_base}/bin/qnn-multi-context-server"
+            backend_lib = f"{data_base}/lib/libQnnHtp.so"
+            system_lib = f"{data_base}/lib/libQnnSystem.so"
+            lib_dir = f"{data_base}/lib"
+        else:
+            server_bin = _resolve_exec_binary(QNN_SERVER_BIN)
+            backend_lib = _resolve_runtime_artifact(f"{QNN_LIB}/libQnnHtp.so", "lib")
+            system_lib = _resolve_runtime_artifact(QNN_SYSTEM_LIB, "lib")
+            lib_dir = QNN_LIB
+
+        cmd = [
+            server_bin,
+            "--backend", backend_lib,
+            "--system_lib", system_lib,
+        ]
+        env = _get_qnn_env()
+        # Ensure ADSP_LIBRARY_PATH uses the correct lib dir
+        env["ADSP_LIBRARY_PATH"] = lib_dir
+        env["LD_LIBRARY_PATH"] = lib_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+
+        _log(f"[QNN server] cmd={cmd}")
+        _log(f"[QNN server] env: LD={env.get('LD_LIBRARY_PATH','?')} ADSP={env.get('ADSP_LIBRARY_PATH','?')}")
+
+        self.proc = subprocess.Popen(
+            cmd,
+            env=env,
+            cwd=DR,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        # Read READY line
+        line = self.proc.stdout.readline().strip()  # type: ignore[union-attr]
+        if line != "READY":
+            err = self.proc.stderr.read() if self.proc.stderr else ""  # type: ignore[union-attr]
+            raise RuntimeError(f"Server failed to start: {line} {err[:500]}")
+        # Start stderr capture thread
+        self._stderr_thread = threading.Thread(target=self._capture_stderr, daemon=True)
+        self._stderr_thread.start()
+        _log("[QNN server] started")
+
+    def _send(self, cmd: str) -> str:
+        """Send a command and read one response line."""
+        assert self.proc is not None and self.proc.poll() is None
+        self.proc.stdin.write(cmd + "\n")  # type: ignore[union-attr]
+        self.proc.stdin.flush()  # type: ignore[union-attr]
+        line = self.proc.stdout.readline().strip()  # type: ignore[union-attr]
+        return line
+
+    def _remap_ctx_path(self, ctx_path: str) -> str:
+        """Remap sdcard context paths to /data/local/tmp for mmap compatibility."""
+        sdcard_ctx = "/sdcard/Download/sdxl_qnn/context/"
+        data_ctx = "/data/local/tmp/sdxl_qnn/context/"
+        if ctx_path.startswith(sdcard_ctx) and os.path.exists(data_ctx + os.path.basename(ctx_path)):
+            return data_ctx + os.path.basename(ctx_path)
+        return ctx_path
+
+    def load(self, ctx_path: str) -> str:
+        """Load a context binary. Returns the context id."""
+        with self._lock:
+            if ctx_path in self._loaded:
+                return self._loaded[ctx_path]
+            self.start()
+            cid = self._next_id(ctx_path)
+            real_path = self._remap_ctx_path(ctx_path)
+            _log(f"  [QNN server] loading {ctx_path} -> {real_path}")
+            t0 = time.time()
+            resp = self._send(f"LOAD {cid} {real_path}")
+            elapsed = (time.time() - t0) * 1000
+            if not resp.startswith("OK"):
+                raise RuntimeError(f"Server LOAD failed for {ctx_path}: {resp}")
+            self._loaded[ctx_path] = cid
+            _log(f"  [QNN server] loaded {os.path.basename(ctx_path)} -> {cid} ({elapsed:.0f}ms)")
+            return cid
+
+    def run(self, ctx_path: str, input_list_path: str, output_dir: str) -> float:
+        """Execute inference. Returns time in ms."""
+        cid = self.load(ctx_path)
+        os.makedirs(output_dir, exist_ok=True)
+        with self._lock:
+            t0 = time.time()
+            resp = self._send(f"RUN {cid} {input_list_path} {output_dir}")
+            elapsed = (time.time() - t0) * 1000
+        if not resp.startswith("OK"):
+            raise RuntimeError(f"Server RUN failed: {resp}")
+        # Parse execute time from "OK <ms>"
+        parts = resp.split()
+        if len(parts) >= 2:
+            try:
+                return float(parts[1])
+            except ValueError:
+                pass
+        return elapsed
+
+    def run_chain(self, enc_ctx: str, dec_ctx: str,
+                  enc_il: str, dec_il: str, output_dir: str,
+                  mappings: list[str]) -> float:
+        """Run encoder→decoder chain in server memory. Returns total ms."""
+        enc_id = self.load(enc_ctx)
+        dec_id = self.load(dec_ctx)
+        os.makedirs(output_dir, exist_ok=True)
+        map_str = " ".join(mappings)
+        with self._lock:
+            t0 = time.time()
+            resp = self._send(f"RUN_CHAIN {enc_id} {dec_id} {enc_il} {dec_il} {output_dir} {map_str}")
+            elapsed = (time.time() - t0) * 1000
+        if not resp.startswith("OK"):
+            raise RuntimeError(f"Server RUN_CHAIN failed: {resp}")
+        parts = resp.split()
+        if len(parts) >= 2:
+            try:
+                return float(parts[1])
+            except ValueError:
+                pass
+        return elapsed
+
+    def unload(self, ctx_path: str) -> None:
+        """Unload a context to free memory."""
+        with self._lock:
+            cid = self._loaded.get(ctx_path)
+            if cid is None:
+                return
+            resp = self._send(f"UNLOAD {cid}")
+            if resp.startswith("OK"):
+                del self._loaded[ctx_path]
+                _log(f"  [QNN server] unloaded {os.path.basename(ctx_path)} ({cid})")
+            else:
+                _log(f"  [QNN server] unload failed for {ctx_path}: {resp}")
+
+    def stop(self) -> None:
+        proc = self.proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            try:
+                proc.stdin.write("QUIT\n")  # type: ignore[union-attr]
+                proc.stdin.flush()  # type: ignore[union-attr]
+                proc.wait(timeout=5.0)
+            except Exception:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    proc.kill()
+        self.proc = None
+        self._loaded.clear()
+        _log("[QNN server] stopped")
+
+    def is_available(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def has_context(self, ctx_path: str) -> bool:
+        return ctx_path in self._loaded
+
+
+def _can_use_qnn_server() -> bool:
+    return QNN_USE_SERVER and os.path.exists(QNN_SERVER_BIN) and os.path.exists(QNN_SYSTEM_LIB)
+
+
+def _get_qnn_server() -> _QnnMultiContextServer:
+    global _QNN_SERVER
+    if _QNN_SERVER is None:
+        _QNN_SERVER = _QnnMultiContextServer()
+    return _QNN_SERVER
+
+
+def _shutdown_qnn_server() -> None:
+    global _QNN_SERVER
+    if _QNN_SERVER is not None:
+        try:
+            _QNN_SERVER.stop()
+        except Exception:
+            pass
+        _QNN_SERVER = None
+
+
+atexit.register(_shutdown_qnn_server)
+
 def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
             native_input=False, backend=None, model_path=None, config_file=None,
             use_mmap=None, perf_profile=None, net_run_path=None, profile_tag=None):
@@ -1327,6 +1597,21 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
     effective_mmap = QNN_USE_MMAP if use_mmap is None else use_mmap
     effective_perf = perf_profile or QNN_PERF_PROFILE
     runner_path = _resolve_exec_binary(net_run_path or QNN_NET_RUN)
+
+    # --- Try multi-context server first (single persistent process) ---
+    if (
+        ctx_path is not None
+        and model_path is None
+        and net_run_path is None
+        and _is_htp_backend(backend_lib)
+        and _can_use_qnn_server()
+    ):
+        try:
+            server = _get_qnn_server()
+            return server.run(ctx_path, input_list_path, output_dir)
+        except Exception as e:
+            _log(f"  [QNN server] fallback for {os.path.basename(ctx_path)}: {e}")
+            _shutdown_qnn_server()
 
     if (
         ctx_path is not None
@@ -1400,7 +1685,15 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
 DEFAULT_NEG = "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry"
 
 def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
-             stretch=True, name=None, preview=False, progressive_cfg=False):
+             stretch=True, name=None, preview=False, progressive_cfg=False,
+             width=1024, height=1024):
+    # ── Resolution setup ──
+    if width % 8 or height % 8:
+        raise ValueError(f"width ({width}) and height ({height}) must be multiples of 8")
+    latent_h, latent_w = height // 8, width // 8
+    global CONTEXTS
+    CONTEXTS = _resolve_contexts(width, height)
+
     if seed is None:
         seed = random.SystemRandom().randrange(0, 2**31)
 
@@ -1414,7 +1707,29 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     _ensure_unet_workdirs(use_cfg)
     runtime_prep_threads = _start_async_runtime_prep(preview)
     daemon_prewarm_threads: list[threading.Thread] = []
-    if _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
+
+    # Prewarm: prefer multi-context server, fallback to per-context daemon
+    unet_preload_thread: threading.Thread | None = None
+    if _can_use_qnn_server():
+        try:
+            server = _get_qnn_server()
+            server.start()
+            # Eagerly preload UNet encoder+decoder in background thread
+            # while CLIP runs in separate qnn-net-run processes.
+            # This overlaps ~10s context load with CLIP + Python setup.
+            def _eager_preload_unet():
+                try:
+                    server.load(CONTEXTS["encoder"])
+                    server.load(CONTEXTS["decoder"])
+                except Exception as e:
+                    _log(f"  [QNN server] eager preload failed: {e}")
+            unet_preload_thread = threading.Thread(target=_eager_preload_unet, daemon=True)
+            unet_preload_thread.start()
+            _log(f"[QNN server] started (eager-load mode)")
+        except Exception as e:
+            _log(f"[QNN server] prewarm failed: {e}")
+            _shutdown_qnn_server()
+    elif _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
         daemon_prewarm_threads = _prewarm_qnn_daemons([
             CONTEXTS["encoder"],
             CONTEXTS["decoder"],
@@ -1429,7 +1744,9 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         f"QNN:    perf={QNN_PERF_PROFILE}, mmap={'on' if QNN_USE_MMAP else 'off'}, "
         f"log={QNN_LOG_LEVEL}"
     )
-    if _can_use_qnn_daemon():
+    if _can_use_qnn_server() and _QNN_SERVER is not None and _QNN_SERVER.is_available():
+        qnn_mode += f", server={os.path.basename(QNN_SERVER_BIN)} ({len(_QNN_SERVER._loaded)} ctx)"
+    elif _can_use_qnn_daemon():
         qnn_mode += f", daemon={os.path.basename(QNN_CONTEXT_RUNNER)}"
     else:
         qnn_mode += ", daemon=off"
@@ -1447,11 +1764,12 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         qnn_mode += ", async-prep=on"
     _log(qnn_mode)
     if QNN_CONFIG_FILE:
-        _log("  [QNN] ~62s-class runs assume the HTP backend-extension fast path is truly active on this deployment")
+        _log("  [QNN] historical ~62s runs depended on a pre-reset fast path; current rebuilt-phone validation is in the ~75–78s class")
     else:
-        _log("  [QNN] backend-extension fast path is off; ~78s-class full runs are expected in this mode")
+        _log("  [QNN] backend-extension fast path is off; current rebuilt-phone full runs are expected in the ~75–78s class")
     if use_cfg:
         _log(f"Neg:    {neg_prompt[:80]}{'...' if len(neg_prompt) > 80 else ''}")
+    _log(f"Resolution: {width}x{height}  (latent {latent_w}x{latent_h})")
     _log(f"Seed: {seed}, Steps: {steps}, CFG: {cfg_scale}")
     t_total = time.time()
     _start_temp_monitor()
@@ -1527,6 +1845,13 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     for t in daemon_prewarm_threads:
         t.join(timeout=15.0)
 
+    # Free CLIP contexts before UNet to avoid OOM (CLIP ~1.5GB, UNet enc+dec ~5GB)
+    if _can_use_qnn_server() and _QNN_SERVER is not None and _QNN_SERVER.is_available():
+        for k in ("clip_l", "clip_g"):
+            cp = CONTEXTS.get(k)
+            if cp:
+                _QNN_SERVER.unload(cp)
+
     if preview:
         _prepare_preview_backend()
 
@@ -1543,8 +1868,8 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         # text_embeds [1,1280]
         te.astype(np.float32).tofile(f"{d}/te.raw")
 
-        # time_ids [1,6] — fixed 1024x1024
-        tid = np.array([[1024, 1024, 0, 0, 1024, 1024]], dtype=np.float32)
+        # time_ids [1,6] — original_h, original_w, crop_y, crop_x, target_h, target_w
+        tid = np.array([[height, width, 0, 0, height, width]], dtype=np.float32)
         tid.tofile(f"{d}/tid.raw")
 
     push_unet_data(pe_cond, te_cond, "cond")
@@ -1555,7 +1880,7 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     # ── 3. Denoise loop ──
     rng = np.random.RandomState(seed)
     # Generate latents matching torch's randn with the same seed
-    latents = rng.randn(1, 4, 128, 128).astype(np.float32)
+    latents = rng.randn(1, 4, latent_h, latent_w).astype(np.float32)
     latents = latents * sched.init_noise_sigma
     total_unet_ms = 0
     tensor_arena = RuntimeTensorArena(_RUNTIME_ACCEL) if RuntimeTensorArena is not None else None
@@ -1582,10 +1907,11 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
                 f"{WORK_DIR}/unet/uncond",
                 si,
                 timestep_arr=timestep_arr,
+                latent_h=latent_h, latent_w=latent_w,
             )
             latents_next = tensor_arena.step_cfg(np_cond, np_uncond, latents, cfg_scale, sigma, sigma_next) if tensor_arena is not None else sched.step(np_uncond + cfg_scale * (np_cond - np_uncond), si, latents)
         else:
-            noise_pred, ms = _run_unet_split(lat_in, t, si, "cond", timestep_arr=timestep_arr)
+            noise_pred, ms = _run_unet_split(lat_in, t, si, "cond", timestep_arr=timestep_arr, latent_h=latent_h, latent_w=latent_w)
             latents_next = tensor_arena.step(noise_pred, latents, sigma, sigma_next) if tensor_arena is not None else sched.step(noise_pred, si, latents)
 
         total_unet_ms += ms
@@ -1613,6 +1939,13 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     _log(f"  UNet total: {total_unet_ms:.0f}ms ({total_unet_ms/steps:.0f}ms/step)")
 
     # ── 4. VAE decode ──
+    # Free UNet contexts before VAE to avoid OOM (UNet ~5GB, VAE ~hundreds MB)
+    if _can_use_qnn_server() and _QNN_SERVER is not None and _QNN_SERVER.is_available():
+        for k in ("encoder", "decoder"):
+            cp = CONTEXTS.get(k)
+            if cp:
+                _QNN_SERVER.unload(cp)
+
     scaling_factor = 0.13025
 
     vd = f"{WORK_DIR}/vae"
@@ -1625,11 +1958,11 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     ms_vae = qnn_run(CONTEXTS["vae"], f"{vd}/il.txt", f"{vd}/out", native=True, profile_tag="vae_final")
     _log(f"[VAE] {ms_vae:.0f}ms")
 
-    raw = np.fromfile(f"{vd}/out/Result_0/image_native.raw", np.float16).astype(np.float32)
-    expected = 1024 * 1024 * 3
+    raw = np.fromfile(f"{vd}/out/Result_0/image.raw", np.float32)
+    expected = height * width * 3
     if raw.size != expected:
-        raise ValueError(f"VAE output: expected {expected} elements, got {raw.size}")
-    img = raw.reshape(1024, 1024, 3)
+        raise ValueError(f"VAE output: expected {expected} elements ({height}x{width}x3), got {raw.size}")
+    img = raw.reshape(height, width, 3)
     img = np.clip(img / 2 + 0.5, 0, 1)
 
     if stretch:
@@ -1761,7 +2094,7 @@ def _load_qnn_raw_tensor(raw_path: str, dims: list[int] | tuple[int, ...], dtype
     return data.reshape(dims).astype(np.float32, copy=False)
 
 
-def _read_taesd_qnn_output(out_dir: str) -> np.ndarray:
+def _read_taesd_qnn_output(out_dir: str, image_h: int = 1024, image_w: int = 1024) -> np.ndarray:
     result_dir = f"{out_dir}/Result_0"
     if not os.path.isdir(result_dir):
         raise FileNotFoundError(f"TAESD QNN output dir missing: {result_dir}")
@@ -1769,7 +2102,7 @@ def _read_taesd_qnn_output(out_dir: str) -> np.ndarray:
     native_path = os.path.join(result_dir, "image_native.raw")
     native_meta_path = os.path.join(out_dir, "image_native.raw.json")
     if os.path.exists(native_path):
-        dims = [1, 1024, 1024, 3]
+        dims = [1, image_h, image_w, 3]
         dtype = np.float16
         if os.path.exists(native_meta_path):
             with open(native_meta_path, "r", encoding="utf-8") as f:
@@ -1784,7 +2117,7 @@ def _read_taesd_qnn_output(out_dir: str) -> np.ndarray:
 
     raw_path = os.path.join(result_dir, "image.raw")
     if os.path.exists(raw_path):
-        dims = [1, 1024, 1024, 3]
+        dims = [1, image_h, image_w, 3]
         raw_bytes = os.path.getsize(raw_path)
         elem_count = math.prod(dims)
         if raw_bytes == elem_count * 4:
@@ -1820,7 +2153,10 @@ def _preview_step_qnn(latents: np.ndarray, plan: dict) -> float:
         net_run_path=TAESD_QNN_NET_RUN,
         profile_tag="taesd_preview",
     )
-    _save_preview_png(_read_taesd_qnn_output(out_dir))
+    # Infer expected image resolution from latent shape
+    _, _, lh, lw = latents.shape
+    img_h, img_w = lh * 8, lw * 8
+    _save_preview_png(_read_taesd_qnn_output(out_dir, image_h=img_h, image_w=img_w))
     return ms
 
 
@@ -1880,22 +2216,23 @@ def _dec_entries_from_enc_out(base, enc_out_dir):
     return dec
 
 
-def _read_noise_pred(out_dec_dir, result_idx=0):
+def _read_noise_pred(out_dec_dir, result_idx=0, latent_h=128, latent_w=128):
     """Read decoder noise_pred output (auto-detect float32/float16)."""
     out_path = f"{out_dec_dir}/Result_{result_idx}/output_0.raw"
     raw_bytes = os.path.getsize(out_path)
-    expected_f32 = 1 * 4 * 128 * 128 * 4
-    expected_f16 = 1 * 4 * 128 * 128 * 2
+    n_latent = 1 * 4 * latent_h * latent_w
+    expected_f32 = n_latent * 4
+    expected_f16 = n_latent * 2
     if raw_bytes == expected_f32:
         d = np.fromfile(out_path, np.float32)
     elif raw_bytes == expected_f16:
         d = np.fromfile(out_path, np.float16).astype(np.float32)
     else:
         raise ValueError(f"Decoder output: unexpected {raw_bytes} bytes at {out_path}")
-    return d.reshape(1, 4, 128, 128)
+    return d.reshape(1, 4, latent_h, latent_w)
 
 
-def _run_unet_split(latent_np, timestep, step_idx, tag, *, timestep_arr: np.ndarray | None = None):
+def _run_unet_split(latent_np, timestep, step_idx, tag, *, timestep_arr: np.ndarray | None = None, latent_h: int = 128, latent_w: int = 128):
     """Run split UNet (encoder + decoder) on NPU — single condition."""
     # Reuse a fixed work dir (step_idx ignored — files overwritten each step)
     base = f"{WORK_DIR}/unet/{tag}"
@@ -1920,10 +2257,10 @@ def _run_unet_split(latent_np, timestep, step_idx, tag, *, timestep_arr: np.ndar
 
     ms_dec = qnn_run(CONTEXTS["decoder"], il_dec, dec_out, profile_tag=f"unet_step{step_idx+1:02d}_{tag}_dec")
 
-    return _read_noise_pred(dec_out, 0), ms_enc + ms_dec
+    return _read_noise_pred(dec_out, 0, latent_h=latent_h, latent_w=latent_w), ms_enc + ms_dec
 
 
-def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *, timestep_arr: np.ndarray | None = None):
+def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *, timestep_arr: np.ndarray | None = None, latent_h: int = 128, latent_w: int = 128):
     """Optimized CFG: run cond+uncond as 2-line input_list in ONE subprocess each.
 
     Instead of 4 qnn-net-run calls, we make 2:
@@ -1932,6 +2269,7 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
     Outputs land in Result_0/ (uncond) and Result_1/ (cond).
     """
     # Common files (same latent/timestep for both conditions)
+    _t_prof = time.time()
     smp_path = f"{cond_base}/smp.raw"
     ts_path = f"{cond_base}/ts.raw"
     smp_np = latent_np.astype(np.float32, copy=False)
@@ -1940,9 +2278,61 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
     _write_array_reuse(ts_path, ts_np, dtype=np.float32)
     # uncond uses the same values — write them there too
     _write_array_reuse(f"{uncond_base}/smp.raw", smp_np, dtype=np.float32)
+    _t_write = time.time()
 
-    enc_out_batch = f"{WORK_DIR}/unet/enc_batch"
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
+
+    # ── Try RUN_CHAIN (encoder→decoder in server memory, no intermediate I/O) ──
+    if _can_use_qnn_server():
+        try:
+            server = _get_qnn_server()
+            # Encoder input-list: 2 lines (uncond, cond)
+            enc_uncond = _enc_dec_inputs(uncond_base, f"{uncond_base}/smp.raw", ts_path)
+            enc_cond = _enc_dec_inputs(cond_base, smp_path, ts_path)
+            il_enc = f"{cond_base}/il_chain_enc.txt"
+            _write_multi_input_list_once(il_enc, [enc_uncond, enc_cond])
+
+            # Decoder input-list: only encoder_hidden_states (non-piped input)
+            il_dec = f"{cond_base}/il_chain_dec.txt"
+            _write_multi_input_list_once(il_dec, [
+                [f"{uncond_base}/enc.raw"],
+                [f"{cond_base}/enc.raw"],
+            ])
+
+            # Encoder→Decoder piping mappings
+            mappings = [
+                "output_0:mid_out",
+                "output_1:skip_0",
+                "output_2:skip_1",
+                "output_3:skip_2",
+                "output_4:skip_3",
+                "output_5:skip_4",
+                "output_6:skip_5",
+                "output_7:skip_6",
+                "output_8:skip_7",
+                "output_9:skip_8",
+                "output_10:temb",
+            ]
+
+            _t_pre = time.time()
+            ms_total = server.run_chain(
+                CONTEXTS["encoder"], CONTEXTS["decoder"],
+                il_enc, il_dec, dec_out_batch, mappings,
+            )
+            _t_chain = time.time()
+
+            np_cond = _read_noise_pred(dec_out_batch, 1, latent_h=latent_h, latent_w=latent_w)
+            np_uncond = _read_noise_pred(dec_out_batch, 0, latent_h=latent_h, latent_w=latent_w)
+            _t_read = time.time()
+            if step_idx < 2:
+                _log(f"    [prof] write={(_t_write-_t_prof)*1000:.0f}ms prep={(_t_pre-_t_write)*1000:.0f}ms chain={(_t_chain-_t_pre)*1000:.0f}ms(server={ms_total:.0f}) read={(_t_read-_t_chain)*1000:.0f}ms")
+            return np_cond, np_uncond, ms_total
+        except Exception as e:
+            _log(f"  [RUN_CHAIN] fallback: {e}")
+            import traceback; traceback.print_exc()
+
+    # ── Fallback: separate encoder + decoder RUN calls ──
+    enc_out_batch = f"{WORK_DIR}/unet/enc_batch"
 
     # ── Batched Encoder: 2 inferences in one qnn-net-run ──
     # Line 0 → uncond (Result_0), Line 1 → cond (Result_1)
@@ -1965,8 +2355,8 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
     ms_dec = qnn_run(CONTEXTS["decoder"], il_dec_batch, dec_out_batch, profile_tag=f"unet_step{step_idx+1:02d}_cfg_batch_dec")
 
-    np_cond = _read_noise_pred(dec_out_batch, 1)
-    np_uncond = _read_noise_pred(dec_out_batch, 0)
+    np_cond = _read_noise_pred(dec_out_batch, 1, latent_h=latent_h, latent_w=latent_w)
+    np_uncond = _read_noise_pred(dec_out_batch, 0, latent_h=latent_h, latent_w=latent_w)
 
     return np_cond, np_uncond, ms_enc + ms_dec
 
@@ -1983,6 +2373,10 @@ if __name__ == "__main__":
                     help="CFG scale (1.0=off, 3.5=default for NPU quality)")
     ap.add_argument("--neg", type=str, default=None,
                     help="Negative prompt (auto-set if --cfg > 1.0)")
+    ap.add_argument("--width", type=int, default=1024,
+                    help="Output image width (must be multiple of 8, default 1024)")
+    ap.add_argument("--height", type=int, default=1024,
+                    help="Output image height (must be multiple of 8, default 1024)")
     ap.add_argument("--no-stretch", action="store_true",
                     help="Disable contrast stretching")
     ap.add_argument("--name", type=str, default=None,
@@ -1998,4 +2392,5 @@ if __name__ == "__main__":
         cfg_scale=a.cfg, neg_prompt=a.neg,
         stretch=not a.no_stretch, name=a.name,
         preview=a.preview, progressive_cfg=a.prog_cfg,
+        width=a.width, height=a.height,
     )

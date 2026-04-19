@@ -76,7 +76,33 @@ final class RuntimeBootstrap {
 
         copyAssetTree(context.getAssets(), ASSET_ROOT, bundleDir);
         writeTextFile(marker, expectedVersion);
+
+        // Set executable permissions on prefix/bin/* and prefix/lib/*.so
+        setExecutablePermissions(bundleDir);
+
         return bundleDir.getAbsolutePath();
+    }
+
+    private static void setExecutablePermissions(File bundleDir) {
+        File binDir = new File(bundleDir, "prefix/bin");
+        if (binDir.isDirectory()) {
+            File[] files = binDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile()) f.setExecutable(true, false);
+                }
+            }
+        }
+        File libDir = new File(bundleDir, "prefix/lib");
+        if (libDir.isDirectory()) {
+            File[] files = libDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().endsWith(".so"))
+                        f.setExecutable(true, false);
+                }
+            }
+        }
     }
 
     static String describeBundledAssets(Context context) {

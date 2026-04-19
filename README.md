@@ -28,7 +28,7 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
 **Current public beta result:** SDXL generation on a Snapdragon phone NPU with a persistent multi-context QNN server, CLIP-L + CLIP-G (cached), split UNet (encoder→decoder via in-memory RUN_CHAIN), VAE, Termux runtime, and an Android APK.
 
-## Performance snapshot (v0.3.0)
+## Performance snapshot (v0.4.0)
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM), `seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
 
@@ -79,6 +79,7 @@ In short:
 
 ## Changelog
 
+- **0.4.0** — **variable resolution support** (512×512 to 1536×1536 and arbitrary multiples of 8): phone_generate.py, export, and APK all accept `--width`/`--height`; per-resolution QNN context directories (`context/{W}x{H}/`); APK resolution picker UI; `build_termux_prefix.py` for self-contained Termux prefix extraction; RuntimeBootstrap sets executable permissions on bundled binaries.
 - **0.3.0** — **persistent multi-context QNN server** replaces all per-step `qnn-net-run` process spawning: a single C process (`qnn-multi-context-server`) loads all context binaries once, keeps them alive, and executes graphs on demand via a stdin/stdout protocol. New **RUN_CHAIN** command pipes encoder→decoder entirely in server memory (11 skip connections, ~82.5 MB) without intermediate file I/O. **CLIP caching** stores tokenizer + encoder results across runs (~9 ms reuse vs ~2.8 s first-run). **FLOAT_32 direct fread** reads raw binary tensors instead of text parsing. **Eager preload** loads UNet contexts in a background thread overlapped with CLIP. Result: **~30.4 s total** (`CLIP ~9 ms cached`, `UNet ~19.3 s`, `VAE ~1.9 s`) — a **2.5× speedup** over v0.2.5.
 - **0.2.5** — QNN `burst` default, native C runtime accelerator staging fix, **75.6 s total**.
 - **0.2.3** — historical pre-reset fast path: **62.0 s total** (not reproducible after factory reset).

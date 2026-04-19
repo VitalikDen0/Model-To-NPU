@@ -69,7 +69,11 @@
 
 Замерено на OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Текущая (v0.3.0) — Persistent multi-context server
+### Текущая (v0.4.0) — Переменное разрешение + автономный APK
+
+Поддержка переменного разрешения (512×512 до 1536×1536, любое кратное 8). Каталоги QNN-контекстов по разрешению. Выбор разрешения в APK. `build_termux_prefix.py` для извлечения standalone-префикса.
+
+### v0.3.0 — Persistent multi-context server
 
 `seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
 

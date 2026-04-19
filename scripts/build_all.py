@@ -155,6 +155,9 @@ def main():
     ap.add_argument("--output-dir", type=str, default=str(ROOT / "build"), help="Output directory for generated artifacts")
     ap.add_argument("--skip-deploy", action="store_true", help="Reserved for future use; deploy is manual for now")
     ap.add_argument("--steps", type=int, default=8, help="Number of Lightning steps (default: 8)")
+    ap.add_argument("--resolution", type=str, default="1024x1024",
+                    help="Image resolution WxH for UNet export (default: 1024x1024). "
+                         "Supports comma-separated list: 1024x1024,896x1152,832x1216")
     args = ap.parse_args()
 
     check_prereqs()
@@ -174,6 +177,7 @@ def main():
     print(f"  Checkpoint: {checkpoint}")
     print(f"  Output:     {out}")
     print(f"  Steps:      {args.steps}")
+    print(f"  Resolution: {args.resolution}")
     print("  Status:     QNN/deploy stages are under repeated re-validation")
     print()
 
@@ -236,6 +240,8 @@ def main():
             str(onnx_unet),
             "--component",
             "unet",
+            "--resolution",
+            args.resolution,
         ])
     else:
         print("[Step 4/6] UNet ONNX already exists, skipping.")
