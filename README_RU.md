@@ -2,13 +2,12 @@
 
 **Языки:** [English](README_EN.md) | [Русский](README_RU.md)
 
-**⚠️ КРИТИЧЕСКИЙ ФАКТ ПО СКОРОСТИ (текущий SDXL runtime):** истинные вычисления UNet сейчас занимают около **11.5 с**.
-Существенно большее наблюдаемое wall-clock время в основном формируется тяжёлым **overhead алгоритмов runtime и драйверного стека** (жизненный цикл процессов, reload/init/deinit контекста, orchestration и сопутствующий I/O).
-Снижение этого overhead — текущий главный приоритет оптимизации.
+> **SDXL на Snapdragon 8 Elite NPU — ~30 с итого** (UNet ~19 с, VAE ~1.9 с, CLIP ~9 мс кэш)
+> при 1024×1024, 8 шагов, CFG=3.5, progressive guidance.
 
 > [!TIP]
-> End-to-end SDXL flow доступен и практически подтверждён (`checkpoint -> final phone-generated PNG`).
-> Отдельные продвинутые ветки сборки/конвертации по-прежнему открыто помечены как beta/experimental.
+> End-to-end SDXL flow доступен и практически подтверждён (`checkpoint -> итоговый PNG на телефоне`).
+> Начата работа над **SD3**, **Flux**, **Wan** и другими семействами моделей — они будут выходить по мере того, как будут разработаны и проверены методы оптимизации.
 
 <p align="center">
   <b>Репозиторий для model-to-NPU pipeline'ов на Qualcomm Snapdragon</b><br>
@@ -23,74 +22,26 @@
 
 - для каждой семьи моделей предполагается своя папка;
 - **текущая реализованная папка** — `SDXL/`;
-- ранний исследовательский workspace `WAN 2.1 1.3B/` теперь выделен отдельно под Wan 2.1 T2V 1.3B;
+- ранний исследовательский workspace `WAN 2.1 1.3B/` выделен под Wan 2.1 T2V 1.3B;
+- начата работа над **SD3**, **Flux**, **Wan** и другими — по мере проработки методов оптимизации;
 - **текущее Android-приложение** лежит в `APK/`;
-- общие deploy-скрипты и вспомогательные файлы живут в `scripts/`, `tokenizer/` и в корне.
+- общие deploy-скрипты и файлы — в `scripts/`, `tokenizer/` и в корне.
 
 Сейчас реально реализованный и задокументированный путь — это **Stable Diffusion XL**, работающий **нативно на NPU телефона** (Hexagon HTP). Текущий SDXL pipeline использует CLIP-L, CLIP-G, Split UNet (encoder + decoder) и VAE прямо на устройстве.
-Папка `WAN 2.1 1.3B/` уже добавлена для исследований по Wan, но это **ещё не подтверждённый phone pipeline**.
 
 **Текущее протестированное сочетание:** [WAI Illustrious SDXL v1.60](https://civitai.com/models/827184/wai-illustrious-sdxl?modelVersionId=2514310) + [SDXL-Lightning 8-step LoRA](https://huggingface.co/ByteDance/SDXL-Lightning) (ByteDance)
 
-> **Важно по скорости:** публичные тайминги, APK-скриншоты и примеры изображений в этом репозитории предполагают, что **Lightning LoRA уже замержена в UNet**. Это не просто косметический шаг: именно так устроен практический быстрый путь здесь. Если запускать базовую ветку SDXL без merge Lightning LoRA, на телефоне всё получается заметно медленнее, и сравнивать такие прогоны с цифрами ниже уже некорректно.
-> **Важно по разрешению:** текущие экспорты, context binaries, preview и примеры в документации рассчитаны именно на **1024×1024**.
-> **Важно:** структура репозитория уже делается шире SDXL, но фактически проверенный pipeline здесь пока SDXL-first.
+> **Важно по скорости:** публичные тайминги и примеры предполагают, что **Lightning LoRA уже замержена в UNet**.
+> **Важно по разрешению:** экспорты, context binaries и примеры рассчитаны на **1024×1024**.
 
 ## Текущий статус
 
-- **Направление репозитория:** multi-model pipeline'ы под Snapdragon NPU
+- **Направление репозитория:** multi-model pipeline'ы под Snapdragon NPU (SDXL, SD3, Flux, Wan, ...)
 - **Сейчас реализованная семья:** `SDXL/`
-- **Исследовательский Wan-workspace:** `WAN 2.1 1.3B/` (поиск кандидатов, helper'ы для загрузки, проверка телефона, 480p-first план)
+- **Исследовательский Wan-workspace:** `WAN 2.1 1.3B/`
 - **Текущая цель APK:** SDXL
-- **Статус скриптов:** практический SDXL цикл (checkpoint -> image) повторно подтверждён на текущей структуре
-- **Статус документации:** обновлена под текущую известную структуру
-
-## Последний подтверждённый полный цикл (2026-04-06)
-
-Проверенный путь в этой сессии:
-
-1. Сборка ранних артефактов на ПК из checkpoint (`.safetensors`).
-2. Использование phone runtime в `/data/local/tmp/sdxl_qnn`.
-3. Нативная генерация на телефоне через задеплоенный `phone_gen/generate.py` (Termux Python через ADB/root shell).
-4. Визуальная проверка итогового PNG (изображение не мусорное).
-
-Использованный checkpoint:
-
-- `J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors`
-
-Ключевые собранные артефакты на хосте:
-
-- `build/sdxl_work_wai160_20260406/diffusers_pipeline/`
-- `build/sdxl_work_wai160_20260406/unet_lightning_merged/`
-- `build/sdxl_work_wai160_20260406/onnx_clip_vae/`
-- `build/sdxl_work_wai160_20260406/onnx_unet/unet.onnx` + `unet.onnx.data`
-
-Подтверждённый финальный результат:
-
-- `NPU/outputs/wai160_phone_native_cfg35_20260406.png`
-- prompt: `orange cat on wooden chair, detailed fur, soft cinematic light, high quality`
-- seed: `777`, steps: `8`, `CFG=3.5`, `--prog-cfg`
-- исторические до-reset тайминги в этом прогоне: `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, total `62.0 s`
-- реальная прогрессия шагов UNet в этом точном прогоне:
-  - CFG шаги 1..4: `9.765 -> 8.230 -> 8.386 -> 7.936 s`
-  - no-guidance шаги 5..8: `5.377 -> 5.513 -> 5.294 -> 5.479 s`
-
-Эта цепочка `62.0 s` была потеряна после последующего factory reset телефона. Сам прогон был реальным, но точное phone-side состояние context/runtime, скриншоты и дополнительные технические артефакты тогда не были сохранены, поэтому репозиторий больше не может независимо восстановить или строго доказать именно этот путь только по оставшимся файлам.
-
-Текущая повторная валидация на уже пересобранном телефоне для того же практического пути `8` шагов, `CFG=3.5`, `--prog-cfg`, Live Preview OFF и нынешних дефолтов `burst` + native runtime accel даёт **75.6 s total** (`CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`). Повторный запуск старого runtime-скрипта до `v0.2.4-beta` на этом же восстановленном телефоне всё равно попадает примерно в тот же класс **~75.8 s**, что подтверждает: потерянное ускорение не выглядит как недавняя Python-side регрессия.
-
-Для живого примера того, как сейчас выглядит SDXL-папка на телефоне после деплоя, см. [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
-Также добавлен небольшой rooted-набор артефактов в [`examples/rooted-phone-sample/`](examples/rooted-phone-sample/) — как справочный и учебный пример.
-
-Для практических подводных камней и накопленных технических заметок см. [`SDXL/LESSONS_LEARNED.md`](SDXL/LESSONS_LEARNED.md) и русскую версию [`SDXL/LESSONS_LEARNED_RU.md`](SDXL/LESSONS_LEARNED_RU.md).
-
-Для отдельной ревизии текущей структуры SDXL UNet, split-границ и зон риска при квантовании см. [`SDXL/UNET_QUANTIZATION_REVIEW.md`](SDXL/UNET_QUANTIZATION_REVIEW.md) и [`SDXL/UNET_QUANTIZATION_REVIEW_RU.md`](SDXL/UNET_QUANTIZATION_REVIEW_RU.md).
-
-Для свежего разбора runtime-overhead, эффекта `mmap` и контрольных цифр после `0.1.3` см. [`SDXL/UNET_OVERHEAD_REVIEW.md`](SDXL/UNET_OVERHEAD_REVIEW.md) и [`SDXL/UNET_OVERHEAD_REVIEW_RU.md`](SDXL/UNET_OVERHEAD_REVIEW_RU.md).
-
-Для карты всех текущих скриптов в `SDXL/` см. [`SDXL/SCRIPTS_OVERVIEW.md`](SDXL/SCRIPTS_OVERVIEW.md) и [`SDXL/SCRIPTS_OVERVIEW_RU.md`](SDXL/SCRIPTS_OVERVIEW_RU.md).
-
-Для единого практического runbook (все реально использованные файлы и команды) см. [`SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md`](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md).
+- **Статус скриптов:** практический SDXL цикл (checkpoint → image) подтверждён
+- **Статус документации:** обновлена до текущего состояния
 
 ## Требования для текущего SDXL pipeline
 
@@ -100,17 +51,17 @@
 | --------- | ---------- |
 | **SoC** | Qualcomm Snapdragon 8 Elite (SM8750) или совместимый с QNN HTP |
 | **RAM** | 16 GB (пик ~12 GB, свободно >= 6 GB) |
-| **Хранилище** | ~10 GB для моделей и context binary в общей папке вроде `/sdcard/Download/sdxl_qnn` |
-| **Root** | Не требуется для текущей layout-схемы по умолчанию |
+| **Хранилище** | ~10 GB для моделей и context binary |
+| **Root** | Не требуется |
 | **Termux** | Python 3.13+, numpy, Pillow, `termux-setup-storage` |
 
-### ПК (для сборки текущего pipeline)
+### ПК (для сборки)
 
 | Компонент | Версия |
 | --------- | ------ |
 | Python | 3.10.x (именно 3.10, не 3.11+) |
 | QAIRT SDK | 2.31+ (Qualcomm AI Engine Direct) |
-| Android NDK | r26+ (для сборки `.so`) |
+| Android NDK | r26+ (для `.so` и `qnn-multi-context-server`) |
 | PyTorch | 2.x |
 | Windows | 10/11 |
 
@@ -118,127 +69,179 @@
 
 Замерено на OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-| Этап | Время | Формат |
-| ---- | ----- | ------ |
-| CLIP-L | ~375 мс | FP16 |
-| CLIP-G | ~1500 мс | FP16 |
-| UNet encoder (1 шаг) | ~7.1 с | FP16 |
-| UNet decoder (1 шаг) | ~7.1 с | FP16 |
-| UNet (8 шагов, без CFG) | ~113 с | FP16 |
-| UNet (8 шагов, CFG=3.5) | ~236 с | FP16 |
-| VAE decoder | ~10 с | FP16 |
-| **Итого (без CFG)** | **~126 с** | |
-| **Итого (CFG=3.5)** | **~251 с** | |
+### Текущая (v0.3.0) — Persistent multi-context server
 
-Пик RAM: **~12 GB** из 16 GB  
+`seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
+
+| Этап | Время | Примечания |
+| ---- | ----- | ---------- |
+| CLIP-L + CLIP-G | ~9 мс | кэшированный результат (первый запуск ~2.8 с) |
+| UNet (8 шагов) | ~19.3 с | ~2411 мс/шаг через persistent server + RUN_CHAIN |
+| VAE decoder | ~1.9 с | FP16 |
+| **Итого (тёплый)** | **~30.4 с** | |
+
+Пик RAM: **~12 GB** из 16 GB
 Разрешение: **1024×1024** (фиксированное)
 
-Свежий контрольный прогон `v0.1.3` с дефолтным `mmap` на OnePlus 13 (`1024×1024`, `8` шагов, `CFG=1.0`) дал **104.4 s total** (`CLIP 1.993 s`, `UNet 91.466 s`, `VAE 8.992 s`), то есть примерно на **17.1% быстрее** прежнего публичного no-CFG ориентира.
+### Предыдущие версии
 
-Новые настроенные прогоны `v0.2.0` с **живым логированием температур**, дефолтным `sustained_high_performance`, задеплоенными HTP backend extensions и **progressive CFG** (`8` шагов, `CFG=3.5`, `--prog-cfg`) дали **79.7–80.6 s total** на том же OnePlus 13:
+| Версия | Итого | UNet | CLIP | VAE | Примечания |
+| ------ | ----- | ---- | ---- | --- | ---------- |
+| v0.2.5 | 75.6 с | 66.6 с | 2.8 с | 3.0 с | burst + native accel, per-step qnn-net-run |
+| v0.2.0 | 79.7 с | 72.4 с | 2.9 с | 3.4 с | sustained_high_performance |
+| v0.1.3 | 104.4 с | 91.5 с | 2.0 с | 9.0 с | mmap включён |
+| v0.1.0 | 273.6 с | — | — | — | первый публичный скриншот |
 
-- прогон 1: `CLIP 2.858 s`, `UNet 73.031 s`, `VAE 3.547 s`, **80.6 s total**;
-- прогон 2: `CLIP 2.917 s`, `UNet 72.391 s`, `VAE 3.395 s`, **79.7 s total**.
+Подробные исторические данные и заархивированные эксперименты — см. [HISTORY_RU.md](HISTORY_RU.md).
 
-Для текущего состояния SDXL теперь полезно держать в голове три разных маркера:
+## Как было достигнуто ~19 с на UNet — подробный разбор оптимизаций
 
-- **README-visible APK marker (Live Preview ON):** около **78.0 s total**;
-- **текущий локальный review на пересобранном телефоне (Live Preview OFF, `burst` + native runtime accel):** **75.6 s total** при `seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, со стадиями `CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`;
-- **историческая заметка до reset:** **62.0 s total** на старом пути `v0.2.3` со стадиями `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`.
+UNet ускорился с **66.6 с** (v0.2.5) до **~19.3 с** (v0.3.0) — **ускорение в 3.4 раза**. Вот что именно изменилось и почему каждый элемент важен.
 
-Прогрессия шагов UNet в историческом прогоне `62.0 s`:
+### 1. Persistent multi-context QNN server (самый большой выигрыш)
 
-- CFG шаги 1..4: **9.765 → 8.230 → 8.386 → 7.936 s**;
-- no-guidance шаги 5..8: **5.377 → 5.513 → 5.294 → 5.479 s**.
+**Было (v0.2.5):** каждый шаг UNet порождал новый процесс `qnn-net-run`. Каждый процесс:
 
-Live preview через TAESD по-прежнему в первую очередь использует rebuilt **QNN GPU** assets и держится примерно около **1.0 s/шаг**; именно этот preview/UI-overhead и даёт более высокие итоговые цифры на APK-скриншотах по сравнению с no-preview runtime-замером.
+- `fork()+exec()` — overhead создания процесса (~15–30 мс каждый);
+- `dlopen()` библиотек QNN backend каждый раз заново;
+- десериализация context binary с диска (~1–3 с на контекст при первой загрузке);
+- аллокация и регистрация `rpcmem` shared DSP memory;
+- выполнение графа;
+- полная очистка и выход.
 
-Дополнительные повторные проверки overhead также показали, что возврат runtime-дерева в `/data/local/tmp/sdxl_qnn`, запуск более старого Python runtime до `v0.2.4-beta` и повторная попытка использовать custom daemon path **не** вернули старую цепочку `62 s`. В текущей пересобранной среде daemon path сейчас зависает, а точное состояние split-context/model-артефактов, которое когда-то дало более быстрый прогон, до reset сохранено не было.
+При 8 шагах × 2 контекста (encoder + decoder) = **16 процессов на изображение** — кумулятивный overhead был огромным.
 
-Практически это теперь нужно читать так: полный прогон в диапазоне **~75–78 s** — это текущая реальность пересобранного телефона, а маркер **62.0 s** следует воспринимать только как историческую до-reset runtime-заметку, а не как гарантированно воспроизводимую текущую цифру.
+**Стало (v0.3.0):** один **persistent C-процесс** (`qnn-multi-context-server`) запускается один раз, загружает все context binary и держит их живыми. Он использует простой stdin/stdout протокол:
 
-В этих полных прогретых прогонах практическая термокартина держалась примерно в диапазоне **CPU ~59–70°C**, **GPU ~50–52°C**, **NPU ~57–72°C**, при кратковременных пиках NPU примерно до **78°C**. Самая первая строка с `CPU=88.8°C` выглядела как краткий скачок сенсора до стабилизации, а не как устойчивое состояние во время генерации.
+```text
+LOAD <id> <path>     → OK <graph> <inputs> <outputs>
+RUN <id> <inputs> <outdir>  → OK <ms>
+RUN_CHAIN <enc> <dec> ...   → OK <ms>
+QUIT                        → OK
+```
+
+Сервер загружает контексты один раз при старте, аллоцирует `rpcmem` один раз, и все последующие запуски графов пропускают весь жизненный цикл процесса. Это одно изменение убрало ~47 с чистого overhead.
+
+### 2. RUN_CHAIN — передача encoder→decoder в памяти
+
+**Было:** после encoder его 11 skip-connection выходов (~82.5 MB итого) записывались на диск как raw файлы, затем decoder-процесс считывал их обратно. Это означало ~165 MB дискового I/O на каждый шаг.
+
+**Стало:** команда `RUN_CHAIN` запускает encoder и decoder последовательно внутри одного серверного процесса. Skip connections передаются через `memcpy` между выходными буферами encoder и входными буферами decoder — **никакого промежуточного файлового I/O**. 11 skip connections + mid + temb остаются в `rpcmem`-буферах сервера.
+
+Примечание: zero-copy pointer swap был опробован, но QNN HTP требует зарегистрированных `rpcmem` handles для каждого буфера, поэтому `memcpy` — минимально возможный подход (см. [HISTORY_RU.md](HISTORY_RU.md)).
+
+### 3. FLOAT_32 direct fread
+
+**Было:** тензорные выходы `qnn-net-run` записывались как текст (один float на строку). Python парсил каждую строку через `float()`.
+
+**Стало:** сервер записывает выходные тензоры как сырой бинарный формат (little-endian float32). Python считывает их одним вызовом `numpy.fromfile`.
+
+### 4. Eager preload — параллельная загрузка контекстов
+
+**Было:** контексты загружались последовательно: CLIP, затем UNet encoder, затем decoder. Контексты UNet вместе занимали ~8 с.
+
+**Стало:** фоновый поток (`_eager_preload_unet()`) отправляет команды `LOAD` для контекстов UNet **пока ещё работает CLIP**. К моменту, когда CLIP завершается, оба UNet-контекста уже прогреты в сервере. Это перекрывает ~8 с загрузки контекстов.
+
+### 5. Кэширование результатов CLIP
+
+**Было:** каждый запуск генерации токенизировал промпт и прогонял CLIP-L + CLIP-G через QNN (~2.8 с).
+
+**Стало:** результаты CLIP кэшируются на диск по хэшу промпта. На cache hit CLIP завершается за ~9 мс (только чтение файлов).
+
+### 6. QNN burst mode + native runtime accelerator
+
+Уже были в v0.2.5, но продолжают вносить вклад:
+
+- **Burst mode:** максимальная частота HTP для коротких интенсивных нагрузок.
+- **Native C accelerator:** `libsdxl_runtime_accel.so` ускоряет scheduler math и tensor layout операции.
+
+### Анализ теоретического минимума
+
+При текущей архитектуре:
+
+- **UNet compute:** ~2411 мс/шаг × 8 шагов = ~19.3 с — это реальное время NPU silicon, не может быть сокращено без уменьшения числа шагов или более быстрого чипа.
+- **VAE:** ~1.9 с — уже близко к оптимуму.
+- **CLIP:** ~9 мс кэш, ~2.8 с холодный — кэшированный практически бесплатен.
+- **Overhead сервера на шаг:** ~5–10 мс (memcpy + протокол) — пренебрежимо.
+- **Теоретический минимум тёплого прогона:** ~21–22 с (UNet + VAE + минимальная оркестрация).
+- **Текущий реальный:** ~30.4 с — оставшиеся ~9 с — Python оркестрация, numpy scheduler math, запись PNG.
+
+## Архитектура
+
+```text
+          ┌──────────────────────────────────────────────────────────────────┐
+          │                      Телефон (NPU)                              │
+          │                                                                 │
+          │  ┌─────────────────────────────────────────────────────────┐    │
+          │  │        qnn-multi-context-server (persistent C-процесс)  │    │
+          │  │                                                         │    │
+Prompt ──▶│  │  CLIP-L ──┐                                             │    │
+          │  │  (FP16)   ├──▶ concat [1,77,2048]                       │    │
+          │  │  CLIP-G ──┘    + pooled [1,1280]                        │    │
+          │  │  (FP16)        + time_ids [1,6]                         │    │
+          │  │                    │                                     │    │
+          │  │         ┌─────────▼──────────┐                          │    │
+          │  │         │  RUN_CHAIN × 8     │                          │    │
+          │  │         │  encoder ──memcpy──▶ decoder                   │    │
+          │  │         │  (11 skip conns     │                          │    │
+          │  │         │   в памяти сервера) │                          │    │
+          │  │         └─────────┬──────────┘                          │    │
+          │  │                   ▼                                      │    │
+          │  │              VAE decoder ──▶ PNG                         │    │
+          │  └─────────────────────────────────────────────────────────┘    │
+          └──────────────────────────────────────────────────────────────────┘
+```
+
+**Split UNet:** Полный FP16 UNet (~5 GB) превышает лимит HTP (~3.5 GB), поэтому разделяется на encoder (conv_in + down_blocks + mid_block, 2.52 GB) и decoder (up_blocks + conv_out, 2.69 GB). Encoder передаёт decoder 11 skip-connections + mid + temb через `memcpy` в серверной памяти (RUN_CHAIN).
+
+**Scheduler:** EulerDiscrete, trailing spacing (требование Lightning), pure numpy.
+
+**Tokenizer:** Pure Python BPE (без HuggingFace/transformers), идентичный CLIP tokenizer.
 
 ## Быстрый старт
 
 ### 1. Подготовка окружения (ПК)
 
 ```bash
-# Установить зависимости Python 3.10
 pip install torch diffusers transformers safetensors onnx onnxruntime Pillow numpy
-
-# Скачать QAIRT SDK
 python scripts/download_qualcomm_sdk.py
-
-# Скачать ADB (если ещё нет)
 python scripts/download_adb.py
 ```
 
 ### 2. Сборка pipeline
 
-> **Примечание:** `scripts/build_all.py` сейчас автоматизирует только ранние воспроизводимые шаги и специально **не** запускает вслепую все поздние QNN/deploy-стадии, пока они перепроверяются.
-> **Важно про набор скриптов:** не все файлы в `SDXL/` нужны для кратчайшего happy-path. Большинство лабораторных/диагностических скриптов теперь сгруппированы в `SDXL/debug/`, а в корне `SDXL/` оставлен практический публичный поток.
-
 ```bash
-# Экспериментальный помощник для ранних SDXL-этапов
 python scripts/build_all.py --checkpoint path/to/model.safetensors
 ```
 
-Также добавлен аккуратный beta-wrapper для текущего документированного пути:
+Или end-to-end wrapper:
 
 ```powershell
 pwsh SDXL/run_end_to_end.ps1 -ContextsDir path/to/context_binaries
 ```
 
-Если `-Checkpoint` не указан, скрипт теперь запрашивает путь интерактивно и по умолчанию подставляет:
-
-- `J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors`
-
-Он специально разделяет воспроизводимые ранние шаги сборки и ещё beta/runtime/deploy-часть.
-
-Для build-only валидации (когда телефон отключён или deploy откладывается):
-
-```powershell
-pwsh SDXL/run_end_to_end.ps1 -OutputRoot build/sdxl_work_custom -SkipDeploy -SkipSmokeTest
-```
-
-Или пошагово:
+Пошагово:
 
 ```bash
-# 1. Скачать модель WAI Illustrious SDXL v1.60 и SDXL-Lightning LoRA
-
-# 2. Конвертировать checkpoint в diffusers формат
+# 1. Конвертировать checkpoint в diffusers
 python SDXL/convert_sdxl_checkpoint_to_diffusers.py
 
-# 3. Замержить Lightning LoRA в UNet
+# 2. Замержить Lightning LoRA в UNet
 python SDXL/bake_lora_into_unet.py
 
-# 4. Экспортировать все компоненты в ONNX
+# 3. Экспорт в ONNX
 python SDXL/export_clip_vae_to_onnx.py
 python SDXL/export_sdxl_to_onnx.py
 
-# 5. Конвертировать в QNN
+# 4. Конвертация в QNN
 python SDXL/debug/convert_clip_vae_to_qnn.py
 python SDXL/debug/convert_lightning_to_qnn.py
 
-# 6. Собрать Android model libraries (.so)
+# 5. Сборка Android model libraries
 python SDXL/debug/build_android_model_lib_windows.py
-```
 
-Дополнительный путь для live preview в APK / phone runtime:
-
-```bash
-# Экспорт tiny TAESD XL preview decoder
-python SDXL/debug/export_taesd_to_onnx.py --validate
-
-# Деплой одного ONNX-файла в phone runtime
-adb push D:/platform-tools/sdxl_npu/taesd_decoder/taesd_decoder.onnx /sdcard/Download/sdxl_qnn/phone_gen/
-
-# Опционально: собрать и задеплоить TAESD QNN preview assets (предпочтительный путь)
-python SDXL/debug/convert_taesd_to_qnn.py --backend gpu
-
-# Опционально только как fallback (если нужен CPU ONNX preview в Termux / APK)
-python -m pip install onnxruntime
+# 6. Сборка persistent multi-context QNN server
+python scripts/build_qnn_multi_context_server.py
 ```
 
 ### 3. Деплой на телефон
@@ -251,13 +254,10 @@ python scripts/deploy_to_phone.py \
   --qnn-bin-dir /path/to/qnn_sdk/bin/aarch64-android
 ```
 
-Если в `--qnn-lib-dir` есть `libQnnHtpNetRunExtensions.so`, deploy-скрипт теперь копирует и её тоже, так что phone runtime и APK смогут автоматически включить уже лежащий в репозитории путь через `htp_backend_extensions_lightning.json`. Тот же deploy helper также пытается докинуть optional TAESD preview assets (`taesd_decoder.serialized.bin.bin`, `libTAESDDecoder.so`, `libQnnGpu.so`, `qnn-gpu-target-server`), если они найдены локально.
-
 ### 4. Подготовка Termux (на телефоне)
 
 ```bash
 pkg install python python-numpy python-pillow
-python -m pip install onnxruntime   # опциональный CPU fallback для TAESD live preview
 termux-setup-storage
 ```
 
@@ -269,18 +269,14 @@ termux-setup-storage
 export PATH=/data/data/com.termux/files/usr/bin:$PATH
 export SDXL_QNN_BASE=/sdcard/Download/sdxl_qnn
 python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "1girl, anime, cherry blossoms"
-python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "dark castle" --cfg 2.0 --neg "blurry"
-python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "landscape" --seed 777 --steps 8
-python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "1girl, upper body, looking at viewer, masterpiece, best quality" --seed 777 --steps 8 --cfg 3.5 --prog-cfg
+python3 "$SDXL_QNN_BASE/phone_gen/generate.py" "landscape" --seed 777 --steps 8 --cfg 3.5 --prog-cfg
 ```
 
-Сейчас runtime по умолчанию включает:
+Runtime по умолчанию:
 
 - `SDXL_QNN_USE_MMAP=1`
 - `SDXL_QNN_PERF_PROFILE=burst`
-- live-логирование CPU / GPU / NPU при `SDXL_SHOW_TEMP=1`
-
-Если в phone-side папке одновременно существуют `htp_backend_extensions_lightning.json` и `lib/libQnnHtpNetRunExtensions.so`, `phone_generate.py` теперь автоматически подхватывает `SDXL_QNN_CONFIG_FILE` даже для прямых запусков из Termux.
+- persistent `qnn-multi-context-server` с RUN_CHAIN
 
 #### Через APK
 
@@ -290,122 +286,7 @@ cd APK
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, live-температуры CPU / GPU / NPU и сохранение в галерею.  
-В `v0.2.5` APK сохраняет опциональные переключатели **Live Preview (TAESD)** и **½-CFG**, по умолчанию включает QNN `mmap` + `burst` для текущего валидированного пути на OnePlus 13, фиксирует форму runtime как daemon OFF + async/prestage/prewarm ON, при наличии нужных `.json` + `.so` автоматически прокидывает backend-extension config, staging-копирует optional `libsdxl_runtime_accel.so` из общей phone-side папки в исполняемый temp-каталог перед Android `ctypes` load, пишет временные runtime-файлы в app-private cache вместо общей папки, корректно парсит preview-тайминги вида `QNN GPU ...ms`, а также сначала пробует bundled/offline Python и только потом переключается на root shell, если app process не видит Termux-private `python3`.
-Текущий путь по умолчанию — `/sdcard/Download/sdxl_qnn`; через ⚙️ Settings можно указать другую раскладку.
-
-Свежий локальный review-замер для этого пути (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF) дал **75.6 s total** с `burst` + native runtime accel; повторный прогон с `basic` profiling остался практически тем же — **75.2 s total**, а итоговый PNG для burst/native оказался байт-в-байт одинаковым между обычным и профилированным запуском.
-
-Важно по версиям: speed-критичные изменения часто попадают в `phone_generate.py` (на телефоне это `phone_gen/generate.py`), поэтому одна и та же версия APK может начать работать быстрее после обновления только runtime-скрипта, даже без пересборки APK.
-
-#### Host-side (с ПК через ADB, опциональный debug-путь)
-
-```bash
-python SDXL/debug/generate.py "cat on windowsill, masterpiece" --seed 42
-```
-
-Если runtime на телефоне расположен в `/data/local/tmp/sdxl_qnn` (rooted layout), явно задайте базовый путь:
-
-```powershell
-$env:SDXL_QNN_BASE='/data/local/tmp/sdxl_qnn'
-python SDXL/debug/generate.py "orange cat on wooden chair, detailed fur" --seed 777 --steps 8 --name wai160_e2e_phonecheck_20260406
-```
-
-Этот host-side путь полезен как fallback/debug-сценарий, если в Termux на телефоне временно недоступен `python3`, но ADB и QNN runtime-файлы на месте.
-
-## Чеклист полного круга (checkpoint -> итоговый PNG)
-
-- Подготовить ПК-окружение (`Python 3.10`, нужные pip-пакеты, QAIRT, ADB).
-- Собрать ранние SDXL-стадии из checkpoint через `scripts/build_all.py` или `SDXL/run_end_to_end.ps1 -SkipDeploy -SkipSmokeTest`.
-- Убедиться, что на телефоне есть runtime-дерево с `context/`, `bin/`, `lib/`, `model/`, `phone_gen/`.
-- Сгенерировать изображение:
-  - standalone Termux (`phone_gen/generate.py`), если на телефоне доступен `python3`.
-  - опционально как debug-fallback: host-side `SDXL/debug/generate.py` через ADB с корректным `SDXL_QNN_BASE`.
-- Проверить качество результата визуально (или через утилиты из `SDXL/debug/`).
-- Только после подтверждения качества переходить к экспериментальным шагам из `SDXL/debug/`.
-
-## Что реально лежит на телефоне сейчас?
-
-Текущая основная цель для деплоя — `/sdcard/Download/sdxl_qnn`, но живой слепок с телефона по ссылке ниже остаётся полезным как исторический пример более ранней rooted-раскладки.
-
-- минимально необходимая структура — ниже;
-- живая историческая структура — в [`examples/phone-sdxl-qnn-layout.md`](examples/phone-sdxl-qnn-layout.md).
-
-## Структура проекта
-
-```text
-├── README.md                 ← стартовая страница с выбором языка
-├── README_RU.md              ← вы здесь
-├── README_EN.md              ← English version
-├── LICENSE                   ← текст PolyForm Noncommercial License 1.0.0
-├── NOTICE                    ← обязательные notice / attribution строки
-├── .gitattributes
-├── .gitignore
-├── phone_generate.py         ← standalone-генератор для телефона
-├── tokenizer/                ← BPE токенизатор (CLIP)
-│   ├── vocab.json
-│   └── merges.txt
-├── examples/
-│   ├── phone-sdxl-qnn-layout.md    ← живой пример rooted-раскладки на телефоне
-│   ├── phone-sdxl-qnn-layout_RU.md ← русская версия примера rooted-раскладки
-│   └── rooted-phone-sample/        ← небольшой набор rooted-артефактов (доки, PNG, конфиги, скрипты)
-├── .github/
-│   └── ISSUE_TEMPLATE/
-│       └── bug_report.md
-├── scripts/
-│   ├── deploy_to_phone.py    ← деплой на телефон через ADB
-│   ├── download_qualcomm_sdk.py
-│   ├── download_adb.py
-│   └── build_all.py          ← ранний SDXL helper (поздние шаги перепроверяются)
-├── SDXL/                     ← текущие SDXL-специфичные скрипты конвертации и сборки
-│   ├── bake_lora_into_unet.py
-│   ├── export_clip_vae_to_onnx.py
-│   ├── export_sdxl_to_onnx.py
-│   ├── debug/               ← лабораторные/диагностические/экспериментальные скрипты
-│   │   ├── assess_generated_image.py
-│   │   ├── verify_clip_vae_onnx.py
-│   │   ├── verify_e2e_onnx.py
-│   │   ├── generate.py
-│   │   ├── convert_clip_vae_to_qnn.py
-│   │   ├── convert_lightning_to_qnn.py
-│   │   ├── export_taesd_to_onnx.py
-│   │   ├── convert_taesd_to_qnn.py
-│   │   └── build_android_model_lib_windows.py
-│   ├── LESSONS_LEARNED.md    ← подводные камни и решения
-│   └── LESSONS_LEARNED_RU.md ← русская версия lessons learned
-├── WAN 2.1 1.3B/             ← ранний workspace для экспериментов с Wan 2.1 T2V 1.3B
-│   ├── README.md             ← текущая стратегия выбора и старта
-│   ├── wan_tool.py           ← матрица кандидатов, рекомендация, загрузка, adb-проверка телефона
-│   ├── download_wan_assets.py← wrapper для загрузок
-│   └── phone_check.py        ← wrapper для adb-проверки телефона
-└── APK/                      ← Android-приложение
-    ├── README.md
-    └── app/src/main/
-        ├── AndroidManifest.xml
-        └── java/com/sdxlnpu/app/
-            ├── MainActivity.java
-            └── SettingsActivity.java
-```
-
-## Архитектура
-
-```text
-          ┌──────────────────────────────────────────────────────────────┐
-          │                    Телефон (NPU)                            │
-          │                                                             │
-Prompt ──▶│ CLIP-L ──┐                                                  │
-          │ (FP16)   ├──▶ concat [1,77,2048] ──▶ Split UNet ──▶ VAE ──▶│──▶ PNG
-          │ CLIP-G ──┘    + pooled [1,1280]      encoder FP16   FP16   │
-          │ (FP16)        + time_ids [1,6]       decoder FP16          │
-          │                                      × 8 шагов             │
-          └──────────────────────────────────────────────────────────────┘
-```
-
-**Split UNet:** Полный FP16 UNet (~5 GB) превышает лимит HTP (~3.5 GB), поэтому он разделяется на encoder (conv_in + down_blocks + mid_block, 2.52 GB) и decoder (up_blocks + conv_out, 2.69 GB). Encoder передаёт decoder 11 skip-connections + mid + temb.
-
-**Scheduler:** EulerDiscrete, trailing spacing (требование Lightning), pure numpy.
-
-**Tokenizer:** Pure Python BPE (без HuggingFace/transformers), идентичный CLIP tokenizer.
+APK даёт полноценный GUI: промпт, негативный промпт, CFG, steps, seed, контрастирование, прогресс-бар, live температуры CPU / GPU / NPU и сохранение в галерею.
 
 ## Минимальная структура файлов на телефоне
 
@@ -416,46 +297,62 @@ Prompt ──▶│ CLIP-L ──┐                                            
 │   ├── clip_g.serialized.bin.bin          (~1.3 GB)
 │   ├── unet_encoder_fp16.serialized.bin.bin (~2.3 GB)
 │   ├── unet_decoder_fp16.serialized.bin.bin (~2.5 GB)
-│   ├── vae_decoder.serialized.bin.bin     (~151 MB)
-│   └── taesd_decoder.serialized.bin.bin   (~5-15 MB, optional QNN live preview)
-├── htp_backend_extensions_lightning.json  (опциональная точка входа для HTP backend extensions)
-├── htp_backend_ext_config_lightning.json  (опциональная tuning-конфигурация HTP backend)
+│   └── vae_decoder.serialized.bin.bin     (~151 MB)
 ├── phone_gen/
 │   ├── generate.py                        (standalone генератор)
-│   ├── taesd_decoder.onnx                 (~5 MB, опциональный CPU fallback preview)
 │   └── tokenizer/
 │       ├── vocab.json                     (CLIP BPE vocabulary)
 │       └── merges.txt                     (BPE merge rules)
 ├── lib/                                   (QNN runtime библиотеки)
 │   └── libQnnHtpNetRunExtensions.so       (опционально, auto-used при наличии)
-│   └── libQnnGpu.so                       (опционально, для QNN GPU TAESD preview)
-├── model/                                 (опционально: дополнительные model libs для некоторых сценариев)
-│   └── libTAESDDecoder.so                 (опционально, TAESD QNN preview model fallback)
 ├── bin/
-│   ├── qnn-net-run                        (QNN inference runner)
-│   └── qnn-gpu-target-server              (опционально, рекомендуется для QNN GPU preview)
+│   └── qnn-multi-context-server           (persistent QNN server)
 └── outputs/                               (PNG результаты)
+```
+
+## Структура проекта
+
+```text
+├── README.md                 ← стартовая страница
+├── README_RU.md              ← вы здесь
+├── README_EN.md              ← English version
+├── HISTORY_EN.md             ← исторический архив производительности
+├── HISTORY_RU.md             ← исторический архив (русский)
+├── LICENSE                   ← PolyForm Noncommercial License 1.0.0
+├── NOTICE                    ← обязательные notice / attribution
+├── phone_generate.py         ← standalone-генератор для телефона
+├── tokenizer/                ← BPE токенизатор (CLIP)
+├── examples/                 ← примеры и samples
+├── scripts/
+│   ├── deploy_to_phone.py
+│   ├── build_qnn_multi_context_server.py
+│   ├── build_all.py
+│   └── ...
+├── NPU/
+│   ├── qnn_multi_context_server.c  ← исходник persistent сервера (C)
+│   └── build/                      ← собранный бинарник
+├── SDXL/                     ← SDXL конвертация, сборка, лабораторные скрипты
+│   ├── debug/                ← экспериментальные/диагностические скрипты
+│   └── ...
+├── WAN 2.1 1.3B/             ← Wan 2.1 T2V исследовательский workspace
+└── APK/                      ← Android-приложение
 ```
 
 ## Ограничения
 
-- **Разрешение фиксировано** 1024×1024 — другие размеры требуют полной переконвертации
-- **Быстрый документированный путь предполагает, что Lightning LoRA уже замержена в UNet** — без этого merge вы фактически уходите в сильно более медленный базовый SDXL path, и тайминги/примеры из репозитория перестают быть репрезентативными
-- **VAE FP16** слегка сжимает цветовой диапазон -> применяется percentile contrast stretching
-- **TAESD live preview опционален** — runtime теперь в первую очередь пытается использовать задеплоенный QNN TAESD preview path (предпочтительно через GPU backend), а при отсутствии или ошибке QNN-preview assets откатывается на маленький ONNX-декодер (`phone_gen/taesd_decoder.onnx`) плюс `onnxruntime`
-- **Лучший текущий быстрый путь использует HTP backend extensions** — JSON-конфиг уже лежит в репозитории, но runtime включает его автоматически только если на телефон реально задеплоен `libQnnHtpNetRunExtensions.so` в `lib/`
-- **CFG > 1.0 здесь дорогой** — нужны и conditional, и unconditional предсказания; поскольку runtime использует split UNet (`encoder` + `decoder`), наивный CFG превращает каждый шаг в четыре phone-side запуска UNet-подпроцессов. Текущий runtime уже батчит часть этой работы лучше, чем раньше, но по wall-clock времени это всё равно почти 2× относительно no-CFG пути.
+- **Разрешение фиксировано** 1024×1024 — другие требуют полной переконвертации
+- **Быстрый путь предполагает, что Lightning LoRA замержена в UNet**
+- **VAE FP16** слегка сжимает цветовой диапазон → применяется percentile contrast stretching
+- **TAESD live preview опционален** — QNN GPU или fallback на ONNX
+- **CFG > 1.0 дорогой** — примерно 2× относительно no-CFG пути
 - **Termux обязателен** — Python runtime для `phone_generate.py`
-- **Для APK на Android 11+ может понадобиться доступ ко всем файлам** — чтобы читать `/sdcard/Download/sdxl_qnn`
 - Тестировалось только на **OnePlus 13 (SM8750)**
 
 ## Known issues
 
-- Первый запуск каждого компонента медленнее (загрузка context binary в NPU)
+- Первый запуск каждого компонента медленнее (загрузка контекстов)
 - При низком RAM телефон может убить процесс — закройте другие приложения
-- На Android 11+ APK может попросить доступ ко всем файлам для работы с `/sdcard/Download/sdxl_qnn`
-- Если `python3` недоступен из процесса приложения, укажите корректную команду/путь в ⚙️ Settings
-- Если backend extensions не задеплоены, runtime всё равно будет работать — просто откатится к обычному non-config QNN path
+- На Android 11+ APK может попросить доступ ко всем файлам
 - numpy и torch используют разные RNG — одинаковый seed даёт разные, но валидные изображения
 
 ## Лицензия
@@ -463,17 +360,11 @@ Prompt ──▶│ CLIP-L ──┐                                            
 Этот репозиторий распространяется под **PolyForm Noncommercial License
 1.0.0** — см. [LICENSE](LICENSE) и [NOTICE](NOTICE).
 
-Коротко по сути:
+Коротко:
 
-- проект можно использовать, изучать, изменять и форкать только в
-  **некоммерческих** целях;
-- при распространении нужно приложить условия PolyForm (или канонический URL
-  PolyForm) вместе со строками `Required Notice:` из [`NOTICE`](NOTICE);
-- сторонние зависимости сохраняют собственные лицензии, и их требования нужно
-  соблюдать отдельно.
-
-Это **source-available / non-commercial**, а не OSI open source лицензия,
-потому что коммерческое использование запрещено.
+- использование, изучение, изменение и форки — только в **некоммерческих** целях;
+- при распространении — приложить условия PolyForm и строки из [`NOTICE`](NOTICE);
+- сторонние зависимости сохраняют свои лицензии.
 
 Зависимости:
 

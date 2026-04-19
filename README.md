@@ -1,12 +1,11 @@
 # Model-to-NPU Pipeline for Snapdragon
 
-**⚠️ CRITICAL PERFORMANCE REALITY (current SDXL runtime):** true UNet compute itself is currently about **11.5 s**.
-Most of the larger observed wall-clock time is heavy **runtime-algorithm / driver overhead** (process lifecycle, context reload/init/deinit, orchestration, and surrounding I/O).
-Reducing this overhead is the current top optimization priority.
+> **SDXL on Snapdragon 8 Elite NPU — ~30 s total** (UNet ~19 s, VAE ~1.9 s, CLIP ~9 ms cached)
+> at 1024×1024, 8 steps, CFG=3.5, progressive guidance.
 
 > [!TIP]
 > End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
-> Some advanced build/conversion branches remain openly marked as beta or experimental.
+> Work on **SD3**, **Flux**, **Wan** and other model families has started — they will be released as the methods are developed and validated.
 
 <p align="center">
   <a href="README_EN.md"><img src="https://img.shields.io/badge/docs-English-0A66C2?style=for-the-badge" alt="English docs"></a>
@@ -23,22 +22,24 @@ Reducing this overhead is the current top optimization priority.
 
 Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 
-**Current implemented family:** `SDXL/`  
-**Exploratory Wan workspace:** `WAN 2.1 1.3B/` (research / selection / 480p-first planning)  
-**Current public beta result:** SDXL generation on a Snapdragon phone NPU with CLIP-L, CLIP-G, split UNet, VAE, Termux runtime, and an Android APK.
+**Current implemented family:** `SDXL/`
+**Exploratory Wan workspace:** `WAN 2.1 1.3B/` (research / selection / 480p-first planning)
+**Future models:** SD3, Flux, Wan, and others — as the optimization methods are developed
 
-## Latest validation snapshot
+**Current public beta result:** SDXL generation on a Snapdragon phone NPU with a persistent multi-context QNN server, CLIP-L + CLIP-G (cached), split UNet (encoder→decoder via in-memory RUN_CHAIN), VAE, Termux runtime, and an Android APK.
 
-- **2026-04-06:** practical SDXL full loop was re-validated from checkpoint build to final phone-generated PNG.
-- Checkpoint used: `waiIllustriousSDXL_v160.safetensors`.
-- Final validated output: `NPU/outputs/wai160_phone_native_cfg35_20260406.png`.
-- Historical pre-reset best-known runtime-only note: `CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`, **`62.0 s total`**.
-- That `62.0 s` chain was lost after the phone was factory-reset. The tests were real, but the exact phone-side context/runtime state, screenshots, and extra technical artifacts were not preserved at the time, so the repository can no longer independently reconstruct or prove that exact path from the surviving files alone.
-- Current rebuilt-phone validated local review (`seed=777`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF, `burst` + native runtime accel): `CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`, **`75.6 s total`**. Re-running the older pre-`v0.2.4-beta` runtime code on the rebuilt phone still lands in the same **`~75.8 s`** class, which confirms the lost speedup is not a recent Python-side regression.
-- Updated full walkthroughs are documented in:
-  - [`README_EN.md`](README_EN.md)
-  - [`README_RU.md`](README_RU.md)
-  - [`SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md`](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md)
+## Performance snapshot (v0.3.0)
+
+Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM), `seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
+
+| Stage | Time | Notes |
+| ----- | ---- | ----- |
+| CLIP-L + CLIP-G | ~9 ms | cached result (first run ~2.8 s) |
+| UNet (8 steps) | ~19.3 s | ~2411 ms/step via persistent server |
+| VAE decoder | ~1.9 s | FP16 |
+| **Total (warm)** | **~30.4 s** | |
+
+**Speedup history:** 273.6 s → 104.4 s → 75.6 s → **30.4 s** (current)
 
 ## Quick links
 
@@ -48,6 +49,8 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 - [Mandatory attribution notice](NOTICE)
 - [Android app notes](APK/README.md)
 - [WAN 2.1 1.3B exploration workspace](WAN%202.1%201.3B/README.md)
+- [Historical performance archive (EN)](HISTORY_EN.md)
+- [Historical performance archive (RU)](HISTORY_RU.md)
 - [Live phone-side layout example](examples/phone-sdxl-qnn-layout.md)
 - [SDXL script map (EN)](SDXL/SCRIPTS_OVERVIEW.md)
 - [SDXL script map (RU)](SDXL/SCRIPTS_OVERVIEW_RU.md)
@@ -63,8 +66,8 @@ Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
 This repository is now distributed under the
 **PolyForm Noncommercial License 1.0.0**.
 
-This is **source-available / non-commercial**, not OSI open source, because
-commercial use is prohibited.
+This is **source-available**, not OSI open source, because commercial use is
+prohibited.
 
 In short:
 
@@ -76,27 +79,21 @@ In short:
 
 ## Changelog
 
-- **0.2.5** — current local review build prepared for release: the phone runtime and APK default to QNN `burst` on the rebuilt OnePlus 13 path, the optional native runtime accelerator stages its `.so` out of shared storage before Android `ctypes` loads it, and the fresh review run for the standard `8`-step `CFG=3.5 --prog-cfg` path reached **75.6 s total** (`CLIP 2.774 s`, `UNet 66.639 s`, `VAE 2.960 s`) while the `basic` rerun stayed effectively the same at **75.2 s total**.
-- **0.2.4-beta** — transition snapshot between the old `v0.2.3` fast-path era and the current rebuilt-phone validation cycle: bundled/offline runtime assets stayed integrated into the APK path, the phone runtime gained an optional native C accelerator for scheduler/layout hot spots, but the exact APK artifact for this snapshot was not attached to GitHub Releases in time and is no longer preserved locally as a standalone historical build.
-- **0.2.3** — historical pre-reset fast-path marker: the split-UNet reuse pass made the early guided steps decay instead of hovering near a flat ~12 s plateau; the README-visible APK marker stayed around **78.0 s total** (Live Preview ON), and a runtime-only run once reached **62.0 s total** (`CLIP 1.787 s`, `UNet 55.980 s`, `VAE 3.138 s`) with Live Preview OFF. That run was real, but the exact phone-side state and supporting technical artifacts were not archived before the later factory reset, so it is now historical rather than reproducible.
-- **0.2.2** — APK/runtime snapshot refreshed for the current validation cycle: TAESD preview wiring was repaired for the QNN path, APK preview timing parsing now handles `QNN GPU` preview lines again, and the deploy/docs/sample notes were synchronized around the current phone runtime layout while early CFG-step tuning remains under active investigation.
-- **0.2.1** — APK now routes transient runtime files (`WORK_DIR`, generated PNGs, and live preview frames) through app-private cache directories instead of shared storage, while keeping the deployed model tree in the public phone path.
-- **0.2.0** — phone runtime and APK now show live **CPU / GPU / NPU** temperatures, default to QNN `sustained_high_performance`, auto-enable HTP backend extensions when `libQnnHtpNetRunExtensions.so` is deployed, and the current full `8`-step progressive-CFG best path reached about **79.7–80.6s total** on OnePlus 13.
-- **0.1.3** — phone runtime and APK launch path now enable QNN `mmap` by default, repo-visible SDXL speed/overhead probes were added, and the current control run reached **104.4s total** at `1024×1024`, `8` steps, `CFG=1.0` on OnePlus 13.
-- **0.1.2-beta** — APK now exposes a **½-CFG** toggle that applies guidance only to the first `ceil(steps / 2)` denoising steps; added a dedicated UNet quantization review with per-block risk notes and safer experiment boundaries.
-- **0.1.2** — APK gained optional **Live Preview (TAESD)** using `phone_gen/taesd_decoder.onnx` + `onnxruntime` on the phone.
-- **Runtime / preview fixes** — TAESD preview path was repaired end-to-end, including export, phone runtime wiring, and deployment docs.
-- **APK log parsing fixes** — timing parsing and progress extraction were cleaned up so CLIP / UNet / VAE status reporting no longer drifts on mixed log lines.
-- **Docs / sample sync** — rooted phone sample and the live phone layout docs were synchronized with the current shared-path runtime structure.
+- **0.3.0** — **persistent multi-context QNN server** replaces all per-step `qnn-net-run` process spawning: a single C process (`qnn-multi-context-server`) loads all context binaries once, keeps them alive, and executes graphs on demand via a stdin/stdout protocol. New **RUN_CHAIN** command pipes encoder→decoder entirely in server memory (11 skip connections, ~82.5 MB) without intermediate file I/O. **CLIP caching** stores tokenizer + encoder results across runs (~9 ms reuse vs ~2.8 s first-run). **FLOAT_32 direct fread** reads raw binary tensors instead of text parsing. **Eager preload** loads UNet contexts in a background thread overlapped with CLIP. Result: **~30.4 s total** (`CLIP ~9 ms cached`, `UNet ~19.3 s`, `VAE ~1.9 s`) — a **2.5× speedup** over v0.2.5.
+- **0.2.5** — QNN `burst` default, native C runtime accelerator staging fix, **75.6 s total**.
+- **0.2.3** — historical pre-reset fast path: **62.0 s total** (not reproducible after factory reset).
+- **0.2.0** — thermal logging, `sustained_high_performance`, HTP backend extensions: **79.7–80.6 s total**.
+- **0.1.3** — QNN `mmap`, **104.4 s total**.
+- **0.1.2** — live preview (TAESD), ½-CFG toggle.
+
+For the complete historical changelog including all intermediate versions and pre-reset experiments, see [HISTORY_EN.md](HISTORY_EN.md).
 
 ## What this repo already demonstrates
 
-- SDXL can be pushed all the way to a **real Snapdragon phone NPU**;
+- SDXL can be pushed all the way to a **real Snapdragon phone NPU** at ~30 s/image;
 - the runtime is not just a benchmark stub — it includes prompt processing, scheduler logic, PNG output, and an APK UI;
-- the repository now openly separates:
-  - the **public beta runtime path**,
-  - the **build/export path**,
-  - and the **experimental lab scripts** used to debug QAIRT/QNN edge cases.
+- a custom **persistent QNN server** written in C eliminates process spawn overhead and enables in-memory encoder→decoder piping;
+- the repository openly separates the public beta runtime path, the build/export path, and the experimental lab scripts.
 
 ## Gallery
 
@@ -136,58 +133,15 @@ All gallery samples and the currently documented phone-side examples are **1024�
 </table>
 <!-- markdownlint-enable MD033 -->
 
-Compared with the earlier public on-device screenshots and the current rebuilt-phone validation:
-
-- **273.6s → 78.0s total** (README-visible APK screenshot marker, Live Preview ON);
-- **273.6s → 75.6s total** (current rebuilt-phone local review, Live Preview OFF, `burst` + native runtime accel);
-- **100.8s → 75.6s total**;
-- **historical pre-reset note:** **62.0s total** on the old `v0.2.3` fast path, not currently reproducible after the factory reset.
-
-That corresponds to:
-
-- **198.0s faster** vs `273.6s` (~**72.4%**);
-- **25.2s faster** vs `100.8s` (~**25.0%**);
-- **2.4s faster** vs the `78.0s` screenshot marker (~**3.1%**).
-
-In short: **78.0s** remains a valid public APK screenshot marker with Live Preview ON, **75.6s** is the current rebuilt-phone validated local review, and **62.0s** should now be read only as a historical pre-reset note whose exact chain could not be restored after the factory reset.
-
-## Runtime updates vs APK version
-
-Performance-sensitive changes in this project often land in `phone_generate.py` (deployed to the phone as `phone_gen/generate.py`), not only in the APK UI layer.
-
-That means:
-
-- the APK version may stay the same while runtime speed still improves;
-- updating only `phone_generate.py` can make the same APK build run faster;
-- APK rebuild/reinstall is not always required when only runtime generation logic changes.
-
-## Why CFG is much slower here
-
-For this project, **CFG above 1.0 is not a tiny tweak**.
-
-- CFG means the model needs both **conditional** and **unconditional** predictions;
-- this repository uses a **split UNet** (`encoder` + `decoder`) on the phone;
-- so one logical UNet pass is already two QNN executions;
-- naive CFG therefore turns each denoising step into **four** phone-side UNet subprocess calls:
-  - uncond encoder,
-  - uncond decoder,
-  - cond encoder,
-  - cond decoder.
-
-The current phone runtime now batches cond+uncond work more efficiently, so it no longer pays the worst possible subprocess overhead every step. But the NPU still has to do roughly **double the real denoising work**, so generation time is still close to **2× slower** than the no-CFG path.
-
-In short:
-
-- **CFG = 1.0 or lower** → cheapest path;
-- **CFG > 1.0** → sharper/more guided output, but much more UNet work;
-- on this stack, that trade-off is very visible in wall-clock time.
+Speedup since the first public screenshot: **273.6 s → 30.4 s** (~**9× faster**, ~**89% reduction**).
 
 ## Current repository layout
 
 - `SDXL/` — SDXL conversion, calibration, verification, QNN, and runtime experiments;
+- `NPU/` — persistent multi-context QNN server (C source + build scripts);
 - `WAN 2.1 1.3B/` — early Wan 2.1 T2V 1.3B research, candidate selection, download helpers, and phone probing;
 - `APK/` — Android app for on-device generation;
-- `scripts/` — deploy and helper scripts;
+- `scripts/` — deploy and helper scripts (including `build_qnn_multi_context_server.py`);
 - `tokenizer/` — shared tokenizer files;
 - `phone_generate.py` — standalone phone-side generator used by the public beta runtime path.
 
