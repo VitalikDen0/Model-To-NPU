@@ -2,6 +2,7 @@ package com.sdxlnpu.app;
 
 import android.content.Context;
 import android.content.res.AssetManager;
+import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -15,10 +16,12 @@ import java.nio.charset.StandardCharsets;
 
 final class RuntimeBootstrap {
 
+    private static final String TAG = "SDXLNPU";
     private static final String ASSET_ROOT = "termux_bundle";
     private static final String RUNTIME_PAYLOAD_DIR = "runtime_payload";
     private static final String VERSION_MARKER = ".bundle_version";
-    private static final String BUNDLE_LAYOUT_VERSION = "termux-bundle-v2";
+    private static final String RUNTIME_PAYLOAD_VERSION_MARKER = "runtime_payload_version.txt";
+    private static final String BUNDLE_LAYOUT_VERSION = "termux-bundle-v3";
     private static final int COPY_BUFFER_SIZE = 1024 * 1024;
 
     private RuntimeBootstrap() {
@@ -61,20 +64,49 @@ final class RuntimeBootstrap {
 
     static String ensureBundledAssetsExtracted(Context context) throws IOException {
         if (!hasBundledAssets(context)) {
+            Log.w(TAG, "Bundled assets not present in APK");
             return null;
         }
 
         File bundleDir = getBundleDir(context);
         String expectedVersion = BUNDLE_LAYOUT_VERSION;
+        String expectedRuntimePayloadVersion = readAssetTextFileOrNull(
+            context.getAssets(),
+            ASSET_ROOT + "/" + RUNTIME_PAYLOAD_DIR + "/" + RUNTIME_PAYLOAD_VERSION_MARKER
+        );
         File marker = new File(bundleDir, VERSION_MARKER);
         if (bundleDir.isDirectory() && marker.isFile()) {
             String currentVersion = readTextFile(marker).trim();
-            if (expectedVersion.equals(currentVersion)) {
+            boolean layoutMatches = expectedVersion.equals(currentVersion);
+            boolean payloadMatches = true;
+            if (expectedRuntimePayloadVersion != null && !expectedRuntimePayloadVersion.isEmpty()) {
+                File runtimePayloadMarker = new File(
+                    new File(bundleDir, RUNTIME_PAYLOAD_DIR),
+                    RUNTIME_PAYLOAD_VERSION_MARKER
+                );
+                payloadMatches = runtimePayloadMarker.isFile()
+                    && expectedRuntimePayloadVersion.equals(readTextFile(runtimePayloadMarker).trim());
+            }
+            if (layoutMatches && payloadMatches) {
+                Log.i(TAG, "Bundled assets already extracted: layout=" + currentVersion
+                    + ", payload=" + expectedRuntimePayloadVersion);
                 return bundleDir.getAbsolutePath();
             }
+            Log.i(TAG, "Bundled assets need refresh: currentLayout=" + currentVersion
+                + ", expectedLayout=" + expectedVersion
+                + ", expectedPayload=" + expectedRuntimePayloadVersion);
         }
 
-        deleteRecursively(bundleDir);
+        Log.i(TAG, "Extracting bundled assets into " + bundleDir.getAbsolutePath());
+
+        try {
+            deleteRecursively(bundleDir);
+        } catch (IOException e) {
+            Log.w(TAG, "Normal bundled runtime cleanup failed, trying root fallback", e);
+            if (!tryDeleteRecursivelyAsRoot(bundleDir)) {
+                throw e;
+            }
+        }
         if (!bundleDir.mkdirs() && !bundleDir.isDirectory()) {
             throw new IOException("Не удалось создать каталог bundled runtime: " + bundleDir);
         }
@@ -84,6 +116,8 @@ final class RuntimeBootstrap {
 
         // Set executable permissions on prefix/bin/* and prefix/lib/*.so
         setExecutablePermissions(bundleDir);
+
+        Log.i(TAG, "Bundled assets extracted successfully");
 
         return bundleDir.getAbsolutePath();
     }
@@ -208,6 +242,49 @@ final class RuntimeBootstrap {
         }
     }
 
+    private static boolean tryDeleteRecursivelyAsRoot(File path) {
+        if (path == null || !path.exists()) {
+            return true;
+        }
+        String su = findAvailableSuOrNull();
+        if (su == null) {
+            return false;
+        }
+        try {
+            Process process = new ProcessBuilder(su, "--mount-master")
+                .redirectErrorStream(true)
+                .start();
+            String script = "rm -rf '" + shellEscape(path.getAbsolutePath()) + "'\nexit\n";
+            try (OutputStreamWriter writer = new OutputStreamWriter(
+                    process.getOutputStream(), StandardCharsets.UTF_8)) {
+                writer.write(script);
+                writer.flush();
+            }
+            process.waitFor();
+            return !path.exists();
+        } catch (Exception e) {
+            Log.w(TAG, "Root fallback cleanup failed", e);
+            return false;
+        }
+    }
+
+    private static String findAvailableSuOrNull() {
+        for (String candidate : new String[] {
+                "/product/bin/su",
+                "/sbin/su", "/system/xbin/su", "/system/bin/su",
+                "/su/bin/su", "/data/adb/magisk/su"
+        }) {
+            if (new File(candidate).exists()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String shellEscape(String value) {
+        return value.replace("'", "'\\''");
+    }
+
     private static String readTextFile(File file) throws IOException {
         StringBuilder sb = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(
@@ -218,6 +295,21 @@ final class RuntimeBootstrap {
             }
         }
         return sb.toString();
+    }
+
+    private static String readAssetTextFileOrNull(AssetManager assetManager, String assetPath) {
+        try (InputStream in = assetManager.open(assetPath);
+             BufferedReader reader = new BufferedReader(
+                 new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line).append('\n');
+            }
+            return sb.toString().trim();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     private static void writeTextFile(File file, String content) throws IOException {

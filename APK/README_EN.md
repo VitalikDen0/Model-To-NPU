@@ -13,7 +13,7 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.2.5`**.
+Current documented APK version: **`0.4.3`**.
 
 Fresh local review on OnePlus 13 for the standard path (`seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`, Live Preview OFF) reached **75.6 s total** with `burst` + native runtime accel; the rerun with `basic` profiling stayed effectively the same at **75.2 s total**.
 
@@ -177,6 +177,10 @@ Recent overhead re-checks also showed that moving the runtime tree back to `/dat
 - APK version and runtime speed do not always move in lockstep: speed-ups can come from updated `phone_generate.py` even when the APK version number is unchanged.
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
+- APK `v0.4.3` moves prewarm from a private stdin/stdout child server to a shared FIFO-backed `qnn-multi-context-server` with deterministic context IDs, so app-open prewarm can actually be reused by the later foreground generate run;
+- APK `v0.4.3` makes prewarm and foreground generation share the same app-cache `SDXL_QNN_WORK_DIR` and enables `SDXL_QNN_SHARED_SERVER=1`, turning multi-resolution context reuse into a practical path instead of a placebo;
+- APK `v0.4.3` now forces bundled runtime re-extraction when the packaged payload version changes, so updated `generate.py` / server binaries actually replace stale on-device copies;
+- APK `v0.4.3` ships a bundled runtime with shared FIFO IPC readiness waiting, so after `READY` the client also waits for request/response FIFOs to exist before issuing the first `LOAD`;
 - APK `v0.2.5` explicitly exports `SDXL_QNN_USE_MMAP=1`, `SDXL_QNN_PERF_PROFILE=burst`, hard-disables the current daemon fast path (`SDXL_QNN_USE_DAEMON=0`), enables async/prestage/prewarm flags for the current Python runtime, enables live thermal logging, auto-adds `SDXL_QNN_CONFIG_FILE` when `htp_backend_extensions_lightning.json` and `lib/libQnnHtpNetRunExtensions.so` are present, routes transient `WORK_DIR` / preview / output files into the app cache to reduce shared-storage overhead, disables extra final PNG compression to shave a bit of save overhead, and correctly parses preview timing lines in the `QNN GPU ...ms` format;
 - Live Preview now prefers rebuilt QNN TAESD preview assets (`taesd_decoder.serialized.bin.bin` and/or `model/libTAESDDecoder.so`) on the GPU backend, runs there at roughly **1.0 s** per step, and falls back to `phone_gen/taesd_decoder.onnx` on CPU through `onnxruntime` only when QNN preview is unavailable or fails;
 - CFG above `1.0` is noticeably slower because the phone runtime still needs both cond and uncond denoising branches; with a split UNet that translates into substantially more encoder/decoder work per step even after batching optimizations;

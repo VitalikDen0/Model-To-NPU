@@ -69,9 +69,9 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Current (v0.4.1) — APK runtime payload bugfix
+### Current APK line (v0.4.3) — shared prewarm reuse with bundled runtime refresh hardening
 
-The APK now bundles the current phone-side runtime payload and prefers its own `generate.py`, `qnn-multi-context-server`, and optional native accel library. That fixes stale `/sdcard` scripts rejecting new `--width` / `--height` arguments with `argparse` exit code `2`, while keeping the latest fast-path logic available through the APK.
+The current APK line keeps the shared FIFO-backed prewarm server with deterministic context IDs and folds all post-`0.4.2` APK/runtime work into one coherent public `0.4.3` release. Bundled runtime payload updates now force a refresh of the extracted on-device bundle, and shared-server startup waits for FIFO IPC readiness before the first `LOAD`. In practice, updated `generate.py` / server assets actually reach the phone, and app-open prewarm can be reused by the later foreground generate run without the old early-`READY` race.
 
 ### v0.4.0 — Variable resolution + self-contained APK
 

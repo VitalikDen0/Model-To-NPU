@@ -1,13 +1,15 @@
 #!/data/data/com.termux/files/usr/bin/python3
 """
-SDXL Lightning — standalone phone generation.
-Runs entirely on phone: tokenizer + scheduler + QNN NPU inference.
-No PC, no torch, no diffusers required.
+Model-to-NPU phone entrypoint.
+
+Today the fully validated standalone phone generation path is SDXL.
+Wan 2.1 support in this file is currently an experimental runtime/readiness probe,
+not a finished standalone prompt->video phone pipeline.
 
 Usage (in Termux):
   python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "1girl, anime, cherry blossoms"
   python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "cat on windowsill" --seed 777
-  python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py "dark castle" --cfg 2.0 --neg "blurry, bad"
+  python3 /data/local/tmp/sdxl_qnn/phone_gen/generate.py --model-family wan21 --check-runtime --width 832 --height 480
 """
 import argparse
 import atexit
@@ -31,8 +33,54 @@ import numpy as np
 from phone_runtime_accel import RuntimeTensorArena, get_runtime_accel
 
 # ─── Paths ───
+MODEL_FAMILY_SDXL = "sdxl"
+MODEL_FAMILY_WAN21 = "wan21"
+_MODEL_FAMILY_ALIASES = {
+    "sdxl": MODEL_FAMILY_SDXL,
+    "sdxl-lightning": MODEL_FAMILY_SDXL,
+    "wan": MODEL_FAMILY_WAN21,
+    "wan21": MODEL_FAMILY_WAN21,
+    "wan2.1": MODEL_FAMILY_WAN21,
+    "wan-2.1": MODEL_FAMILY_WAN21,
+}
 DEFAULT_BASE_DIR = "/sdcard/Download/sdxl_qnn"
 LEGACY_BASE_DIR = "/data/local/tmp/sdxl_qnn"
+WAN_DEFAULT_BASE_DIR = "/sdcard/Download/wan21_t2v_qnn"
+WAN_LEGACY_BASE_DIR = "/data/local/tmp/wan21_t2v_qnn"
+
+
+def _normalize_model_family(value: str | None) -> str:
+    if value is None:
+        return MODEL_FAMILY_SDXL
+    normalized = value.strip().lower()
+    return _MODEL_FAMILY_ALIASES.get(normalized, MODEL_FAMILY_SDXL)
+
+
+def _peek_cli_option(names: tuple[str, ...]) -> str | None:
+    args = sys.argv[1:]
+    for idx, arg in enumerate(args):
+        for name in names:
+            if arg == name and idx + 1 < len(args):
+                return args[idx + 1]
+            prefix = f"{name}="
+            if arg.startswith(prefix):
+                return arg[len(prefix):]
+    return None
+
+
+def _resolve_boot_model_family() -> str:
+    cli_value = _peek_cli_option(("--model-family",))
+    if cli_value is not None:
+        return _normalize_model_family(cli_value)
+
+    for key in ("MODEL_TO_NPU_MODEL_FAMILY", "PHONE_GEN_MODEL_FAMILY", "WAN_MODEL_FAMILY"):
+        value = os.environ.get(key)
+        if value is not None:
+            return _normalize_model_family(value)
+    return MODEL_FAMILY_SDXL
+
+
+ACTIVE_MODEL_FAMILY = _resolve_boot_model_family()
 
 
 def _dir_is_writable(path: str) -> bool:
@@ -48,33 +96,62 @@ def _dir_is_writable(path: str) -> bool:
 
 
 def _resolve_base_dir():
+    override = os.environ.get("MODEL_TO_NPU_BASE")
+    if override:
+        return override
+
+    if ACTIVE_MODEL_FAMILY == MODEL_FAMILY_WAN21:
+        for key in ("WAN_QNN_BASE", "WAN21_QNN_BASE"):
+            value = os.environ.get(key)
+            if value:
+                return value
+
     override = os.environ.get("SDXL_QNN_BASE")
     if override:
         return override
 
-    candidates = [
-        DEFAULT_BASE_DIR,
-        "/storage/emulated/0/Download/sdxl_qnn",
-        LEGACY_BASE_DIR,
-    ]
+    if ACTIVE_MODEL_FAMILY == MODEL_FAMILY_WAN21:
+        candidates = [
+            WAN_DEFAULT_BASE_DIR,
+            "/storage/emulated/0/Download/wan21_t2v_qnn",
+            WAN_LEGACY_BASE_DIR,
+        ]
+    else:
+        candidates = [
+            DEFAULT_BASE_DIR,
+            "/storage/emulated/0/Download/sdxl_qnn",
+            LEGACY_BASE_DIR,
+        ]
     for candidate in candidates:
         if os.path.exists(candidate):
             return candidate
-    return DEFAULT_BASE_DIR
+    return WAN_DEFAULT_BASE_DIR if ACTIVE_MODEL_FAMILY == MODEL_FAMILY_WAN21 else DEFAULT_BASE_DIR
 
 
 def _resolve_work_dir() -> str:
+    override = os.environ.get("MODEL_TO_NPU_WORK_DIR")
+    if override:
+        return override
+
     override = os.environ.get("SDXL_QNN_WORK_DIR")
     if override:
         return override
 
     candidates: list[str] = []
-    if not DR.startswith(LEGACY_BASE_DIR):
-        candidates.extend([
-            "/data/data/com.termux/files/usr/tmp/sdxl_qnn_work",
-            "/data/local/tmp/sdxl_qnn_work",
-        ])
-    candidates.append(f"{DR}/phone_gen/work")
+    if ACTIVE_MODEL_FAMILY == MODEL_FAMILY_WAN21:
+        if not DR.startswith(WAN_LEGACY_BASE_DIR):
+            candidates.extend([
+                "/data/data/com.termux/files/usr/tmp/wan21_qnn_work",
+                "/data/local/tmp/wan21_qnn_work",
+            ])
+        candidates.append(f"{DR}/work")
+    else:
+        if not DR.startswith(LEGACY_BASE_DIR):
+            candidates.extend([
+                "/data/data/com.termux/files/usr/tmp/sdxl_qnn_work",
+                "/data/local/tmp/sdxl_qnn_work",
+            ])
+        candidates.append(f"{DR}/phone_gen/work")
 
     for candidate in candidates:
         if _dir_is_writable(candidate):
@@ -123,6 +200,63 @@ SDXL_RESOLUTIONS = [
 ]
 
 
+def _discover_available_resolutions() -> list[tuple[int, int]]:
+    """Scan context/ for WxH subdirectories that contain a full set of UNet+VAE contexts."""
+    ctx_root = f"{DR}/context"
+    available: list[tuple[int, int]] = []
+    if not os.path.isdir(ctx_root):
+        return available
+    needed = {"unet_encoder_fp16.serialized.bin.bin",
+              "unet_decoder_fp16.serialized.bin.bin",
+              "vae_decoder.serialized.bin.bin"}
+    for entry in os.listdir(ctx_root):
+        if "x" not in entry:
+            continue
+        parts = entry.split("x")
+        if len(parts) != 2:
+            continue
+        try:
+            w, h = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        sub = os.path.join(ctx_root, entry)
+        if os.path.isdir(sub) and needed.issubset(set(os.listdir(sub))):
+            available.append((w, h))
+    # Also check flat layout (legacy 1024×1024)
+    if all(os.path.isfile(os.path.join(ctx_root, n)) for n in needed):
+        if (1024, 1024) not in available:
+            available.append((1024, 1024))
+    available.sort(key=lambda r: r[0] * r[1])
+    return available
+
+
+def _snap_to_nearest_resolution(
+    width: int, height: int,
+    available: list[tuple[int, int]] | None = None,
+) -> tuple[int, int, bool]:
+    """Find the closest available resolution by aspect-ratio distance, then area.
+
+    Returns (snapped_w, snapped_h, was_snapped).  If the exact resolution is
+    available, was_snapped is False.
+    """
+    if available is None:
+        available = _discover_available_resolutions()
+    if not available:
+        return width, height, False
+    if (width, height) in available:
+        return width, height, False
+
+    target_ratio = width / height
+    target_area = width * height
+
+    def distance(r: tuple[int, int]) -> tuple[float, float]:
+        ratio = r[0] / r[1]
+        return (abs(ratio - target_ratio), abs(r[0] * r[1] - target_area))
+
+    best = min(available, key=distance)
+    return best[0], best[1], True
+
+
 def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
     """Build context paths for a given resolution.
 
@@ -158,13 +292,13 @@ def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
 
 CONTEXTS = _resolve_contexts(_IMAGE_WIDTH, _IMAGE_HEIGHT)
 TOKENIZER_DIR = f"{DR}/phone_gen/tokenizer"
-OUTPUT_DIR = os.environ.get("SDXL_QNN_OUTPUT_DIR", f"{DR}/outputs")
+OUTPUT_DIR = _env_first(("MODEL_TO_NPU_OUTPUT_DIR", "SDXL_QNN_OUTPUT_DIR"), f"{DR}/outputs")
 WORK_DIR = _resolve_work_dir()
 QNN_NET_RUN = os.environ.get("SDXL_QNN_NET_RUN", f"{DR}/bin/qnn-net-run")
 QNN_BIN_DIR = os.environ.get("SDXL_QNN_BIN_DIR", os.path.dirname(QNN_NET_RUN))
 QNN_LIB = os.environ.get("SDXL_QNN_LIB_DIR", f"{DR}/lib")
 QNN_MODEL_DIR = os.environ.get("SDXL_QNN_MODEL_DIR", f"{DR}/model")
-PREVIEW_PNG = os.environ.get("SDXL_QNN_PREVIEW_PNG", f"{OUTPUT_DIR}/preview_current.png")
+PREVIEW_PNG = _env_first(("MODEL_TO_NPU_PREVIEW_PNG", "SDXL_QNN_PREVIEW_PNG"), f"{OUTPUT_DIR}/preview_current.png")
 TAESD_ONNX = os.environ.get("SDXL_QNN_TAESD_ONNX", f"{DR}/phone_gen/taesd_decoder.onnx")
 TAESD_CONTEXT = os.environ.get("SDXL_QNN_TAESD_CONTEXT", f"{DR}/context/taesd_decoder.serialized.bin.bin")
 TAESD_MODEL = os.environ.get("SDXL_QNN_TAESD_MODEL", f"{QNN_MODEL_DIR}/libTAESDDecoder.so")
@@ -201,6 +335,10 @@ QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_con
 QNN_USE_DAEMON = _env_bool(("SDXL_QNN_USE_DAEMON", "QNN_USE_DAEMON"), False)
 QNN_USE_SERVER = _env_bool(("SDXL_QNN_USE_SERVER", "QNN_USE_SERVER"), True)
 QNN_SERVER_BIN = os.environ.get("SDXL_QNN_SERVER_BIN", f"{QNN_BIN_DIR}/qnn-multi-context-server")
+QNN_SHARED_SERVER = _env_bool(("SDXL_QNN_SHARED_SERVER", "QNN_SHARED_SERVER"), False)
+QNN_SERVER_IPC_DIR = _env_first(("SDXL_QNN_SERVER_IPC_DIR", "QNN_SERVER_IPC_DIR"), os.path.join(WORK_DIR, "qnn_server")).strip() or os.path.join(WORK_DIR, "qnn_server")
+QNN_SERVER_REQ_FIFO = _env_first(("SDXL_QNN_SERVER_REQ_FIFO", "QNN_SERVER_REQ_FIFO"), os.path.join(QNN_SERVER_IPC_DIR, "request.fifo")).strip() or os.path.join(QNN_SERVER_IPC_DIR, "request.fifo")
+QNN_SERVER_RSP_FIFO = _env_first(("SDXL_QNN_SERVER_RSP_FIFO", "QNN_SERVER_RSP_FIFO"), os.path.join(QNN_SERVER_IPC_DIR, "response.fifo")).strip() or os.path.join(QNN_SERVER_IPC_DIR, "response.fifo")
 QNN_DAEMON_CONTEXT_SCOPE = _env_first(("SDXL_QNN_DAEMON_CONTEXT_SCOPE", "QNN_DAEMON_CONTEXT_SCOPE"), "unet").strip().lower() or "unet"
 QNN_DAEMON_PREWARM = _env_bool(("SDXL_QNN_DAEMON_PREWARM", "QNN_DAEMON_PREWARM"), True)
 QNN_DAEMON_CONFIG_FILE = _env_first(("SDXL_QNN_DAEMON_CONFIG_FILE", "QNN_DAEMON_CONFIG_FILE"), QNN_CONFIG_FILE).strip()
@@ -222,6 +360,8 @@ TAESD_BACKEND_LIB = os.environ.get("SDXL_QNN_TAESD_BACKEND_LIB", "").strip()
 TAESD_CONFIG_FILE = os.environ.get("SDXL_QNN_TAESD_CONFIG_FILE", "").strip()
 TAESD_QNN_NET_RUN = os.environ.get("SDXL_QNN_TAESD_NET_RUN", DEFAULT_TAESD_QNN_NET_RUN).strip() or QNN_NET_RUN
 TAESD_FORCE_ONNX = os.environ.get("SDXL_QNN_TAESD_FORCE_ONNX", "0") == "1"
+PREVIEW_STRIDE = os.environ.get("SDXL_QNN_PREVIEW_STRIDE", "auto").strip().lower()
+PREVIEW_LAST_ONLY = os.environ.get("SDXL_QNN_PREVIEW_LAST_ONLY", "0") == "1"
 _TEMP_SENSOR_CACHE: dict[str, list[tuple[str, str]]] | None = None
 _TEMP_MONITOR_STOP: threading.Event | None = None
 _TEMP_MONITOR_THREAD: threading.Thread | None = None
@@ -246,6 +386,14 @@ _RUNTIME_ACCEL = get_runtime_accel(prefer_native=QNN_USE_NATIVE_ACCEL, library_p
 def _log(line: str = "") -> None:
     with _PRINT_LOCK:
         print(line, flush=True)
+
+
+def _wait_forever() -> None:
+    pause_fn = getattr(__import__("signal"), "pause", None)
+    if callable(pause_fn):
+        pause_fn()
+        return
+    threading.Event().wait()
 
 
 def _sanitize_profile_tag(tag: str) -> str:
@@ -289,6 +437,13 @@ def _clip_cache_prefix(text: str) -> str:
         ).encode("utf-8")
     ).hexdigest()
     return os.path.join(QNN_CLIP_CACHE_DIR, cache_key)
+
+
+def _context_server_id(ctx_path: str) -> str:
+    normalized = os.path.normpath(ctx_path).replace("\\", "/")
+    stem = os.path.basename(normalized).replace(".serialized.bin.bin", "").replace(".", "_")
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+    return f"{stem}_{digest}"
 
 
 def _write_atomic_bytes(path: str, data: bytes) -> None:
@@ -822,7 +977,7 @@ def _write_multi_input_list_once(path: str, rows: list[list[str]] | tuple[tuple[
 def _write_array_reuse(path: str, arr: np.ndarray, dtype=np.float32) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     arr_c = np.ascontiguousarray(arr, dtype=dtype)
-    payload = memoryview(arr_c).cast("B")
+    payload = memoryview(arr_c.data).cast("B")
     target_size = arr_c.nbytes
     try:
         with open(path, "r+b") as f:
@@ -1370,14 +1525,67 @@ class _QnnMultiContextServer:
         self.proc: subprocess.Popen[str] | None = None
         self._loaded: dict[str, str] = {}  # ctx_path -> id
         self._lock = threading.Lock()
-        self._id_counter = 0
+        self._shared = QNN_SHARED_SERVER
+        self._request_fifo = QNN_SERVER_REQ_FIFO
+        self._response_fifo = QNN_SERVER_RSP_FIFO
+        self._owns_process = False
         self._stderr_thread: threading.Thread | None = None
         self._stderr_tail: list[str] = []
 
     def _next_id(self, ctx_path: str) -> str:
-        self._id_counter += 1
-        base = os.path.basename(ctx_path).replace(".serialized.bin.bin", "").replace(".", "_")
-        return f"{base}_{self._id_counter}"
+        return _context_server_id(ctx_path)
+
+    def _ensure_shared_ipc_paths(self) -> None:
+        if not self._shared:
+            return
+        os.makedirs(os.path.dirname(self._request_fifo), exist_ok=True)
+        for path in (self._request_fifo, self._response_fifo):
+            if os.path.exists(path) and not stat.S_ISFIFO(os.stat(path).st_mode):
+                os.remove(path)
+
+    def _send_shared(self, cmd: str, timeout: float = 10.0) -> str:
+        if not (os.path.exists(self._request_fifo) and os.path.exists(self._response_fifo)):
+            raise RuntimeError("shared server FIFOs are missing")
+
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        try:
+            req_fd = os.open(self._request_fifo, os.O_WRONLY | nonblock)
+        except OSError as e:
+            raise RuntimeError(f"shared server request FIFO unavailable: {e}") from e
+
+        try:
+            os.write(req_fd, (cmd + "\n").encode("utf-8"))
+        finally:
+            os.close(req_fd)
+
+        rsp_fd = os.open(self._response_fifo, os.O_RDONLY | nonblock)
+        try:
+            deadline = time.time() + timeout
+            chunks = bytearray()
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TimeoutError(f"shared server response timeout for command: {cmd}")
+                readable, _, _ = select.select([rsp_fd], [], [], min(0.2, remaining))
+                if not readable:
+                    continue
+                chunk = os.read(rsp_fd, 4096)
+                if not chunk:
+                    continue
+                chunks.extend(chunk)
+                if b"\n" in chunks:
+                    return chunks.splitlines()[0].decode("utf-8", errors="replace").strip()
+        finally:
+            os.close(rsp_fd)
+
+    def _shared_ping(self) -> bool:
+        if not self._shared:
+            return False
+        try:
+            resp = self._send_shared("PING", timeout=1.0)
+        except Exception:
+            return False
+        return resp.startswith("OK")
 
     def _capture_stderr(self) -> None:
         if self.proc is None or self.proc.stderr is None:
@@ -1395,8 +1603,13 @@ class _QnnMultiContextServer:
             pass
 
     def start(self) -> None:
+        if self._shared and self._shared_ping():
+            return
         if self.proc is not None and self.proc.poll() is None:
             return
+
+        if self._shared:
+            self._ensure_shared_ipc_paths()
 
         # Use /data/local/tmp paths directly for mmap/dlopen compatibility
         data_base = "/data/local/tmp/sdxl_qnn"
@@ -1416,6 +1629,11 @@ class _QnnMultiContextServer:
             "--backend", backend_lib,
             "--system_lib", system_lib,
         ]
+        if self._shared:
+            cmd.extend([
+                "--request_fifo", self._request_fifo,
+                "--response_fifo", self._response_fifo,
+            ])
         env = _get_qnn_env()
         # Ensure ADSP_LIBRARY_PATH uses the correct lib dir
         env["ADSP_LIBRARY_PATH"] = lib_dir
@@ -1428,7 +1646,7 @@ class _QnnMultiContextServer:
             cmd,
             env=env,
             cwd=DR,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.PIPE if not self._shared else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -1442,10 +1660,13 @@ class _QnnMultiContextServer:
         # Start stderr capture thread
         self._stderr_thread = threading.Thread(target=self._capture_stderr, daemon=True)
         self._stderr_thread.start()
+        self._owns_process = True
         _log("[QNN server] started")
 
     def _send(self, cmd: str) -> str:
         """Send a command and read one response line."""
+        if self._shared:
+            return self._send_shared(cmd)
         assert self.proc is not None and self.proc.poll() is None
         self.proc.stdin.write(cmd + "\n")  # type: ignore[union-attr]
         self.proc.stdin.flush()  # type: ignore[union-attr]
@@ -1466,16 +1687,17 @@ class _QnnMultiContextServer:
             if ctx_path in self._loaded:
                 return self._loaded[ctx_path]
             self.start()
-            cid = self._next_id(ctx_path)
             real_path = self._remap_ctx_path(ctx_path)
+            cid = self._next_id(real_path)
             _log(f"  [QNN server] loading {ctx_path} -> {real_path}")
             t0 = time.time()
             resp = self._send(f"LOAD {cid} {real_path}")
             elapsed = (time.time() - t0) * 1000
-            if not resp.startswith("OK"):
+            if not (resp.startswith("OK") or resp.startswith("ERR already_loaded")):
                 raise RuntimeError(f"Server LOAD failed for {ctx_path}: {resp}")
             self._loaded[ctx_path] = cid
-            _log(f"  [QNN server] loaded {os.path.basename(ctx_path)} -> {cid} ({elapsed:.0f}ms)")
+            verb = "already had" if resp.startswith("ERR already_loaded") else "loaded"
+            _log(f"  [QNN server] {verb} {os.path.basename(ctx_path)} -> {cid} ({elapsed:.0f}ms)")
             return cid
 
     def run(self, ctx_path: str, input_list_path: str, output_dir: str) -> float:
@@ -1533,13 +1755,15 @@ class _QnnMultiContextServer:
                 _log(f"  [QNN server] unload failed for {ctx_path}: {resp}")
 
     def stop(self) -> None:
+        if self._shared and not self._owns_process:
+            self._loaded.clear()
+            return
         proc = self.proc
         if proc is None:
             return
         if proc.poll() is None:
             try:
-                proc.stdin.write("QUIT\n")  # type: ignore[union-attr]
-                proc.stdin.flush()  # type: ignore[union-attr]
+                self._send("QUIT")
                 proc.wait(timeout=5.0)
             except Exception:
                 proc.terminate()
@@ -1549,17 +1773,24 @@ class _QnnMultiContextServer:
                     proc.kill()
         self.proc = None
         self._loaded.clear()
+        self._owns_process = False
         _log("[QNN server] stopped")
 
     def is_available(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        return self._shared and self._shared_ping()
 
     def has_context(self, ctx_path: str) -> bool:
         return ctx_path in self._loaded
 
 
 def _can_use_qnn_server() -> bool:
-    return QNN_USE_SERVER and os.path.exists(QNN_SERVER_BIN) and os.path.exists(QNN_SYSTEM_LIB)
+    if not QNN_USE_SERVER:
+        return False
+    if QNN_SHARED_SERVER and os.path.exists(QNN_SERVER_REQ_FIFO) and os.path.exists(QNN_SERVER_RSP_FIFO):
+        return True
+    return os.path.exists(QNN_SERVER_BIN) and os.path.exists(QNN_SYSTEM_LIB)
 
 
 def _get_qnn_server() -> _QnnMultiContextServer:
@@ -1683,6 +1914,278 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
 # ─── Main generation pipeline ───
 
 DEFAULT_NEG = "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry"
+WAN_RECOMMENDED_RESOLUTIONS = [(832, 480), (1280, 720)]
+
+
+def _list_supported_resolutions(model_family: str) -> list[tuple[int, int]]:
+    if model_family == MODEL_FAMILY_WAN21:
+        return list(WAN_RECOMMENDED_RESOLUTIONS)
+    return _discover_available_resolutions()
+
+
+def _load_json_file(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _find_wan_manifest(base_dir: str) -> str:
+    candidates: list[str] = []
+    for root in (
+        base_dir,
+        os.path.join(base_dir, "manifest"),
+        os.path.join(base_dir, "qnn"),
+        os.path.join(base_dir, "phone_gen"),
+    ):
+        if not os.path.isdir(root):
+            continue
+        for entry in sorted(os.listdir(root)):
+            if entry.endswith("_qnn_manifest.json") or entry == "wan_qnn_manifest.json":
+                candidates.append(os.path.join(root, entry))
+    return candidates[0] if candidates else ""
+
+
+def _find_existing_path(candidates: list[str]) -> str:
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def _detect_wan_probe_input_list(base_dir: str) -> str:
+    candidates = [
+        os.path.join(base_dir, "inputs", "basic_debug", "input_list.txt"),
+        os.path.join(base_dir, "inputs", "basic_debug", "il.txt"),
+        os.path.join(base_dir, "debug", "basic", "input_list.txt"),
+        os.path.join(base_dir, "debug", "basic", "il.txt"),
+        os.path.join(base_dir, "phone_gen", "debug", "basic", "input_list.txt"),
+        os.path.join(base_dir, "phone_gen", "debug", "basic", "il.txt"),
+    ]
+    return _find_existing_path(candidates)
+
+
+def _probe_wan_runtime(width: int, height: int, probe_perf: str) -> dict:
+    report: dict[str, object] = {
+        "family": MODEL_FAMILY_WAN21,
+        "base_dir": DR,
+        "status": "BLOCKED",
+        "requested_resolution": f"{width}x{height}",
+        "recommended_resolution": "480p first (832x480), then 720p",
+        "standalone_ready": False,
+        "missing": [],
+        "warnings": [],
+        "probe_perf_profile": probe_perf,
+    }
+    missing: list[str] = report["missing"]  # type: ignore[assignment]
+    warnings: list[str] = report["warnings"]  # type: ignore[assignment]
+
+    paths = {
+        "base": DR,
+        "bin": os.path.join(DR, "bin"),
+        "lib": os.path.join(DR, "lib"),
+        "model": os.path.join(DR, "model"),
+        "context": os.path.join(DR, "context"),
+        "outputs": OUTPUT_DIR,
+        "work": WORK_DIR,
+    }
+    report["paths"] = paths
+
+    qnn_runner = _find_existing_path([QNN_NET_RUN, os.path.join(paths["bin"], "qnn-net-run")])
+    qnn_backend = _find_existing_path([os.path.join(paths["lib"], "libQnnHtp.so")])
+    if not qnn_runner:
+        missing.append("bin/qnn-net-run")
+    if not qnn_backend:
+        missing.append("lib/libQnnHtp.so")
+
+    manifest_path = _find_wan_manifest(DR)
+    report["manifest_path"] = manifest_path or ""
+    manifest = {}
+    if manifest_path:
+        try:
+            manifest = _load_json_file(manifest_path)
+        except Exception as exc:
+            warnings.append(f"manifest load warning: {exc}")
+            manifest = {}
+    else:
+        missing.append("wan *_qnn_manifest.json")
+
+    components = manifest.get("components", {}) if isinstance(manifest, dict) else {}
+    transformer = components.get("transformer") if isinstance(components, dict) else None
+    vae = components.get("vae") if isinstance(components, dict) else None
+    if not isinstance(transformer, dict):
+        missing.append("manifest.components.transformer")
+        transformer = {}
+    report["run_tag"] = manifest.get("run_tag", "") if isinstance(manifest, dict) else ""
+
+    expected_width = None
+    expected_height = None
+    if isinstance(transformer, dict):
+        config = transformer.get("config", {})
+        if isinstance(config, dict):
+            expected_width = config.get("width")
+            expected_height = config.get("height")
+            report["num_frames"] = config.get("num_frames")
+    if expected_width and expected_height and (int(expected_width), int(expected_height)) != (width, height):
+        warnings.append(
+            f"requested {width}x{height} differs from manifest export {expected_width}x{expected_height}"
+        )
+    elif height > 480:
+        warnings.append("Wan 2.1 1.3B is still treated as 480p-first here; 720p should remain phase 2")
+
+    component_checks: dict[str, dict[str, str]] = {}
+    for name, info in (("transformer", transformer), ("vae", vae)):
+        if not isinstance(info, dict):
+            continue
+        android_lib = os.path.basename(str(info.get("android_lib", "")).strip())
+        context_name = str(info.get("context_binary_output", "")).strip()
+        lib_path = os.path.join(paths["model"], android_lib) if android_lib else ""
+        ctx_path = os.path.join(paths["context"], context_name) if context_name else ""
+        if android_lib and not os.path.exists(lib_path):
+            missing.append(f"model/{android_lib}")
+        if context_name and not os.path.exists(ctx_path):
+            missing.append(f"context/{context_name}")
+        component_checks[name] = {
+            "lib_path": lib_path,
+            "context_path": ctx_path,
+        }
+    report["components"] = component_checks
+
+    basic_probe_input = _detect_wan_probe_input_list(DR)
+    report["basic_probe_input_list"] = basic_probe_input or ""
+
+    probe_status = "skipped"
+    if basic_probe_input and qnn_runner and qnn_backend:
+        transformer_ctx = component_checks.get("transformer", {}).get("context_path", "")
+        if transformer_ctx and os.path.exists(transformer_ctx):
+            try:
+                probe_out = os.path.join(WORK_DIR, "wan_basic_probe")
+                os.makedirs(probe_out, exist_ok=True)
+                probe_ms = qnn_run(
+                    transformer_ctx,
+                    basic_probe_input,
+                    probe_out,
+                    native=True,
+                    native_input=True,
+                    perf_profile=probe_perf,
+                    profile_tag="wan_basic_probe",
+                )
+                report["basic_probe_ms"] = round(float(probe_ms), 3)
+                probe_status = "ok"
+            except Exception as exc:
+                probe_status = "failed"
+                missing.append(f"basic probe failed: {exc}")
+        else:
+            warnings.append("basic probe skipped because transformer context is missing")
+    elif not basic_probe_input:
+        warnings.append("basic debug probe skipped because no prepared Wan input_list was found")
+    report["basic_probe_status"] = probe_status
+
+    if missing:
+        report["status"] = "BLOCKED"
+    elif probe_status == "ok":
+        report["status"] = "READY"
+    else:
+        report["status"] = "PARTIAL"
+
+    report["standalone_reason"] = (
+        "Repository state still exposes Wan as export/convert/host-orchestrated tooling; "
+        "this phone entrypoint does not yet implement full standalone prompt-to-video generation."
+    )
+    return report
+
+
+def _check_runtime(model_family: str, width: int, height: int, probe_perf: str = "basic") -> dict:
+    if model_family == MODEL_FAMILY_WAN21:
+        report = _probe_wan_runtime(width, height, probe_perf)
+        _log("[WAN] experimental runtime check")
+        _log(f"[WAN] Base: {report['base_dir']}")
+        _log(f"[WAN] Requested: {report['requested_resolution']}")
+        _log(f"[WAN] Recommended: {report['recommended_resolution']}")
+        if report.get("run_tag"):
+            _log(f"[WAN] Run tag: {report['run_tag']}")
+        if report.get("manifest_path"):
+            _log(f"[WAN] Manifest: {report['manifest_path']}")
+        for warning in report.get("warnings", []):
+            _log(f"[WAN] warning: {warning}")
+        for missing_item in report.get("missing", []):
+            _log(f"[WAN] missing: {missing_item}")
+        probe_state = str(report.get("basic_probe_status", "skipped"))
+        if probe_state == "ok":
+            _log(f"[WAN] basic debug probe ({probe_perf}): {report.get('basic_probe_ms', 0):.0f}ms")
+        elif probe_state == "failed":
+            _log(f"[WAN] basic debug probe ({probe_perf}): failed")
+        else:
+            _log(f"[WAN] basic debug probe ({probe_perf}): skipped")
+        _log(f"[WAN] standalone phone generation: no")
+        _log(f"WAN_STATUS: {report['status']}")
+        _log(
+            "WAN_SUMMARY: "
+            f"status={report['status']}, res={report['requested_resolution']}, "
+            f"basic_probe={probe_state}, standalone=no"
+        )
+        return report
+
+    report = {
+        "family": MODEL_FAMILY_SDXL,
+        "status": "READY",
+        "base_dir": DR,
+        "available_resolutions": _discover_available_resolutions(),
+        "accel": _RUNTIME_ACCEL.describe(),
+    }
+    _log("[SDXL] runtime check")
+    _log(f"[SDXL] Base: {DR}")
+    _log(f"[SDXL] Accel: {_RUNTIME_ACCEL.describe()}")
+    _log(f"SDXL_STATUS: {report['status']}")
+    return report
+
+
+def _prewarm_and_wait(width: int = 1024, height: int = 1024):
+    """Start QNN server, preload all contexts, then block until killed.
+
+    Used by the APK to warm up models at app start.
+    Prints PREWARM_READY when all contexts are loaded.
+    """
+    width, height, _ = _snap_to_nearest_resolution(width, height)
+    global CONTEXTS
+    CONTEXTS = _resolve_contexts(width, height)
+
+    _prestage_runtime_once()
+
+    if not _can_use_qnn_server():
+        _log("[prewarm] QNN server binary not available, falling back to daemon prewarm")
+        if _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
+            threads = _prewarm_qnn_daemons([
+                CONTEXTS["encoder"],
+                CONTEXTS["decoder"],
+            ])
+            for t in threads:
+                t.join(timeout=30.0)
+        print("PREWARM_READY", flush=True)
+        # Block until killed
+        _wait_forever()
+        return
+
+    server = _get_qnn_server()
+    server.start()
+
+    # Load all reusable contexts into the server
+    for ctx_name in ("encoder", "decoder", "clip_l", "clip_g"):
+        ctx_path = CONTEXTS.get(ctx_name)
+        if ctx_path and os.path.exists(ctx_path):
+            _log(f"[prewarm] loading {ctx_name}...")
+            server.load(ctx_path)
+
+    # VAE loaded but optional (only used at end of generation)
+    vae_path = CONTEXTS.get("vae")
+    if vae_path and os.path.exists(vae_path):
+        _log(f"[prewarm] loading vae...")
+        server.load(vae_path)
+
+    print("PREWARM_READY", flush=True)
+    _log("[prewarm] all contexts loaded, waiting for kill signal...")
+
+    # Block until killed; atexit will call _shutdown_qnn_server()
+    _wait_forever()
+
 
 def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
              stretch=True, name=None, preview=False, progressive_cfg=False,
@@ -1690,6 +2193,13 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     # ── Resolution setup ──
     if width % 8 or height % 8:
         raise ValueError(f"width ({width}) and height ({height}) must be multiples of 8")
+
+    # Snap to nearest available resolution if exact contexts don't exist
+    orig_w, orig_h = width, height
+    width, height, was_snapped = _snap_to_nearest_resolution(width, height)
+    if was_snapped:
+        _log(f"[resolution] {orig_w}x{orig_h} not available, snapped to {width}x{height}")
+
     latent_h, latent_w = height // 8, width // 8
     global CONTEXTS
     CONTEXTS = _resolve_contexts(width, height)
@@ -1854,6 +2364,11 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
 
     if preview:
         _prepare_preview_backend()
+        stride = _preview_stride(steps)
+        if stride >= steps:
+            _log(f"  [TAESD] preview: last step only (steps={steps})")
+        else:
+            _log(f"  [TAESD] preview: every {stride} step(s), last step sync")
 
     # ── 2. Prepare UNet inputs ──
     def push_unet_data(pe, te, tag):
@@ -1931,7 +2446,15 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         latents = latents_next
 
         if preview:
-            _start_bg_preview(latents.copy(), si, steps)
+            stride = _preview_stride(steps)
+            is_last = (si == steps - 1)
+            if is_last or (si % stride == stride - 1):
+                if is_last:
+                    # Last step: run synchronously to guarantee preview is visible
+                    _join_preview_thread()
+                    _preview_step(latents.copy(), si, steps)
+                else:
+                    _start_bg_preview(latents.copy(), si, steps)
 
     if preview:
         _join_preview_thread()
@@ -2160,6 +2683,28 @@ def _preview_step_qnn(latents: np.ndarray, plan: dict) -> float:
     return ms
 
 
+def _preview_stride(total_steps: int) -> int:
+    """Calculate how often to show TAESD preview.
+
+    With 'auto' (default): adapts to step count so preview doesn't bottleneck.
+    - ≤4 steps: last only (stride=total_steps)
+    - 5-8 steps: every 2nd step
+    - >8 steps: every 4th step
+    """
+    if PREVIEW_LAST_ONLY:
+        return total_steps
+    if PREVIEW_STRIDE not in ("", "auto"):
+        try:
+            return max(1, int(PREVIEW_STRIDE))
+        except ValueError:
+            pass
+    if total_steps <= 4:
+        return total_steps  # only the last step
+    if total_steps <= 8:
+        return 2
+    return 4
+
+
 def _start_bg_preview(latents_copy: np.ndarray, step_idx: int, total_steps: int) -> None:
     global _preview_thread
     if _preview_thread and _preview_thread.is_alive():
@@ -2364,8 +2909,14 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
 # ─── CLI ───
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="SDXL Lightning — Phone NPU (standalone)")
-    ap.add_argument("prompt", type=str, help="Text prompt")
+    ap = argparse.ArgumentParser(description="Model-to-NPU phone runtime")
+    ap.add_argument("prompt", type=str, nargs="?", default=None, help="Text prompt")
+    ap.add_argument(
+        "--model-family",
+        choices=[MODEL_FAMILY_SDXL, MODEL_FAMILY_WAN21],
+        default=ACTIVE_MODEL_FAMILY,
+        help="Select the active phone runtime family",
+    )
     ap.add_argument("--seed", type=int, default=None,
                     help="Random seed (omit for a fresh random seed each run)")
     ap.add_argument("--steps", type=int, default=8)
@@ -2385,7 +2936,46 @@ if __name__ == "__main__":
                     help="Decode each step with TAESD live preview (prefers QNN GPU if deployed, otherwise ONNX CPU)")
     ap.add_argument("--prog-cfg", action="store_true",
                     help="Apply CFG only on the first ceil(steps/2) denoising steps")
+    ap.add_argument("--list-resolutions", action="store_true",
+                    help="List available context resolutions and exit")
+    ap.add_argument("--prewarm", action="store_true",
+                    help="Start QNN server, preload all contexts, and wait. "
+                         "Prints PREWARM_READY when done. Kill process to release.")
+    ap.add_argument("--check-runtime", action="store_true",
+                    help="Validate the selected phone runtime family and exit")
+    ap.add_argument("--probe-perf", type=str, default="basic",
+                    help="Perf profile for Wan runtime probes (default: basic)")
     a = ap.parse_args()
+
+    if a.list_resolutions:
+        avail = _list_supported_resolutions(a.model_family)
+        if avail:
+            print(f"Available resolutions ({len(avail)}):")
+            for w, h in avail:
+                ratio = w / h
+                print(f"  {w}x{h}  ({ratio:.2f}:1)")
+        else:
+            print("No multi-resolution contexts found. Only default flat layout available.")
+        sys.exit(0)
+
+    if a.check_runtime:
+        _check_runtime(a.model_family, a.width, a.height, probe_perf=a.probe_perf)
+        sys.exit(0)
+
+    if a.prewarm:
+        if a.model_family != MODEL_FAMILY_SDXL:
+            _log("PREWARM_READY")
+            _log("[prewarm] skipped: only SDXL currently uses the shared prewarm path")
+            sys.exit(0)
+        _prewarm_and_wait(a.width, a.height)
+        sys.exit(0)
+
+    if not a.prompt:
+        ap.error("prompt is required for generation")
+
+    if a.model_family != MODEL_FAMILY_SDXL:
+        _check_runtime(a.model_family, a.width, a.height, probe_perf=a.probe_perf)
+        sys.exit(0)
 
     generate(
         a.prompt, seed=a.seed, steps=a.steps,

@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.View;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -53,6 +54,7 @@ import java.util.regex.Pattern;
  */
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = "SDXLNPU";
     private static final String LEGACY_BASE_DIR = SettingsActivity.LEGACY_BASE_DIR;
     private static final String[] TERMUX_PRIVATE_PREFIXES = new String[] {
         "/data/data/com.termux/",
@@ -200,16 +202,24 @@ public class MainActivity extends AppCompatActivity {
     private void startPrewarm() {
         executor.execute(() -> {
             try {
+                Log.i(TAG, "startPrewarm: begin");
                 ExecutionPlan plan = resolveExecutionPlan();
+                Log.i(TAG, "startPrewarm: plan root=" + plan.useRootShell + ", python=" + plan.pythonCommand);
                 File bundledPayload = getBundledRuntimePayloadDirOrNull();
                 String generatorScript = resolveGeneratorScriptPath(bundledPayload);
+                File runtimeRoot = ensureDir(new File(getCacheDir(), "sdxl_runtime"));
+                File runtimeWorkDir = ensureDir(new File(runtimeRoot, "work"));
+                final String runtimeWorkDirPath = runtimeWorkDir.getAbsolutePath();
 
                 StringBuilder script = new StringBuilder();
                 appendShellEnvironment(script);
                 script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
+                script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
+                script.append("export PYTHONDONTWRITEBYTECODE=1\n");
                 script.append("export SDXL_QNN_USE_MMAP=1\n");
                 script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
                 script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
+                script.append("export SDXL_QNN_SHARED_SERVER=1\n");
                 script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
                 if (bundledPayload != null) {
                     File bundledServer = new File(bundledPayload, "bin/qnn-multi-context-server");
@@ -247,18 +257,21 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 prewarmProcess = process;
+                Log.i(TAG, "startPrewarm: process started");
 
                 // Read output until PREWARM_READY or process dies
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream()))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
+                        Log.i(TAG, "prewarm> " + line);
                         if (line.contains("PREWARM_READY")) {
                             break;
                         }
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                Log.w(TAG, "startPrewarm failed", e);
                 // Prewarm is best-effort — don't crash the app
             }
         });
@@ -500,6 +513,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
         script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
         script.append("export SDXL_QNN_PREVIEW_PNG=\"").append(shellEscape(previewPath)).append("\"\n");
+        script.append("export PYTHONDONTWRITEBYTECODE=1\n");
         script.append("export SDXL_QNN_WIDTH=").append(imgWidth).append("\n");
         script.append("export SDXL_QNN_HEIGHT=").append(imgHeight).append("\n");
         script.append("export SDXL_QNN_USE_MMAP=1\n");
@@ -508,6 +522,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
         script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
         script.append("export SDXL_QNN_USE_DAEMON=0\n");
+        script.append("export SDXL_QNN_SHARED_SERVER=1\n");
         script.append("export SDXL_QNN_ASYNC_PREP=1\n");
         script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
         script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=1\n");
@@ -977,8 +992,11 @@ public class MainActivity extends AppCompatActivity {
         }
         pb.redirectErrorStream(true);
         Process process = pb.start();
+        String scriptToRun = script.endsWith("\n") ? script : script + "\n";
+        scriptToRun += "exit\n";
+        Log.i(TAG, "shellProbe: start root=" + useRootShell + ", timeout=" + timeoutSeconds + "s");
         try (OutputStream os = process.getOutputStream()) {
-            os.write(script.getBytes("UTF-8"));
+            os.write(scriptToRun.getBytes("UTF-8"));
             os.flush();
         }
 
@@ -993,8 +1011,11 @@ public class MainActivity extends AppCompatActivity {
         boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
         if (!finished) {
             process.destroyForcibly();
+            Log.w(TAG, "shellProbe: timeout root=" + useRootShell);
             throw new IOException("shell probe timeout");
         }
+        Log.i(TAG, "shellProbe: done root=" + useRootShell + ", exit=" + process.exitValue()
+            + ", output=" + output.toString().trim());
         return output.toString();
     }
 

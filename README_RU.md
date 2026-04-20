@@ -69,9 +69,9 @@
 
 Замерено на OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Текущая (v0.4.1) — bugfix APK runtime payload
+### Текущая линия APK (v0.4.3) — shared prewarm reuse с жёсткой синхронизацией runtime payload
 
-APK теперь несёт внутри актуальный phone-side runtime payload и предпочитает свои `generate.py`, `qnn-multi-context-server` и optional native accel library. Это убирает проблему со старыми скриптами на `/sdcard`, которые не понимали новые `--width` / `--height` и падали с `argparse` exit code `2`, при этом свежий fast-path остаётся доступен прямо через APK.
+Текущая линия APK сохраняет shared FIFO-backed prewarm server с детерминированными ID контекстов и собирает весь послепубличный APK/runtime прогресс после `0.4.2` в один нормальный релиз `0.4.3`. Обновления bundled runtime payload теперь принудительно переэкстрагируют on-device bundle, а старт shared-server ждёт готовности FIFO IPC перед первым `LOAD`. На практике это значит, что новые `generate.py` / server assets реально доезжают до телефона, а app-open prewarm действительно может переиспользоваться последующим foreground generate без старой гонки на раннем `READY`.
 
 ### v0.4.0 — Переменное разрешение + автономный APK
 
