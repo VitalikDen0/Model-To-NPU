@@ -91,6 +91,9 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
     private volatile Boolean rootShellAvailable = null;
+    private volatile Process prewarmProcess = null;
+    private Runnable prewarmKillRunnable = null;
+    private static final long PREWARM_KILL_DELAY_MS = 30_000;
 
     // Patterns for parsing generate.py stdout
     private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
@@ -159,6 +162,106 @@ public class MainActivity extends AppCompatActivity {
 
         // Check prerequisites
         checkPrerequisites();
+
+        // Start prewarm in background
+        startPrewarm();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // Cancel any pending prewarm kill from minimize
+        if (prewarmKillRunnable != null) {
+            mainHandler.removeCallbacks(prewarmKillRunnable);
+            prewarmKillRunnable = null;
+        }
+        // Restart prewarm if it was killed
+        if (prewarmProcess == null || !prewarmProcess.isAlive()) {
+            startPrewarm();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Kill prewarm 30s after app is minimized
+        if (prewarmProcess != null && prewarmProcess.isAlive()) {
+            prewarmKillRunnable = () -> {
+                Process p = prewarmProcess;
+                if (p != null) {
+                    p.destroyForcibly();
+                    prewarmProcess = null;
+                }
+            };
+            mainHandler.postDelayed(prewarmKillRunnable, PREWARM_KILL_DELAY_MS);
+        }
+    }
+
+    private void startPrewarm() {
+        executor.execute(() -> {
+            try {
+                ExecutionPlan plan = resolveExecutionPlan();
+                File bundledPayload = getBundledRuntimePayloadDirOrNull();
+                String generatorScript = resolveGeneratorScriptPath(bundledPayload);
+
+                StringBuilder script = new StringBuilder();
+                appendShellEnvironment(script);
+                script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
+                script.append("export SDXL_QNN_USE_MMAP=1\n");
+                script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
+                script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
+                script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
+                if (bundledPayload != null) {
+                    File bundledServer = new File(bundledPayload, "bin/qnn-multi-context-server");
+                    if (bundledServer.isFile()) {
+                        script.append("export SDXL_QNN_SERVER_BIN=\"")
+                            .append(shellEscape(bundledServer.getAbsolutePath()))
+                            .append("\"\n");
+                    }
+                }
+                script.append(String.format(Locale.US,
+                    "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
+                    shellEscape(BASE_DIR), shellEscape(BASE_DIR), shellEscape(BASE_DIR)));
+                script.append(String.format(Locale.US,
+                    "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
+                    shellEscape(BASE_DIR)));
+                script.append("cd \"").append(shellEscape(BASE_DIR)).append("\"\n");
+                script.append("\"").append(shellEscape(plan.pythonCommand))
+                    .append("\" \"").append(shellEscape(generatorScript))
+                    .append("\" --prewarm 2>&1\n");
+
+                ProcessBuilder pb;
+                if (plan.useRootShell) {
+                    String su = findAvailableSuOrNull();
+                    if (su == null) return;
+                    pb = new ProcessBuilder(su, "--mount-master");
+                } else {
+                    pb = new ProcessBuilder("/system/bin/sh");
+                }
+                pb.redirectErrorStream(true);
+                Process process = pb.start();
+
+                try (OutputStream os = process.getOutputStream()) {
+                    os.write(script.toString().getBytes("UTF-8"));
+                    os.flush();
+                }
+
+                prewarmProcess = process;
+
+                // Read output until PREWARM_READY or process dies
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.contains("PREWARM_READY")) {
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // Prewarm is best-effort — don't crash the app
+            }
+        });
     }
 
     private void loadSettings() {
@@ -172,6 +275,43 @@ public class MainActivity extends AppCompatActivity {
             detectedPython);
         GEN_SCRIPT = BASE_DIR + "/phone_gen/generate.py";
         OUTPUT_DIR = BASE_DIR + "/outputs";
+
+        // Restore last used generation settings
+        promptInput.setText(prefs.getString("last_prompt", ""));
+        negPromptInput.setText(prefs.getString("last_neg_prompt", ""));
+        seedInput.setText(prefs.getString("last_seed", ""));
+        stepsSeekBar.setProgress(prefs.getInt("last_steps", 8));
+        stepsLabel.setText(String.format(Locale.US, "Steps: %d", stepsSeekBar.getProgress()));
+        cfgSeekBar.setProgress(prefs.getInt("last_cfg_x10", 35));
+        cfgLabel.setText(String.format(Locale.US, "CFG: %.1f", cfgSeekBar.getProgress() / 10f));
+        widthInput.setText(prefs.getString("last_width", "1024"));
+        heightInput.setText(prefs.getString("last_height", "1024"));
+        contrastStretch.setChecked(prefs.getBoolean("last_contrast_stretch", true));
+        livePreview.setChecked(prefs.getBoolean("last_live_preview", false));
+        progressiveCfg.setChecked(prefs.getBoolean("last_progressive_cfg", false));
+    }
+
+    private void saveGenerationSettings() {
+        SharedPreferences prefs = getSharedPreferences(
+            SettingsActivity.PREFS_NAME, MODE_PRIVATE);
+        prefs.edit()
+            .putString("last_prompt", promptInput.getText().toString())
+            .putString("last_neg_prompt", negPromptInput.getText().toString())
+            .putString("last_seed", seedInput.getText().toString())
+            .putInt("last_steps", stepsSeekBar.getProgress())
+            .putInt("last_cfg_x10", cfgSeekBar.getProgress())
+            .putString("last_width", widthInput.getText().toString())
+            .putString("last_height", heightInput.getText().toString())
+            .putBoolean("last_contrast_stretch", contrastStretch.isChecked())
+            .putBoolean("last_live_preview", livePreview.isChecked())
+            .putBoolean("last_progressive_cfg", progressiveCfg.isChecked())
+            .apply();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        saveGenerationSettings();
     }
 
     private void checkPrerequisites() {
@@ -958,6 +1098,16 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // Cancel pending prewarm kill timer
+        if (prewarmKillRunnable != null) {
+            mainHandler.removeCallbacks(prewarmKillRunnable);
+            prewarmKillRunnable = null;
+        }
+        // Kill prewarm process
+        Process pw = prewarmProcess;
+        if (pw != null) pw.destroyForcibly();
+        prewarmProcess = null;
+        // Kill generation process
         Process p = currentProcess;
         if (p != null) p.destroyForcibly();
         executor.shutdown();

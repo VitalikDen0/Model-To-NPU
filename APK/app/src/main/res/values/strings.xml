@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SDXL NPU</string>
+    <string name="app_name">NPU Gen</string>
     <string name="generate">Генерировать</string>
     <string name="stop">Стоп</string>
     <string name="prompt_hint">Промпт</string>

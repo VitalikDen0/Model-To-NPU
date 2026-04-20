@@ -130,7 +130,7 @@ tasks.register("stageBundledTermuxAssets") {
 
             def payloadVersionFile = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload/.runtime_payload_version")
             payloadVersionFile.parentFile.mkdirs()
-            payloadVersionFile.text = "apk-runtime-v0.4.1\n"
+            payloadVersionFile.text = "apk-runtime-v0.4.2\n"
         }
     }
 }
@@ -143,8 +143,8 @@ android {
         applicationId "com.sdxlnpu.app"
         minSdk 28
         targetSdk 34
-        versionCode 18
-        versionName "0.4.1"
+        versionCode 19
+        versionName "0.4.2"
     }
 
     buildTypes {
