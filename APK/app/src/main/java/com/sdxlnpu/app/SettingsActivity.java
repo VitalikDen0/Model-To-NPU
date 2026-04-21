@@ -27,6 +27,8 @@ public class SettingsActivity extends AppCompatActivity {
     public static final String KEY_PYTHON_PATH = "python_path";
     public static final String DOWNLOADS_BASE_DIR = "/sdcard/Download/sdxl_qnn";
     public static final String LEGACY_BASE_DIR = "/data/local/tmp/sdxl_qnn";
+    public static final String WAN_DOWNLOADS_BASE_DIR = "/sdcard/Download/wan21_t2v_qnn";
+    public static final String WAN_LEGACY_BASE_DIR = "/data/local/tmp/wan21_t2v_qnn";
     public static final String DEFAULT_BASE_DIR = DOWNLOADS_BASE_DIR;
     public static final String DEFAULT_PYTHON = "python3";
     public static final String LEGACY_PYTHON = "/data/data/com.termux/files/usr/bin/python3";
@@ -187,7 +189,7 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     public static String detectDefaultPython(String baseDir) {
-        return baseDir != null && baseDir.startsWith(LEGACY_BASE_DIR)
+        return baseDir != null && (baseDir.startsWith(LEGACY_BASE_DIR) || baseDir.startsWith(WAN_LEGACY_BASE_DIR))
             ? LEGACY_PYTHON
             : DEFAULT_PYTHON;
     }

@@ -166,6 +166,18 @@ final class RuntimeBootstrap {
                 }
             }
         }
+
+        File runtimeQnnLibDir = new File(bundleDir, RUNTIME_PAYLOAD_DIR + "/lib");
+        if (runtimeQnnLibDir.isDirectory()) {
+            File[] files = runtimeQnnLibDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().endsWith(".so")) {
+                        f.setExecutable(true, false);
+                    }
+                }
+            }
+        }
     }
 
     static String describeBundledAssets(Context context) {

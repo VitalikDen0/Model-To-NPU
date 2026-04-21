@@ -178,6 +178,11 @@ Live preview через TAESD после переноса на rebuilt **QNN GPU
 - Версия APK и скорость runtime не всегда меняются синхронно: ускорения часто приходят из обновлённого `phone_generate.py`, даже если номер APK остаётся тем же.
 - APK запускает `phone_generate.py` без `su`, через обычный shell и настраиваемую Python-команду
 - По умолчанию используется общая папка `/sdcard/Download/sdxl_qnn`
+- Обновлённый публичный asset `v0.4.3` чинит реальную regression path из `v0.4.3`: если приложение экспортирует bundled QNN runtime paths, phone runtime больше не должен молча перескакивать на устаревший `/data/local/tmp/sdxl_qnn`
+- Обновлённый публичный asset `v0.4.3` теперь действительно включает в payload `qnn-net-run` и базовый набор QNN HTP/System библиотек, так что bundled fast path меньше зависит от случайно оставшихся phone-side runtime файлов
+- Обновлённый публичный asset `v0.4.3` корректно перестейдживает bundled backend-extension config с относительными путями и тем самым не теряет backend extensions только из-за app-private extraction path
+- Обновлённый публичный asset `v0.4.3` агрессивнее убирает старые preview/final bitmap'ы и отменяет stale preview poller callbacks, чтобы не держать лишние `Bitmap` и delayed callbacks дольше нужного
+- Обновлённый публичный asset `v0.4.3` убирает `832x480` из общего SDXL size picker и оставляет его только в WAN-режиме
 - APK `v0.4.3` переводит prewarm c приватного stdin/stdout child-сервера на shared FIFO-backed `qnn-multi-context-server` с детерминированными ID контекстов, поэтому прогрев при открытии приложения теперь может реально переиспользоваться последующим foreground generate-запуском
 - APK `v0.4.3` заставляет prewarm и foreground generate использовать один и тот же app-cache `SDXL_QNN_WORK_DIR` и включает `SDXL_QNN_SHARED_SERVER=1`, что делает multi-resolution context reuse практическим, а не декоративным
 - APK `v0.4.3` теперь принудительно переэкстрагирует bundled runtime payload, когда его версия в APK изменилась, так что новые `generate.py` / server-бинарники действительно заменяют старые on-device копии

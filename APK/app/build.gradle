@@ -16,6 +16,16 @@ def resolveExistingDir = { candidate ->
     File offlineInstaller = new File(canonical, "termux_repo/install_offline_termux.sh")
     return debDir.isDirectory() && offlineInstaller.isFile() ? canonical : null
 }
+def resolveAnyDir = { candidate ->
+    if (candidate == null) {
+        return null
+    }
+    File dir = candidate instanceof File ? candidate : new File(candidate.toString())
+    if (!dir.exists()) {
+        return null
+    }
+    return dir.canonicalFile
+}
 def resolveRepoRoot = { candidate ->
     if (candidate == null) {
         return null
@@ -29,6 +39,12 @@ def resolveRepoRoot = { candidate ->
 }
 def modelToNpuRootProp = project.findProperty("modelToNpuRoot")?.toString()
 def modelToNpuRootEnv = System.getenv("MODEL_TO_NPU_ROOT")
+def qairtRootProp = project.findProperty("qairtRoot")?.toString()
+def qairtRootEnv = System.getenv("QAIRT_ROOT") ?: System.getenv("QNN_SDK_ROOT")
+def qnnLibDirProp = project.findProperty("qnnLibDir")?.toString()
+def qnnLibDirEnv = System.getenv("QNN_LIB_DIR")
+def qnnBinDirProp = project.findProperty("qnnBinDir")?.toString()
+def qnnBinDirEnv = System.getenv("QNN_BIN_DIR")
 def repoRootCandidates = [
     modelToNpuRootProp ? new File(modelToNpuRootProp) : null,
     modelToNpuRootEnv ? new File(modelToNpuRootEnv) : null,
@@ -42,6 +58,42 @@ def localToolsCandidates = [
     new File("V:/Model-To-NPU/local_tools"),
 ]
 def bundledLocalToolsDir = localToolsCandidates.collect(resolveExistingDir).find { it != null }
+def qnnLibDirCandidates = [
+    qnnLibDirProp ? new File(qnnLibDirProp) : null,
+    qnnLibDirEnv ? new File(qnnLibDirEnv) : null,
+    qairtRootProp ? new File(qairtRootProp, "lib/aarch64-android") : null,
+    qairtRootEnv ? new File(qairtRootEnv, "lib/aarch64-android") : null,
+    new File("D:/platform-tools/sdxl_npu/qairt_2.44/qairt/2.44.0.260225/lib/aarch64-android"),
+    new File("C:/Qualcomm/AIStack/QAIRT/2.44.0.260225/lib/aarch64-android"),
+    new File("D:/platform-tools/sdxl_npu/qairt_2.31/qairt/2.31.0.250130/lib/aarch64-android"),
+    new File("C:/Qualcomm/AIStack/QAIRT/2.31.0.250130/lib/aarch64-android"),
+]
+def qnnBinDirCandidates = [
+    qnnBinDirProp ? new File(qnnBinDirProp) : null,
+    qnnBinDirEnv ? new File(qnnBinDirEnv) : null,
+    qairtRootProp ? new File(qairtRootProp, "bin/aarch64-android") : null,
+    qairtRootEnv ? new File(qairtRootEnv, "bin/aarch64-android") : null,
+    new File("D:/platform-tools/sdxl_npu/qairt_2.44/qairt/2.44.0.260225/bin/aarch64-android"),
+    new File("C:/Qualcomm/AIStack/QAIRT/2.44.0.260225/bin/aarch64-android"),
+    new File("D:/platform-tools/sdxl_npu/qairt_2.31/qairt/2.31.0.250130/bin/aarch64-android"),
+    new File("C:/Qualcomm/AIStack/QAIRT/2.31.0.250130/bin/aarch64-android"),
+]
+def bundledQnnLibDir = qnnLibDirCandidates.collect(resolveAnyDir).find { it != null && new File(it, "libQnnHtp.so").isFile() }
+def bundledQnnBinDir = qnnBinDirCandidates.collect(resolveAnyDir).find { it != null && new File(it, "qnn-net-run").isFile() }
+def resolveQnnLibPath = { qnnLibDir, libName ->
+    if (qnnLibDir == null) {
+        return null
+    }
+    File direct = new File(qnnLibDir, libName)
+    if (direct.isFile()) {
+        return direct
+    }
+    def siblingCandidates = [
+        new File(qnnLibDir.parentFile, "hexagon-v79/unsigned/${libName}"),
+        new File(qnnLibDir.parentFile?.parentFile, "lib/hexagon-v79/unsigned/${libName}"),
+    ]
+    return siblingCandidates.find { it != null && it.isFile() }
+}
 
 tasks.register("stageBundledTermuxAssets") {
     outputs.dir(bundledTermuxAssetsDir)
@@ -94,6 +146,49 @@ tasks.register("stageBundledTermuxAssets") {
                     into "termux_bundle/runtime_payload"
                     include "htp_backend_extensions_lightning.json", "htp_backend_ext_config_lightning.json"
                 }
+            }
+
+            def qnnRuntimeLibs = [
+                "libQnnHtp.so",
+                "libQnnHtpNetRunExtensions.so",
+                "libQnnHtpV79Stub.so",
+                "libQnnHtpV79Skel.so",
+                "libQnnSystem.so",
+                "libQnnHtpPrepare.so",
+                "libQnnHtpProfilingReader.so",
+            ]
+            if (bundledQnnLibDir != null) {
+                qnnRuntimeLibs.each { libName ->
+                    def runtimeLib = resolveQnnLibPath(bundledQnnLibDir, libName)
+                    if (runtimeLib != null && runtimeLib.isFile()) {
+                        copy {
+                            into bundledTermuxAssetsDir
+                            from(runtimeLib) {
+                                into "termux_bundle/runtime_payload/lib"
+                            }
+                        }
+                    } else {
+                        logger.lifecycle("Skipping bundled QNN runtime lib: ${libName}")
+                    }
+                }
+            } else {
+                logger.warn("Bundled QNN runtime libs disabled: QAIRT lib dir was not found")
+            }
+
+            if (bundledQnnBinDir != null) {
+                ["qnn-net-run"].each { binName ->
+                    def runtimeBin = new File(bundledQnnBinDir, binName)
+                    if (runtimeBin.isFile()) {
+                        copy {
+                            into bundledTermuxAssetsDir
+                            from(runtimeBin) {
+                                into "termux_bundle/runtime_payload/bin"
+                            }
+                        }
+                    }
+                }
+            } else {
+                logger.warn("Bundled QNN runtime binaries disabled: QAIRT bin dir was not found")
             }
 
             [
@@ -178,7 +273,7 @@ tasks.register("stageBundledTermuxAssets") {
 
             def payloadVersionFile = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload/runtime_payload_version.txt")
             payloadVersionFile.parentFile.mkdirs()
-            payloadVersionFile.text = "apk-runtime-v0.4.3-refresh-taesd-idle1\n"
+            payloadVersionFile.text = "apk-runtime-v0.4.3-refresh-selfcontained-qnn1\n"
         }
     }
 }
@@ -191,7 +286,7 @@ android {
         applicationId "com.sdxlnpu.app"
         minSdk 28
         targetSdk 34
-        versionCode 20
+        versionCode 21
         versionName "0.4.3"
     }
 

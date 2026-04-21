@@ -632,7 +632,18 @@ def _resolve_qnn_config_path(config_path: str) -> str:
     if cached and os.path.exists(cached):
         return cached
 
+    with open(config_path, "r", encoding="utf-8") as f:
+        config_data = json.load(f)
+
     needs_override = QNN_HVX_THREADS > 0 or QNN_VTCM_MB > 0
+    backend_ext = config_data.get("backend_extensions")
+    if isinstance(backend_ext, dict):
+        shared_library_path = str(backend_ext.get("shared_library_path") or "").strip()
+        config_file_path = str(backend_ext.get("config_file_path") or "").strip()
+        if shared_library_path and not os.path.isabs(shared_library_path):
+            needs_override = True
+        if config_file_path and not os.path.isabs(config_file_path):
+            needs_override = True
     if not _is_shared_storage_path(config_path) and not needs_override:
         _RESOLVED_CONFIG_CACHE[cache_key] = config_path
         return config_path
@@ -640,8 +651,6 @@ def _resolve_qnn_config_path(config_path: str) -> str:
     runtime_root = os.path.join(WORK_DIR, "runtime")
     os.makedirs(runtime_root, exist_ok=True)
     dst = os.path.join(runtime_root, os.path.basename(config_path))
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_data = json.load(f)
 
     shared_ext_cfg = os.path.join(os.path.dirname(config_path), "htp_backend_ext_config_lightning.json")
     staged_ext_cfg = os.path.join(runtime_root, os.path.basename(shared_ext_cfg))
@@ -671,7 +680,6 @@ def _resolve_qnn_config_path(config_path: str) -> str:
     shared_ext_lib = os.path.join(QNN_LIB, "libQnnHtpNetRunExtensions.so")
     staged_ext_lib = _resolve_runtime_artifact(shared_ext_lib, "lib") if os.path.exists(shared_ext_lib) else ""
 
-    backend_ext = config_data.get("backend_extensions")
     if isinstance(backend_ext, dict):
         if staged_ext_lib:
             backend_ext["shared_library_path"] = staged_ext_lib
@@ -708,6 +716,19 @@ def _resolve_exec_binary(path: str) -> str:
     os.chmod(dst, 0o755)
     _EXEC_BIN_CACHE[path] = dst
     return dst
+
+
+def _has_explicit_qnn_runtime_override() -> bool:
+    for key in (
+        "SDXL_QNN_SERVER_BIN",
+        "SDXL_QNN_NET_RUN",
+        "SDXL_QNN_LIB_DIR",
+        "SDXL_QNN_SYSTEM_LIB",
+        "SDXL_QNN_CONFIG_FILE",
+    ):
+        if os.environ.get(key, "").strip():
+            return True
+    return False
 
 
 def _resolve_backend_lib(backend_name_or_path: str | None) -> str:
@@ -1613,7 +1634,7 @@ class _QnnMultiContextServer:
 
         # Use /data/local/tmp paths directly for mmap/dlopen compatibility
         data_base = "/data/local/tmp/sdxl_qnn"
-        if os.path.isdir(data_base):
+        if os.path.isdir(data_base) and not _has_explicit_qnn_runtime_override():
             server_bin = f"{data_base}/bin/qnn-multi-context-server"
             backend_lib = f"{data_base}/lib/libQnnHtp.so"
             system_lib = f"{data_base}/lib/libQnnSystem.so"
@@ -1622,7 +1643,7 @@ class _QnnMultiContextServer:
             server_bin = _resolve_exec_binary(QNN_SERVER_BIN)
             backend_lib = _resolve_runtime_artifact(f"{QNN_LIB}/libQnnHtp.so", "lib")
             system_lib = _resolve_runtime_artifact(QNN_SYSTEM_LIB, "lib")
-            lib_dir = QNN_LIB
+            lib_dir = os.path.dirname(backend_lib)
 
         cmd = [
             server_bin,
@@ -1951,6 +1972,13 @@ def _find_existing_path(candidates: list[str]) -> str:
     return ""
 
 
+def _portable_basename(path_value: object) -> str:
+    raw = str(path_value or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    return raw.rstrip("/").split("/")[-1]
+
+
 def _detect_wan_probe_input_list(base_dir: str) -> str:
     candidates = [
         os.path.join(base_dir, "inputs", "basic_debug", "input_list.txt"),
@@ -1963,7 +1991,153 @@ def _detect_wan_probe_input_list(base_dir: str) -> str:
     return _find_existing_path(candidates)
 
 
+def _wan_dtype_to_numpy(dtype_name: str):
+    normalized = str(dtype_name).strip().lower()
+    mapping = {
+        "float16": np.float16,
+        "float32": np.float32,
+        "int32": np.int32,
+        "int16": np.int16,
+        "uint16": np.uint16,
+        "int8": np.int8,
+        "uint8": np.uint8,
+    }
+    if normalized not in mapping:
+        raise ValueError(f"unsupported Wan debug dtype: {dtype_name}")
+    return mapping[normalized]
+
+
+def _make_wan_debug_input(
+    name: str,
+    shape: tuple[int, ...],
+    dtype_name: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    np_dtype = _wan_dtype_to_numpy(dtype_name)
+    total = int(math.prod(shape)) if shape else 1
+    if total <= 0:
+        raise ValueError(f"invalid debug tensor shape for {name}: {shape}")
+
+    if name == "timestep":
+        data = np.full(shape, 999.0, dtype=np.float32)
+    else:
+        scale = 0.02
+        if name == "temb":
+            scale = 0.05
+        elif name == "timestep_proj":
+            scale = 0.04
+        elif name == "encoder_hidden_states":
+            scale = 0.03
+        data = rng.standard_normal(total).astype(np.float32).reshape(shape) * scale
+
+    return np.asarray(data, dtype=np_dtype)
+
+
+def _ensure_wan_basic_probe_inputs(manifest: dict, transformer: dict) -> str:
+    run_tag = str(manifest.get("run_tag") or "wan_basic_debug")
+    input_names = transformer.get("input_names", [])
+    shapes = transformer.get("shapes", {})
+    dtypes = transformer.get("dtypes", {})
+
+    if not isinstance(input_names, list) or not input_names:
+        raise ValueError("manifest.transformer.input_names is missing")
+    if not isinstance(shapes, dict):
+        raise ValueError("manifest.transformer.shapes is missing")
+    if not isinstance(dtypes, dict):
+        raise ValueError("manifest.transformer.dtypes is missing")
+
+    debug_root = os.path.join(WORK_DIR, "wan_basic_debug", run_tag)
+    input_dir = os.path.join(debug_root, "inputs")
+    os.makedirs(input_dir, exist_ok=True)
+    input_list_path = os.path.join(input_dir, "input_list.txt")
+
+    rng = np.random.default_rng(12345)
+    raw_paths: list[str] = []
+    snapshot: dict[str, dict[str, object]] = {}
+
+    for idx, raw_name in enumerate(input_names):
+        name = str(raw_name)
+        dims = shapes.get(name)
+        if not isinstance(dims, list) or not dims:
+            raise ValueError(f"shape is missing for Wan debug input: {name}")
+
+        shape: list[int] = []
+        for dim in dims:
+            if not isinstance(dim, int):
+                raise ValueError(f"non-static Wan debug shape for {name}: {dims}")
+            shape.append(int(dim))
+
+        dtype_name = str(dtypes.get(name, "float16"))
+        arr = _make_wan_debug_input(name, tuple(shape), dtype_name, rng)
+        raw_path = os.path.join(input_dir, f"{idx:02d}_{name}.raw")
+        _write_array_reuse(raw_path, arr, dtype=arr.dtype)
+        raw_paths.append(raw_path)
+        snapshot[name] = {
+            "shape": shape,
+            "dtype": dtype_name,
+            "path": raw_path,
+        }
+
+    with open(input_list_path, "w", encoding="utf-8") as f:
+        f.write(" ".join(raw_paths) + "\n")
+
+    _write_atomic_json(
+        os.path.join(debug_root, "manifest_snapshot.json"),
+        {
+            "run_tag": run_tag,
+            "base_dir": DR,
+            "input_list": input_list_path,
+            "inputs": snapshot,
+        },
+    )
+    return input_list_path
+
+
+def _run_wan_probe_once(
+    *,
+    label: str,
+    ctx_path: str,
+    input_list_path: str,
+    output_dir: str,
+    perf_profile: str,
+    force_direct: bool,
+) -> dict[str, object]:
+    t0 = time.time()
+    reported_ms = qnn_run(
+        ctx_path,
+        input_list_path,
+        output_dir,
+        native=True,
+        native_input=True,
+        perf_profile=perf_profile,
+        net_run_path=QNN_NET_RUN if force_direct else None,
+        profile_tag=f"wan_{label}",
+    )
+    wall_ms = (time.time() - t0) * 1000.0
+    reported_value = float(reported_ms)
+    wall_value = float(wall_ms)
+    return {
+        "label": label,
+        "mode": "direct" if force_direct else "server",
+        "reported_ms": round(reported_value, 3),
+        "wall_ms": round(wall_value, 3),
+        "overhead_ms": round(max(0.0, wall_value - reported_value), 3),
+    }
+
+
+def _wan_metric(value: object) -> float:
+    if isinstance(value, (int, float, np.floating)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    return 0.0
+
+
 def _probe_wan_runtime(width: int, height: int, probe_perf: str) -> dict:
+    effective_probe_perf = (probe_perf or "").strip().lower() or QNN_PERF_PROFILE
     report: dict[str, object] = {
         "family": MODEL_FAMILY_WAN21,
         "base_dir": DR,
@@ -1973,10 +2147,18 @@ def _probe_wan_runtime(width: int, height: int, probe_perf: str) -> dict:
         "standalone_ready": False,
         "missing": [],
         "warnings": [],
-        "probe_perf_profile": probe_perf,
+        "probe_perf_profile": effective_probe_perf,
+        "qnn_profiling_level": QNN_PROFILING_LEVEL or "off",
     }
     missing: list[str] = report["missing"]  # type: ignore[assignment]
     warnings: list[str] = report["warnings"]  # type: ignore[assignment]
+
+    if effective_probe_perf in {"basic", "detailed", "off"}:
+        warnings.append(
+            f"probe perf '{effective_probe_perf}' looks like a profiling level; using perf_profile '{QNN_PERF_PROFILE}' instead"
+        )
+        effective_probe_perf = QNN_PERF_PROFILE
+        report["probe_perf_profile"] = effective_probe_perf
 
     paths = {
         "base": DR,
@@ -2035,49 +2217,103 @@ def _probe_wan_runtime(width: int, height: int, probe_perf: str) -> dict:
     for name, info in (("transformer", transformer), ("vae", vae)):
         if not isinstance(info, dict):
             continue
-        android_lib = os.path.basename(str(info.get("android_lib", "")).strip())
-        context_name = str(info.get("context_binary_output", "")).strip()
+        android_lib = _portable_basename(info.get("android_lib", ""))
+        context_name = _portable_basename(info.get("context_binary_output", ""))
         lib_path = os.path.join(paths["model"], android_lib) if android_lib else ""
         ctx_path = os.path.join(paths["context"], context_name) if context_name else ""
-        if android_lib and not os.path.exists(lib_path):
-            missing.append(f"model/{android_lib}")
+        lib_exists = bool(android_lib and os.path.exists(lib_path))
+        ctx_exists = bool(context_name and os.path.exists(ctx_path))
+        if android_lib and not lib_exists:
+            if ctx_exists:
+                warnings.append(
+                    f"model/{android_lib} is missing, but context is present so direct context execution can still run"
+                )
+            else:
+                missing.append(f"model/{android_lib}")
         if context_name and not os.path.exists(ctx_path):
             missing.append(f"context/{context_name}")
         component_checks[name] = {
             "lib_path": lib_path,
             "context_path": ctx_path,
+            "lib_exists": "1" if lib_exists else "0",
+            "context_exists": "1" if ctx_exists else "0",
         }
     report["components"] = component_checks
 
     basic_probe_input = _detect_wan_probe_input_list(DR)
+    if not basic_probe_input and isinstance(manifest, dict) and isinstance(transformer, dict):
+        try:
+            basic_probe_input = _ensure_wan_basic_probe_inputs(manifest, transformer)
+            report["generated_basic_probe_input_list"] = basic_probe_input
+        except Exception as exc:
+            warnings.append(f"basic debug input auto-generation failed: {exc}")
     report["basic_probe_input_list"] = basic_probe_input or ""
 
     probe_status = "skipped"
+    probe_runs: dict[str, dict[str, object]] = {}
+    report["probe_runs"] = probe_runs
     if basic_probe_input and qnn_runner and qnn_backend:
         transformer_ctx = component_checks.get("transformer", {}).get("context_path", "")
         if transformer_ctx and os.path.exists(transformer_ctx):
             try:
-                probe_out = os.path.join(WORK_DIR, "wan_basic_probe")
-                os.makedirs(probe_out, exist_ok=True)
-                probe_ms = qnn_run(
-                    transformer_ctx,
-                    basic_probe_input,
-                    probe_out,
-                    native=True,
-                    native_input=True,
-                    perf_profile=probe_perf,
-                    profile_tag="wan_basic_probe",
+                probe_root = os.path.join(WORK_DIR, "wan_basic_probe")
+                os.makedirs(probe_root, exist_ok=True)
+
+                _shutdown_qnn_server()
+                probe_runs["direct"] = _run_wan_probe_once(
+                    label="basic_direct",
+                    ctx_path=transformer_ctx,
+                    input_list_path=basic_probe_input,
+                    output_dir=os.path.join(probe_root, "direct"),
+                    perf_profile=effective_probe_perf,
+                    force_direct=True,
                 )
-                report["basic_probe_ms"] = round(float(probe_ms), 3)
+
+                if _can_use_qnn_server():
+                    _shutdown_qnn_server()
+                    probe_runs["server_cold"] = _run_wan_probe_once(
+                        label="basic_server_cold",
+                        ctx_path=transformer_ctx,
+                        input_list_path=basic_probe_input,
+                        output_dir=os.path.join(probe_root, "server_cold"),
+                        perf_profile=effective_probe_perf,
+                        force_direct=False,
+                    )
+                    probe_runs["server_warm"] = _run_wan_probe_once(
+                        label="basic_server_warm",
+                        ctx_path=transformer_ctx,
+                        input_list_path=basic_probe_input,
+                        output_dir=os.path.join(probe_root, "server_warm"),
+                        perf_profile=effective_probe_perf,
+                        force_direct=False,
+                    )
+
+                primary_probe = probe_runs.get("server_warm") or probe_runs.get("server_cold") or probe_runs.get("direct")
+                if isinstance(primary_probe, dict):
+                    report["basic_probe_ms"] = primary_probe.get("wall_ms", 0.0)
+
+                direct_probe = probe_runs.get("direct")
+                server_warm_probe = probe_runs.get("server_warm")
+                if isinstance(direct_probe, dict) and isinstance(server_warm_probe, dict):
+                    direct_wall = _wan_metric(direct_probe.get("wall_ms", 0.0))
+                    warm_wall = _wan_metric(server_warm_probe.get("wall_ms", 0.0))
+                    reuse_gain_ms = direct_wall - warm_wall
+                    report["reuse_gain_ms"] = round(reuse_gain_ms, 3)
+                    if direct_wall > 0.0:
+                        report["reuse_gain_pct"] = round((reuse_gain_ms / direct_wall) * 100.0, 2)
+                    report["warm_server_overhead_ms"] = server_warm_probe.get("overhead_ms", 0.0)
                 probe_status = "ok"
             except Exception as exc:
                 probe_status = "failed"
-                missing.append(f"basic probe failed: {exc}")
+                warnings.append(f"basic probe failed: {exc}")
+            finally:
+                _shutdown_qnn_server()
         else:
             warnings.append("basic probe skipped because transformer context is missing")
     elif not basic_probe_input:
-        warnings.append("basic debug probe skipped because no prepared Wan input_list was found")
+        warnings.append("basic debug probe skipped because no prepared or auto-generated Wan input_list was found")
     report["basic_probe_status"] = probe_status
+    report["basic_debug_ready"] = probe_status == "ok"
 
     if missing:
         report["status"] = "BLOCKED"
@@ -2097,6 +2333,7 @@ def _check_runtime(model_family: str, width: int, height: int, probe_perf: str =
     if model_family == MODEL_FAMILY_WAN21:
         report = _probe_wan_runtime(width, height, probe_perf)
         _log("[WAN] experimental runtime check")
+        _log(f"[WAN] status: {report['status']}")
         _log(f"[WAN] Base: {report['base_dir']}")
         _log(f"[WAN] Requested: {report['requested_resolution']}")
         _log(f"[WAN] Recommended: {report['recommended_resolution']}")
@@ -2104,18 +2341,38 @@ def _check_runtime(model_family: str, width: int, height: int, probe_perf: str =
             _log(f"[WAN] Run tag: {report['run_tag']}")
         if report.get("manifest_path"):
             _log(f"[WAN] Manifest: {report['manifest_path']}")
+        if report.get("generated_basic_probe_input_list"):
+            _log(f"[WAN] Auto-generated basic inputs: {report['generated_basic_probe_input_list']}")
         for warning in report.get("warnings", []):
             _log(f"[WAN] warning: {warning}")
         for missing_item in report.get("missing", []):
             _log(f"[WAN] missing: {missing_item}")
+        probe_runs = report.get("probe_runs", {})
+        if isinstance(probe_runs, dict):
+            for key in ("direct", "server_cold", "server_warm"):
+                run = probe_runs.get(key)
+                if isinstance(run, dict):
+                    _log(
+                        f"[WAN] {key}: wall={run.get('wall_ms', '?')}ms "
+                        f"reported={run.get('reported_ms', '?')}ms overhead={run.get('overhead_ms', '?')}ms"
+                    )
+        if report.get("reuse_gain_ms") is not None:
+            _log(
+                f"[WAN] reuse gain: {report.get('reuse_gain_ms')}ms "
+                f"({report.get('reuse_gain_pct', '?')}%)"
+            )
         probe_state = str(report.get("basic_probe_status", "skipped"))
         if probe_state == "ok":
-            _log(f"[WAN] basic debug probe ({probe_perf}): {report.get('basic_probe_ms', 0):.0f}ms")
+            _log(
+                f"[WAN] basic debug probe ({report.get('probe_perf_profile', probe_perf)}): "
+                f"{float(report.get('basic_probe_ms', 0.0)):.0f}ms"
+            )
         elif probe_state == "failed":
-            _log(f"[WAN] basic debug probe ({probe_perf}): failed")
+            _log(f"[WAN] basic debug probe ({report.get('probe_perf_profile', probe_perf)}): failed")
         else:
-            _log(f"[WAN] basic debug probe ({probe_perf}): skipped")
+            _log(f"[WAN] basic debug probe ({report.get('probe_perf_profile', probe_perf)}): skipped")
         _log(f"[WAN] standalone phone generation: no")
+        _log("WAN_REPORT_JSON: " + json.dumps(report, ensure_ascii=False, sort_keys=True))
         _log(f"WAN_STATUS: {report['status']}")
         _log(
             "WAN_SUMMARY: "
@@ -2944,7 +3201,7 @@ if __name__ == "__main__":
     ap.add_argument("--check-runtime", action="store_true",
                     help="Validate the selected phone runtime family and exit")
     ap.add_argument("--probe-perf", type=str, default="basic",
-                    help="Perf profile for Wan runtime probes (default: basic)")
+                    help="Perf profile for Wan runtime probes (qnn-net-run --perf_profile); use env SDXL_QNN_PROFILING_LEVEL=basic for instrumentation")
     a = ap.parse_args()
 
     if a.list_resolutions:

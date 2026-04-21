@@ -69,9 +69,9 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Current APK line (v0.4.3) — shared prewarm reuse with bundled runtime refresh hardening
+### Current APK line (v0.4.3) — refreshed self-contained runtime hotfix
 
-The current APK line keeps the shared FIFO-backed prewarm server with deterministic context IDs and folds all post-`0.4.2` APK/runtime work into one coherent public `0.4.3` release. Bundled runtime payload updates now force a refresh of the extracted on-device bundle, and shared-server startup waits for FIFO IPC readiness before the first `LOAD`. In practice, updated `generate.py` / server assets actually reach the phone, and app-open prewarm can be reused by the later foreground generate run without the old early-`READY` race. The refreshed `v0.4.3` asset also unloads shared prewarm after 30 seconds of inactivity both in background and after a completed foreground run, while bundling TAESD preview artifacts more aggressively (ONNX plus optional QNN context / model / GPU backend bits) so preview is less likely to inherit stale phone-side leftovers.
+The current public `v0.4.3` line keeps the shared FIFO-backed prewarm server from the earlier `v0.4.3` refresh, but also folds in the follow-up hotfix that closes the practical gap which could make that build feel worse than `v0.4.2`. Explicit bundled runtime exports now win over stale `/data/local/tmp` QNN leftovers, bundled backend-extension configs with relative paths are restaged safely instead of being used raw, and the APK now actually packages the missing core QNN runtime pieces (`qnn-net-run` plus the required HTP/System libraries) needed for the fast path. On the UI side, preview/final bitmap cleanup was tightened so stale bitmaps and delayed preview pollers are released more deterministically, and `832x480` is no longer shown as a generic SDXL preset — it stays on the WAN side where it belongs.
 
 ### v0.4.0 — Variable resolution + self-contained APK
 

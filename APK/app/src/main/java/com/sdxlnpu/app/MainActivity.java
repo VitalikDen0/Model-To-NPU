@@ -101,23 +101,30 @@ public class MainActivity extends AppCompatActivity {
 
     private ExecutorService executor;
     private Handler mainHandler;
+    private final Object bitmapLock = new Object();
     private Bitmap currentBitmap;
+    private Bitmap displayedBitmap;
     private volatile Process currentProcess;
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
     private volatile Boolean rootShellAvailable = null;
     private volatile Process prewarmProcess = null;
     private Runnable prewarmKillRunnable = null;
+    private Runnable activePreviewPoller = null;
     private static final long PREWARM_KILL_DELAY_MS = 30_000;
     private boolean updatingSizePresetUi = false;
 
-    private static final int[][] SIZE_PRESET_DIMENSIONS = new int[][] {
+    private static final int[][] SDXL_SIZE_PRESET_DIMENSIONS = new int[][] {
         {1024, 1024},
         {1216, 832},
         {832, 1216},
         {1344, 768},
         {768, 1344},
+    };
+
+    private static final int[][] WAN_SIZE_PRESET_DIMENSIONS = new int[][] {
         {832, 480},
+        {1280, 720},
     };
 
     private final TextWatcher sizeInputWatcher = new TextWatcher() {
@@ -204,6 +211,7 @@ public class MainActivity extends AppCompatActivity {
 
         wan21DebugMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
             applyModelFamilyDefaults(isChecked);
+            refreshSizePresetSpinnerItems();
             selectSizePresetForCurrentInputs();
             if (isChecked) {
                 killPrewarmNow("switch to WAN/basic-debug mode");
@@ -304,7 +312,8 @@ public class MainActivity extends AppCompatActivity {
         executor.execute(() -> {
             try {
                 Log.i(TAG, "startPrewarm: begin");
-                ExecutionPlan plan = resolveExecutionPlan(resolveActiveBaseDir(MODEL_FAMILY_SDXL));
+                String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
+                ExecutionPlan plan = resolveExecutionPlan(activeBaseDir);
                 Log.i(TAG, "startPrewarm: plan root=" + plan.useRootShell + ", python=" + plan.pythonCommand);
                 File bundledPayload = getBundledRuntimePayloadDirOrNull();
                 String generatorScript = resolveGeneratorScriptPath(bundledPayload);
@@ -314,7 +323,8 @@ public class MainActivity extends AppCompatActivity {
 
                 StringBuilder script = new StringBuilder();
                 appendShellEnvironment(script);
-                script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
+                script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
+                script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
                 script.append("export PYTHONDONTWRITEBYTECODE=1\n");
                 script.append("export SDXL_QNN_USE_MMAP=1\n");
@@ -322,21 +332,21 @@ public class MainActivity extends AppCompatActivity {
                 script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
                 script.append("export SDXL_QNN_SHARED_SERVER=1\n");
                 script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
-                if (bundledPayload != null) {
-                    File bundledServer = new File(bundledPayload, "bin/qnn-multi-context-server");
-                    if (bundledServer.isFile()) {
-                        script.append("export SDXL_QNN_SERVER_BIN=\"")
-                            .append(shellEscape(bundledServer.getAbsolutePath()))
-                            .append("\"\n");
-                    }
+                boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledPayload);
+                if (!bundledQnnConfigReady) {
+                    script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
+                        .append(shellEscape(activeBaseDir)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
+                    script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(activeBaseDir))
+                        .append("/htp_backend_extensions_lightning.json\"\n");
+                    script.append("fi\n");
                 }
                 script.append(String.format(Locale.US,
                     "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
-                    shellEscape(BASE_DIR), shellEscape(BASE_DIR), shellEscape(BASE_DIR)));
+                    shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
                 script.append(String.format(Locale.US,
                     "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
-                    shellEscape(BASE_DIR)));
-                script.append("cd \"").append(shellEscape(BASE_DIR)).append("\"\n");
+                    shellEscape(activeBaseDir)));
+                script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("\"").append(shellEscape(plan.pythonCommand))
                     .append("\" \"").append(shellEscape(generatorScript))
                     .append("\" --prewarm 2>&1\n");
@@ -419,26 +429,18 @@ public class MainActivity extends AppCompatActivity {
         if (sizePresetSpinner == null) {
             return;
         }
-        String[] labels = new String[SIZE_PRESET_DIMENSIONS.length + 1];
-        labels[0] = getString(R.string.size_preset_custom);
-        for (int i = 0; i < SIZE_PRESET_DIMENSIONS.length; i++) {
-            int[] preset = SIZE_PRESET_DIMENSIONS[i];
-            labels[i + 1] = getString(R.string.size_preset_format, preset[0], preset[1]);
-        }
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-            this,
-            android.R.layout.simple_spinner_item,
-            labels
-        );
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        sizePresetSpinner.setAdapter(adapter);
+        refreshSizePresetSpinnerItems();
         sizePresetSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (updatingSizePresetUi || position <= 0) {
                     return;
                 }
-                int[] preset = SIZE_PRESET_DIMENSIONS[position - 1];
+                int[][] presets = getActiveSizePresetDimensions();
+                if (position - 1 >= presets.length) {
+                    return;
+                }
+                int[] preset = presets[position - 1];
                 updatingSizePresetUi = true;
                 widthInput.setText(String.valueOf(preset[0]));
                 heightInput.setText(String.valueOf(preset[1]));
@@ -472,8 +474,9 @@ public class MainActivity extends AppCompatActivity {
         int width = parsePositiveInt(widthInput);
         int height = parsePositiveInt(heightInput);
         int selection = 0;
-        for (int i = 0; i < SIZE_PRESET_DIMENSIONS.length; i++) {
-            int[] preset = SIZE_PRESET_DIMENSIONS[i];
+        int[][] presets = getActiveSizePresetDimensions();
+        for (int i = 0; i < presets.length; i++) {
+            int[] preset = presets[i];
             if (preset[0] == width && preset[1] == height) {
                 selection = i + 1;
                 break;
@@ -531,6 +534,152 @@ public class MainActivity extends AppCompatActivity {
             widthInput.setText("1024");
             heightInput.setText("1024");
         }
+    }
+
+    private int[][] getActiveSizePresetDimensions() {
+        return MODEL_FAMILY_WAN21.equals(getSelectedModelFamily())
+            ? WAN_SIZE_PRESET_DIMENSIONS
+            : SDXL_SIZE_PRESET_DIMENSIONS;
+    }
+
+    private void refreshSizePresetSpinnerItems() {
+        if (sizePresetSpinner == null) {
+            return;
+        }
+        int[][] presets = getActiveSizePresetDimensions();
+        String[] labels = new String[presets.length + 1];
+        labels[0] = getString(R.string.size_preset_custom);
+        for (int i = 0; i < presets.length; i++) {
+            int[] preset = presets[i];
+            labels[i + 1] = getString(R.string.size_preset_format, preset[0], preset[1]);
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+            this,
+            android.R.layout.simple_spinner_item,
+            labels
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sizePresetSpinner.setAdapter(adapter);
+    }
+
+    private void cancelPreviewPolling() {
+        Runnable poller = activePreviewPoller;
+        if (poller != null) {
+            mainHandler.removeCallbacks(poller);
+            activePreviewPoller = null;
+        }
+    }
+
+    private void recycleBitmapQuietly(Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled()) {
+            return;
+        }
+        try {
+            bitmap.recycle();
+        } catch (Exception e) {
+            Log.w(TAG, "bitmap recycle failed", e);
+        }
+    }
+
+    private void clearDisplayedImage(boolean recycleSavedBitmap) {
+        cancelPreviewPolling();
+
+        Bitmap oldDisplayed;
+        Bitmap oldCurrent = null;
+        synchronized (bitmapLock) {
+            oldDisplayed = displayedBitmap;
+            displayedBitmap = null;
+            if (recycleSavedBitmap) {
+                oldCurrent = currentBitmap;
+                currentBitmap = null;
+            }
+        }
+
+        imagePreview.setImageBitmap(null);
+
+        if (oldDisplayed != null && oldDisplayed != oldCurrent) {
+            recycleBitmapQuietly(oldDisplayed);
+        }
+        if (recycleSavedBitmap && oldCurrent != null) {
+            recycleBitmapQuietly(oldCurrent);
+        }
+    }
+
+    private void showPreviewBitmap(Bitmap bitmap) {
+        Bitmap oldDisplayed;
+        Bitmap savedBitmap;
+        synchronized (bitmapLock) {
+            oldDisplayed = displayedBitmap;
+            savedBitmap = currentBitmap;
+            displayedBitmap = bitmap;
+        }
+
+        imagePreview.setImageBitmap(bitmap);
+
+        if (oldDisplayed != null && oldDisplayed != bitmap && oldDisplayed != savedBitmap) {
+            recycleBitmapQuietly(oldDisplayed);
+        }
+    }
+
+    private void showFinalBitmap(Bitmap bitmap) {
+        Bitmap oldDisplayed;
+        Bitmap oldCurrent;
+        synchronized (bitmapLock) {
+            oldDisplayed = displayedBitmap;
+            oldCurrent = currentBitmap;
+            displayedBitmap = bitmap;
+            currentBitmap = bitmap;
+        }
+
+        imagePreview.setImageBitmap(bitmap);
+
+        if (oldDisplayed != null && oldDisplayed != bitmap && oldDisplayed != oldCurrent) {
+            recycleBitmapQuietly(oldDisplayed);
+        }
+        if (oldCurrent != null && oldCurrent != bitmap) {
+            recycleBitmapQuietly(oldCurrent);
+        }
+    }
+
+    private boolean appendBundledRuntimeEnvironment(StringBuilder script, File bundledRuntimePayloadDir) {
+        if (bundledRuntimePayloadDir == null) {
+            return false;
+        }
+
+        File bundledNetRun = new File(bundledRuntimePayloadDir, "bin/qnn-net-run");
+        File bundledLibDir = new File(bundledRuntimePayloadDir, "lib");
+        File bundledServer = new File(bundledRuntimePayloadDir, "bin/qnn-multi-context-server");
+        File bundledDaemon = new File(bundledRuntimePayloadDir, "bin/qnn-context-runner");
+        File bundledConfig = new File(bundledRuntimePayloadDir, "htp_backend_extensions_lightning.json");
+        File bundledExtLib = new File(bundledRuntimePayloadDir, "lib/libQnnHtpNetRunExtensions.so");
+
+        if (bundledNetRun.isFile()) {
+            script.append("export SDXL_QNN_NET_RUN=\"")
+                .append(shellEscape(bundledNetRun.getAbsolutePath()))
+                .append("\"\n");
+        }
+        if (bundledLibDir.isDirectory()) {
+            script.append("export SDXL_QNN_LIB_DIR=\"")
+                .append(shellEscape(bundledLibDir.getAbsolutePath()))
+                .append("\"\n");
+        }
+        if (bundledServer.isFile()) {
+            script.append("export SDXL_QNN_SERVER_BIN=\"")
+                .append(shellEscape(bundledServer.getAbsolutePath()))
+                .append("\"\n");
+        }
+        if (bundledDaemon.isFile()) {
+            script.append("export SDXL_QNN_DAEMON_BIN=\"")
+                .append(shellEscape(bundledDaemon.getAbsolutePath()))
+                .append("\"\n");
+        }
+        if (bundledConfig.isFile() && bundledExtLib.isFile()) {
+            script.append("export SDXL_QNN_CONFIG_FILE=\"")
+                .append(shellEscape(bundledConfig.getAbsolutePath()))
+                .append("\"\n");
+            return true;
+        }
+        return false;
     }
 
     private String resolveActiveBaseDir(String modelFamily) {
@@ -653,6 +802,7 @@ public class MainActivity extends AppCompatActivity {
         final int finalWidth = imgWidth;
         final int finalHeight = imgHeight;
 
+        clearDisplayedImage(true);
         generateButton.setEnabled(false);
         stopButton.setVisibility(View.VISIBLE);
         progressBar.setVisibility(View.VISIBLE);
@@ -689,6 +839,7 @@ public class MainActivity extends AppCompatActivity {
             p.destroyForcibly();
             currentProcess = null;
         }
+        cancelPreviewPolling();
         isGenerating = false;
         mainHandler.post(() -> {
             latestTempStatus = "";
@@ -796,21 +947,8 @@ public class MainActivity extends AppCompatActivity {
                 .append(shellEscape(accelLib.getAbsolutePath()))
                 .append("\"\n");
         }
+        boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledRuntimePayloadDir);
         if (bundledRuntimePayloadDir != null) {
-            File bundledServer = new File(bundledRuntimePayloadDir, "bin/qnn-multi-context-server");
-            if (bundledServer.isFile()) {
-                script.append("export SDXL_QNN_SERVER_BIN=\"")
-                    .append(shellEscape(bundledServer.getAbsolutePath()))
-                    .append("\"\n");
-            }
-
-            File bundledDaemon = new File(bundledRuntimePayloadDir, "bin/qnn-context-runner");
-            if (bundledDaemon.isFile()) {
-                script.append("export SDXL_QNN_DAEMON_BIN=\"")
-                    .append(shellEscape(bundledDaemon.getAbsolutePath()))
-                    .append("\"\n");
-            }
-
             File bundledTaesdOnnx = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.onnx");
             if (bundledTaesdOnnx.isFile()) {
                 script.append("export SDXL_QNN_TAESD_ONNX=\"")
@@ -840,11 +978,13 @@ public class MainActivity extends AppCompatActivity {
                     .append("\"\n");
             }
         }
-        script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
-            .append(shellEscape(activeBaseDir)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
-        script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(activeBaseDir))
-            .append("/htp_backend_extensions_lightning.json\"\n");
-        script.append("fi\n");
+        if (!bundledQnnConfigReady) {
+            script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
+                .append(shellEscape(activeBaseDir)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
+            script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(activeBaseDir))
+                .append("/htp_backend_extensions_lightning.json\"\n");
+            script.append("fi\n");
+        }
         script.append(String.format(Locale.US,
             "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
             shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
@@ -921,157 +1061,170 @@ public class MainActivity extends AppCompatActivity {
         final Runnable previewPoller = new Runnable() {
             @Override
             public void run() {
-                if (!isGenerating) return;
+                if (!isGenerating || activePreviewPoller != this) return;
                 File previewFile = new File(previewPath);
                 if (previewFile.exists() && previewFile.lastModified() != previewLastModified[0]) {
                     previewLastModified[0] = previewFile.lastModified();
                     Bitmap bm = BitmapFactory.decodeFile(previewPath);
                     if (bm != null) {
-                        mainHandler.post(() -> imagePreview.setImageBitmap(bm));
+                        showPreviewBitmap(bm);
                     }
                 }
-                if (isGenerating) {
+                if (isGenerating && activePreviewPoller == this) {
                     mainHandler.postDelayed(this, 2000);
                 }
             }
         };
         isGenerating = true;
+        cancelPreviewPolling();
         if (preview && !wanMode) {
             // Delete stale preview from last run
             new File(previewPath).delete();
+            activePreviewPoller = previewPoller;
             mainHandler.postDelayed(previewPoller, 2000);
         }
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (currentProcess == null) break; // stopped
-                if (rawLog.length() < 16000) rawLog.append(line).append("\n");
+        int exitCode = -1;
+        boolean waitedForProcess = false;
+        try {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (currentProcess == null) break; // stopped
+                    if (rawLog.length() < 16000) rawLog.append(line).append("\n");
 
-                if (wanMode) {
-                    if (line.startsWith("WAN_REPORT_JSON:")) {
-                        wanReportJson = line.substring("WAN_REPORT_JSON:".length()).trim();
+                    if (wanMode) {
+                        if (line.startsWith("WAN_REPORT_JSON:")) {
+                            wanReportJson = line.substring("WAN_REPORT_JSON:".length()).trim();
+                            continue;
+                        }
+                        if (line.startsWith("[WAN]")) {
+                            timingLog.append(line.trim()).append("\n");
+                            if (line.startsWith("[WAN] status:")) {
+                                updateStatus(line.substring("[WAN] ".length()).trim(), 15);
+                            }
+                            continue;
+                        }
+                        if (line.startsWith("WAN_SUMMARY:") || line.startsWith("WAN_STATUS:")) {
+                            timingLog.append(line.trim()).append("\n");
+                            continue;
+                        }
+                    }
+
+                    // Parse CLIP progress
+                    Matcher m = PAT_CLIP.matcher(line);
+                    if (m.find()) {
+                        clipDone++;
+                        String kind = m.group(1);
+                        int msL = Integer.parseInt(m.group(2));
+                        int msG = Integer.parseInt(m.group(3));
+                        timingLog.append(String.format(Locale.US,
+                            "CLIP %s: L=%dms G=%dms\n", kind, msL, msG));
+                        updateStatus("CLIP " + kind + "... " + (msL + msG) + "ms",
+                            5 + clipDone * 3);
                         continue;
                     }
-                    if (line.startsWith("[WAN]")) {
-                        timingLog.append(line.trim()).append("\n");
-                        if (line.startsWith("[WAN] status:")) {
-                            updateStatus(line.substring("[WAN] ".length()).trim(), 15);
+
+                    // Parse UNet steps
+                    m = PAT_UNET.matcher(line);
+                    if (m.find()) {
+                        int step = Integer.parseInt(m.group(1));
+                        int total = Integer.parseInt(m.group(2));
+                        int ms = Integer.parseInt(m.group(3));
+                        timingLog.append(String.format(Locale.US,
+                            "  UNet %d/%d: %dms\n", step, total, ms));
+                        int pct = 10 + step * 75 / total;
+                        updateStatus(String.format(Locale.US,
+                            "UNet %d/%d — %dms", step, total, ms), pct);
+                        continue;
+                    }
+
+                    m = PAT_TEMP_LINE.matcher(line);
+                    if (m.find()) {
+                        Matcher tempMatcher = PAT_TEMP_ITEM.matcher(m.group(1));
+                        String cpu = null;
+                        String gpu = null;
+                        String npu = null;
+                        while (tempMatcher.find()) {
+                            String label = tempMatcher.group(1);
+                            String value = tempMatcher.group(2);
+                            switch (label) {
+                                case "CPU":
+                                    cpu = value;
+                                    break;
+                                case "GPU":
+                                    gpu = value;
+                                    break;
+                                case "NPU":
+                                    npu = value;
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        if (cpu != null || gpu != null || npu != null) {
+                            updateTempStatus(String.format(Locale.US,
+                                "CPU %s°C | GPU %s°C | NPU %s°C",
+                                cpu != null ? cpu : "—",
+                                gpu != null ? gpu : "—",
+                                npu != null ? npu : "—"));
                         }
                         continue;
                     }
-                    if (line.startsWith("WAN_SUMMARY:") || line.startsWith("WAN_STATUS:")) {
-                        timingLog.append(line.trim()).append("\n");
+
+                    // Parse preview timing (useful for diagnostics, but do not override progress)
+                    m = PAT_PREV.matcher(line);
+                    if (m.find()) {
+                        int step = Integer.parseInt(m.group(1));
+                        int total = Integer.parseInt(m.group(2));
+                        int ms = Integer.parseInt(m.group(3));
+                        timingLog.append(String.format(Locale.US,
+                            "  Preview %d/%d: %dms\n", step, total, ms));
                         continue;
                     }
-                }
 
-                // Parse CLIP progress
-                Matcher m = PAT_CLIP.matcher(line);
-                if (m.find()) {
-                    clipDone++;
-                    String kind = m.group(1);
-                    int msL = Integer.parseInt(m.group(2));
-                    int msG = Integer.parseInt(m.group(3));
-                    timingLog.append(String.format(Locale.US,
-                        "CLIP %s: L=%dms G=%dms\n", kind, msL, msG));
-                    updateStatus("CLIP " + kind + "... " + (msL + msG) + "ms",
-                        5 + clipDone * 3);
-                    continue;
-                }
-
-                // Parse UNet steps
-                m = PAT_UNET.matcher(line);
-                if (m.find()) {
-                    int step = Integer.parseInt(m.group(1));
-                    int total = Integer.parseInt(m.group(2));
-                    int ms = Integer.parseInt(m.group(3));
-                    timingLog.append(String.format(Locale.US,
-                        "  UNet %d/%d: %dms\n", step, total, ms));
-                    int pct = 10 + step * 75 / total;
-                    updateStatus(String.format(Locale.US,
-                        "UNet %d/%d — %dms", step, total, ms), pct);
-                    continue;
-                }
-
-                m = PAT_TEMP_LINE.matcher(line);
-                if (m.find()) {
-                    Matcher tempMatcher = PAT_TEMP_ITEM.matcher(m.group(1));
-                    String cpu = null;
-                    String gpu = null;
-                    String npu = null;
-                    while (tempMatcher.find()) {
-                        String label = tempMatcher.group(1);
-                        String value = tempMatcher.group(2);
-                        switch (label) {
-                            case "CPU":
-                                cpu = value;
-                                break;
-                            case "GPU":
-                                gpu = value;
-                                break;
-                            case "NPU":
-                                npu = value;
-                                break;
-                            default:
-                                break;
-                        }
+                    // Parse VAE
+                    m = PAT_VAE.matcher(line);
+                    if (m.find()) {
+                        int ms = Integer.parseInt(m.group(1));
+                        timingLog.append(String.format(Locale.US, "VAE: %dms\n", ms));
+                        updateStatus("VAE... " + ms + "ms", 90);
+                        continue;
                     }
-                    if (cpu != null || gpu != null || npu != null) {
-                        updateTempStatus(String.format(Locale.US,
-                            "CPU %s°C | GPU %s°C | NPU %s°C",
-                            cpu != null ? cpu : "—",
-                            gpu != null ? gpu : "—",
-                            npu != null ? npu : "—"));
+
+                    // Parse saved path
+                    m = PAT_SAVED.matcher(line);
+                    if (m.find()) {
+                        savedPath = m.group(1).trim();
+                        continue;
                     }
-                    continue;
-                }
 
-                // Parse preview timing (useful for diagnostics, but do not override progress)
-                m = PAT_PREV.matcher(line);
-                if (m.find()) {
-                    int step = Integer.parseInt(m.group(1));
-                    int total = Integer.parseInt(m.group(2));
-                    int ms = Integer.parseInt(m.group(3));
-                    timingLog.append(String.format(Locale.US,
-                        "  Preview %d/%d: %dms\n", step, total, ms));
-                    continue;
-                }
+                    // Parse total time
+                    m = PAT_TOTAL.matcher(line);
+                    if (m.find()) {
+                        timingLog.append("Total: ").append(m.group(1)).append("s\n");
+                        continue;
+                    }
 
-                // Parse VAE
-                m = PAT_VAE.matcher(line);
-                if (m.find()) {
-                    int ms = Integer.parseInt(m.group(1));
-                    timingLog.append(String.format(Locale.US, "VAE: %dms\n", ms));
-                    updateStatus("VAE... " + ms + "ms", 90);
-                    continue;
-                }
-
-                // Parse saved path
-                m = PAT_SAVED.matcher(line);
-                if (m.find()) {
-                    savedPath = m.group(1).trim();
-                    continue;
-                }
-
-                // Parse total time
-                m = PAT_TOTAL.matcher(line);
-                if (m.find()) {
-                    timingLog.append("Total: ").append(m.group(1)).append("s\n");
-                    continue;
-                }
-
-                // UNet total line
-                if (line.contains("UNet total:")) {
-                    timingLog.append(line.trim()).append("\n");
+                    // UNet total line
+                    if (line.contains("UNet total:")) {
+                        timingLog.append(line.trim()).append("\n");
+                    }
                 }
             }
+            exitCode = process.waitFor();
+            waitedForProcess = true;
+        } finally {
+            if (!waitedForProcess && process.isAlive()) {
+                process.destroyForcibly();
+            }
+            if (currentProcess == process) {
+                currentProcess = null;
+            }
+            isGenerating = false;
+            cancelPreviewPolling();
         }
-
-        int exitCode = process.waitFor();
-        currentProcess = null;
-        isGenerating = false;  // stop preview poller
 
         if (wanMode) {
             if (exitCode != 0 && wanReportJson == null) {
@@ -1099,8 +1252,7 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 latestTempStatus = "";
                 latestStageStatus = finalWanStatus;
-                currentBitmap = null;
-                imagePreview.setImageBitmap(null);
+                clearDisplayedImage(true);
                 saveButton.setVisibility(View.GONE);
                 stopButton.setVisibility(View.GONE);
                 progressBar.setVisibility(View.GONE);
@@ -1136,8 +1288,7 @@ public class MainActivity extends AppCompatActivity {
         mainHandler.post(() -> {
             latestTempStatus = "";
             latestStageStatus = "Готово!";
-            currentBitmap = bitmap;
-            imagePreview.setImageBitmap(bitmap);
+            showFinalBitmap(bitmap);
             saveButton.setVisibility(View.VISIBLE);
             stopButton.setVisibility(View.GONE);
             progressBar.setVisibility(View.GONE);
@@ -1532,7 +1683,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void saveImage() {
-        if (currentBitmap == null) return;
+        Bitmap bitmapToSave;
+        synchronized (bitmapLock) {
+            bitmapToSave = currentBitmap;
+        }
+        if (bitmapToSave == null || bitmapToSave.isRecycled()) return;
 
         ContentValues values = new ContentValues();
         String filename = "sdxl_npu_" + System.currentTimeMillis() + ".png";
@@ -1545,7 +1700,7 @@ public class MainActivity extends AppCompatActivity {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
         if (uri != null) {
             try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                currentBitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+                bitmapToSave.compress(Bitmap.CompressFormat.PNG, 100, out);
                 Toast.makeText(this, "Сохранено: " + filename, Toast.LENGTH_LONG).show();
             } catch (IOException e) {
                 Toast.makeText(this, "Ошибка сохранения: " + e.getMessage(),
@@ -1559,9 +1714,11 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         // Cancel pending prewarm kill timer
         killPrewarmNow("activity destroy");
+        cancelPreviewPolling();
+        clearDisplayedImage(true);
         // Kill generation process
         Process p = currentProcess;
         if (p != null) p.destroyForcibly();
-        executor.shutdown();
+        executor.shutdownNow();
     }
 }

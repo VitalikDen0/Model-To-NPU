@@ -69,9 +69,9 @@
 
 Замерено на OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Текущая линия APK (v0.4.3) — shared prewarm reuse с жёсткой синхронизацией runtime payload
+### Текущая линия APK (v0.4.3) — обновлённый hotfix самодостаточного runtime
 
-Текущая линия APK сохраняет shared FIFO-backed prewarm server с детерминированными ID контекстов и собирает весь послепубличный APK/runtime прогресс после `0.4.2` в один нормальный релиз `0.4.3`. Обновления bundled runtime payload теперь принудительно переэкстрагируют on-device bundle, а старт shared-server ждёт готовности FIFO IPC перед первым `LOAD`. На практике это значит, что новые `generate.py` / server assets реально доезжают до телефона, а app-open prewarm действительно может переиспользоваться последующим foreground generate без старой гонки на раннем `READY`. Обновлённый публичный asset `v0.4.3` также выгружает shared prewarm через 30 секунд неактивности и в фоне, и после завершённой foreground-генерации, а также агрессивнее тащит TAESD preview-артефакты (ONNX плюс optional QNN context / model / GPU backend), чтобы preview меньше зависел от устаревших файлов в shared storage.
+Текущая публичная линия `v0.4.3` сохраняет shared FIFO-backed prewarm server из раннего обновления `v0.4.3`, но также включает follow-up hotfix, который закрывает тот практический провал, из-за которого эта сборка могла ощущаться хуже `v0.4.2`. Явно экспортированный bundled runtime теперь имеет приоритет над устаревшими QNN-файлами в `/data/local/tmp`, bundled backend-extension config с относительными путями больше не используется как есть и корректно перестейдживается, а сам APK теперь действительно пакует недостающие core runtime-части (`qnn-net-run` и нужные HTP/System библиотеки) для быстрого пути. Со стороны UI жёстче очищается lifecycle preview/final bitmap'ов и старых preview poller'ов, а `832x480` больше не показывается как общий SDXL preset — он оставлен только для WAN-ветки, где ему и место.
 
 ### v0.4.0 — Переменное разрешение + автономный APK
 

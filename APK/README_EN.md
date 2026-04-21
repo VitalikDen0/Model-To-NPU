@@ -177,6 +177,11 @@ Recent overhead re-checks also showed that moving the runtime tree back to `/dat
 - APK version and runtime speed do not always move in lockstep: speed-ups can come from updated `phone_generate.py` even when the APK version number is unchanged.
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
+- The refreshed public `v0.4.3` asset fixes the real `v0.4.3` regression path: when the app exports bundled QNN runtime paths, the phone runtime should no longer silently jump back to stale `/data/local/tmp/sdxl_qnn` leftovers;
+- The refreshed public `v0.4.3` asset now actually packages `qnn-net-run` plus the core QNN HTP/System libraries into the payload, so the bundled fast path depends less on whatever old runtime tree happens to be left on the phone;
+- The refreshed public `v0.4.3` asset safely restages bundled backend-extension configs that still use relative paths, instead of trusting the raw app-private extracted JSON and then losing backend extensions at runtime;
+- The refreshed public `v0.4.3` asset tightens preview/final bitmap cleanup and cancels stale preview poller callbacks more aggressively, reducing the chance of keeping extra `Bitmap` objects and delayed callbacks around;
+- The refreshed public `v0.4.3` asset removes `832x480` from the generic SDXL size picker and keeps it only on the WAN side;
 - APK `v0.4.3` moves prewarm from a private stdin/stdout child server to a shared FIFO-backed `qnn-multi-context-server` with deterministic context IDs, so app-open prewarm can actually be reused by the later foreground generate run;
 - APK `v0.4.3` makes prewarm and foreground generation share the same app-cache `SDXL_QNN_WORK_DIR` and enables `SDXL_QNN_SHARED_SERVER=1`, turning multi-resolution context reuse into a practical path instead of a placebo;
 - APK `v0.4.3` now forces bundled runtime re-extraction when the packaged payload version changes, so updated `generate.py` / server binaries actually replace stale on-device copies;
