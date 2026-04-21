@@ -273,7 +273,7 @@ tasks.register("stageBundledTermuxAssets") {
 
             def payloadVersionFile = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload/runtime_payload_version.txt")
             payloadVersionFile.parentFile.mkdirs()
-            payloadVersionFile.text = "apk-runtime-v0.4.3-refresh-selfcontained-qnn1\n"
+            payloadVersionFile.text = "apk-runtime-v0.4.3-refresh-selfcontained-qnn4\n"
         }
     }
 }
@@ -286,7 +286,7 @@ android {
         applicationId "com.sdxlnpu.app"
         minSdk 28
         targetSdk 34
-        versionCode 21
+        versionCode 27
         versionName "0.4.3"
     }
 

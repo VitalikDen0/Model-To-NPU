@@ -381,6 +381,7 @@ _RUNTIME_PREP_LOCK = threading.Lock()
 _RUNTIME_PREP_DONE = False
 _PREVIEW_PREP_DONE = False
 _RUNTIME_ACCEL = get_runtime_accel(prefer_native=QNN_USE_NATIVE_ACCEL, library_path=QNN_ACCEL_LIB)
+_RUNTIME_STAGE_ROOT: str | None = None
 
 
 def _log(line: str = "") -> None:
@@ -573,12 +574,58 @@ def _is_shared_storage_path(path: str | None) -> bool:
     return norm.startswith("/sdcard/") or norm.startswith("/storage/emulated/")
 
 
+def _is_android_private_path(path: str | None) -> bool:
+    if not path:
+        return False
+    norm = path.replace("\\", "/")
+    return norm.startswith("/data/user/0/") or norm.startswith("/data/data/")
+
+
+def _path_needs_runtime_stage(path: str | None) -> bool:
+    return _is_shared_storage_path(path) or _is_android_private_path(path)
+
+
+def _get_runtime_stage_root() -> str:
+    global _RUNTIME_STAGE_ROOT
+    if _RUNTIME_STAGE_ROOT and _dir_is_writable(_RUNTIME_STAGE_ROOT):
+        return _RUNTIME_STAGE_ROOT
+
+    override = _env_first(("MODEL_TO_NPU_RUNTIME_STAGE_ROOT", "SDXL_QNN_RUNTIME_STAGE_ROOT"), "").strip()
+    stage_name = "wan21_qnn_runtime" if ACTIVE_MODEL_FAMILY == MODEL_FAMILY_WAN21 else "sdxl_qnn_runtime"
+    candidates = [
+        override,
+        f"/data/local/tmp/{stage_name}",
+        os.path.join(WORK_DIR, "runtime"),
+    ]
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = os.path.normpath(candidate) if candidate else ""
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        if _dir_is_writable(normalized):
+            _RUNTIME_STAGE_ROOT = normalized
+            return normalized
+
+    fallback = os.path.join(WORK_DIR, "runtime")
+    os.makedirs(fallback, exist_ok=True)
+    _RUNTIME_STAGE_ROOT = fallback
+    return fallback
+
+
+def _resolve_context_binary_path(path: str) -> str:
+    if not _is_android_private_path(path):
+        return path
+    return _resolve_runtime_artifact(path, "context")
+
+
 def _ensure_shared_runtime_assets() -> None:
     global _SHARED_RUNTIME_STAGED
-    if _SHARED_RUNTIME_STAGED or not _is_shared_storage_path(QNN_LIB):
+    if _SHARED_RUNTIME_STAGED or not _path_needs_runtime_stage(QNN_LIB):
         return
 
-    runtime_root = os.path.join(WORK_DIR, "runtime")
+    runtime_root = _get_runtime_stage_root()
     staged_lib_dir = os.path.join(runtime_root, "lib")
     os.makedirs(staged_lib_dir, exist_ok=True)
 
@@ -600,13 +647,18 @@ def _resolve_runtime_artifact(path: str, category: str) -> str:
     cached = _RUNTIME_FILE_CACHE.get(path)
     if cached and os.path.exists(cached):
         return cached
-    if not _is_shared_storage_path(path):
+    if not _path_needs_runtime_stage(path):
         _RUNTIME_FILE_CACHE[path] = path
         return path
 
-    dst_dir = os.path.join(WORK_DIR, "runtime", category)
+    dst_dir = os.path.join(_get_runtime_stage_root(), category)
     os.makedirs(dst_dir, exist_ok=True)
     dst = os.path.join(dst_dir, os.path.basename(path))
+    if os.path.abspath(dst) == os.path.abspath(path):
+        if category in ("bin", "lib"):
+            os.chmod(dst, 0o755)
+        _RUNTIME_FILE_CACHE[path] = dst
+        return dst
     try:
         needs_copy = (
             not os.path.exists(dst)
@@ -644,11 +696,11 @@ def _resolve_qnn_config_path(config_path: str) -> str:
             needs_override = True
         if config_file_path and not os.path.isabs(config_file_path):
             needs_override = True
-    if not _is_shared_storage_path(config_path) and not needs_override:
+    if not _path_needs_runtime_stage(config_path) and not needs_override:
         _RESOLVED_CONFIG_CACHE[cache_key] = config_path
         return config_path
 
-    runtime_root = os.path.join(WORK_DIR, "runtime")
+    runtime_root = _get_runtime_stage_root()
     os.makedirs(runtime_root, exist_ok=True)
     dst = os.path.join(runtime_root, os.path.basename(config_path))
 
@@ -697,22 +749,23 @@ def _resolve_exec_binary(path: str) -> str:
     if cached and os.path.exists(cached):
         return cached
 
-    if os.path.exists(path) and os.access(path, os.X_OK):
+    if not _path_needs_runtime_stage(path) and os.path.exists(path) and os.access(path, os.X_OK):
         _EXEC_BIN_CACHE[path] = path
         return path
 
-    dst = os.path.join(WORK_DIR, "bin", os.path.basename(path))
+    dst = os.path.join(_get_runtime_stage_root(), "bin", os.path.basename(path))
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    try:
-        needs_copy = (
-            not os.path.exists(dst)
-            or os.path.getsize(dst) != os.path.getsize(path)
-            or os.path.getmtime(dst) < os.path.getmtime(path)
-        )
-    except Exception:
-        needs_copy = True
-    if needs_copy:
-        shutil.copy2(path, dst)
+    if os.path.abspath(dst) != os.path.abspath(path):
+        try:
+            needs_copy = (
+                not os.path.exists(dst)
+                or os.path.getsize(dst) != os.path.getsize(path)
+                or os.path.getmtime(dst) < os.path.getmtime(path)
+            )
+        except Exception:
+            needs_copy = True
+        if needs_copy:
+            shutil.copy2(path, dst)
     os.chmod(dst, 0o755)
     _EXEC_BIN_CACHE[path] = dst
     return dst
@@ -1590,7 +1643,10 @@ class _QnnMultiContextServer:
                 readable, _, _ = select.select([rsp_fd], [], [], min(0.2, remaining))
                 if not readable:
                     continue
-                chunk = os.read(rsp_fd, 4096)
+                try:
+                    chunk = os.read(rsp_fd, 4096)
+                except (BlockingIOError, InterruptedError):
+                    continue
                 if not chunk:
                     continue
                 chunks.extend(chunk)
@@ -1656,8 +1712,9 @@ class _QnnMultiContextServer:
                 "--response_fifo", self._response_fifo,
             ])
         env = _get_qnn_env()
-        # Ensure ADSP_LIBRARY_PATH uses the correct lib dir
-        env["ADSP_LIBRARY_PATH"] = lib_dir
+        # Keep vendor ADSP search paths while ensuring the staged runtime lib dir comes first.
+        existing_adsp = env.get("ADSP_LIBRARY_PATH", "")
+        env["ADSP_LIBRARY_PATH"] = ";".join(part for part in [lib_dir, existing_adsp] if part)
         env["LD_LIBRARY_PATH"] = lib_dir + ":" + env.get("LD_LIBRARY_PATH", "")
 
         _log(f"[QNN server] cmd={cmd}")
@@ -1842,6 +1899,7 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
     if ctx_path is not None and model_path is not None:
         raise ValueError("qnn_run accepts ctx_path or model_path, not both")
 
+    effective_ctx_path = _resolve_context_binary_path(ctx_path) if ctx_path is not None else None
     backend_lib = _resolve_backend_lib(backend or "htp")
     backend_lib = _resolve_runtime_artifact(backend_lib, "lib")
     effective_config = QNN_CONFIG_FILE if config_file is None and _is_htp_backend(backend_lib) else (config_file or "")
@@ -1852,7 +1910,7 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
 
     # --- Try multi-context server first (single persistent process) ---
     if (
-        ctx_path is not None
+        effective_ctx_path is not None
         and model_path is None
         and net_run_path is None
         and _is_htp_backend(backend_lib)
@@ -1860,32 +1918,32 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
     ):
         try:
             server = _get_qnn_server()
-            return server.run(ctx_path, input_list_path, output_dir)
+            return server.run(effective_ctx_path, input_list_path, output_dir)
         except Exception as e:
-            _log(f"  [QNN server] fallback for {os.path.basename(ctx_path)}: {e}")
+            _log(f"  [QNN server] fallback for {os.path.basename(effective_ctx_path)}: {e}")
             _shutdown_qnn_server()
 
     if (
-        ctx_path is not None
+        effective_ctx_path is not None
         and model_path is None
         and net_run_path is None
         and _is_htp_backend(backend_lib)
         and _can_use_qnn_daemon()
-        and _daemon_supports_context(ctx_path)
+        and _daemon_supports_context(effective_ctx_path)
     ):
         try:
-            daemon = _get_qnn_daemon(ctx_path, native=native)
+            daemon = _get_qnn_daemon(effective_ctx_path, native=native)
             return daemon.run(input_list_path, output_dir, timeout=120.0)
         except Exception as e:
-            _log(f"  [QNN daemon] fallback for {os.path.basename(ctx_path)}: {e}")
-            daemon = _QNN_DAEMONS.pop((ctx_path, native), None)
+            _log(f"  [QNN daemon] fallback for {os.path.basename(effective_ctx_path)}: {e}")
+            daemon = _QNN_DAEMONS.pop((effective_ctx_path, native), None)
             if daemon is not None:
                 daemon.stop()
 
     os.makedirs(output_dir, exist_ok=True)
     cmd = [runner_path]
-    if ctx_path is not None:
-        cmd.extend(["--retrieve_context", ctx_path])
+    if effective_ctx_path is not None:
+        cmd.extend(["--retrieve_context", effective_ctx_path])
     else:
         assert model_path is not None
         model_path = _resolve_runtime_artifact(model_path, "model")
@@ -1901,7 +1959,7 @@ def qnn_run(ctx_path, input_list_path, output_dir, native=False, *,
         cmd.extend(["--profiling_level", QNN_PROFILING_LEVEL])
     if effective_config:
         cmd.extend(["--config_file", effective_config])
-    if effective_mmap and ctx_path is not None:
+    if effective_mmap and effective_ctx_path is not None:
         cmd.append("--use_mmap")
     if native_input:
         cmd.append("--use_native_input_files")

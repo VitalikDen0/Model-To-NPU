@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.Editable;
@@ -100,6 +101,7 @@ public class MainActivity extends AppCompatActivity {
     private ImageView imagePreview;
 
     private ExecutorService executor;
+    private ExecutorService previewExecutor;
     private Handler mainHandler;
     private final Object bitmapLock = new Object();
     private Bitmap currentBitmap;
@@ -109,8 +111,11 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
     private volatile Boolean rootShellAvailable = null;
     private volatile Process prewarmProcess = null;
+    private volatile boolean prewarmStartQueued = false;
     private Runnable prewarmKillRunnable = null;
     private Runnable activePreviewPoller = null;
+    private volatile boolean previewDecodeInFlight = false;
+    private volatile long sharedServerWarmUntilMs = 0L;
     private static final long PREWARM_KILL_DELAY_MS = 30_000;
     private boolean updatingSizePresetUi = false;
 
@@ -183,6 +188,7 @@ public class MainActivity extends AppCompatActivity {
         imagePreview = findViewById(R.id.imagePreview);
 
         executor = Executors.newSingleThreadExecutor();
+        previewExecutor = Executors.newSingleThreadExecutor();
         mainHandler = new Handler(Looper.getMainLooper());
 
         loadSettings();
@@ -256,8 +262,26 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private boolean isSharedServerWarmLikelyAvailable() {
+        return sharedServerWarmUntilMs > SystemClock.elapsedRealtime();
+    }
+
+    private void markSharedServerWarm(String reason) {
+        sharedServerWarmUntilMs = SystemClock.elapsedRealtime() + PREWARM_KILL_DELAY_MS;
+        Log.i(TAG, "prewarm: keeping shared-server warm window for "
+            + PREWARM_KILL_DELAY_MS + "ms (" + reason + ")");
+    }
+
+    private void clearSharedServerWarm(String reason) {
+        if (sharedServerWarmUntilMs != 0L) {
+            Log.i(TAG, "prewarm: cleared shared-server warm window (" + reason + ")");
+        }
+        sharedServerWarmUntilMs = 0L;
+    }
+
     private void killPrewarmNow(String reason) {
         cancelScheduledPrewarmKill();
+        clearSharedServerWarm(reason);
         Process process = prewarmProcess;
         if (process == null) {
             return;
@@ -279,6 +303,7 @@ public class MainActivity extends AppCompatActivity {
         if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily()) || isGenerating) {
             return;
         }
+        markSharedServerWarm(reason);
         Process process = prewarmProcess;
         if (process == null || !process.isAlive()) {
             prewarmProcess = null;
@@ -290,6 +315,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, "prewarm: idle timeout reached (" + reason + ")");
                 current.destroyForcibly();
             }
+            clearSharedServerWarm("idle timeout reached");
             prewarmProcess = null;
             prewarmKillRunnable = null;
         };
@@ -308,7 +334,17 @@ public class MainActivity extends AppCompatActivity {
             Log.i(TAG, "startPrewarm: already running");
             return;
         }
+        if (prewarmStartQueued) {
+            Log.i(TAG, "startPrewarm: helper launch already queued");
+            return;
+        }
+        if (isSharedServerWarmLikelyAvailable()) {
+            cancelScheduledPrewarmKill();
+            Log.i(TAG, "startPrewarm: shared server is still warm, skip helper restart");
+            return;
+        }
         cancelScheduledPrewarmKill();
+        prewarmStartQueued = true;
         executor.execute(() -> {
             try {
                 Log.i(TAG, "startPrewarm: begin");
@@ -347,7 +383,7 @@ public class MainActivity extends AppCompatActivity {
                     "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
                     shellEscape(activeBaseDir)));
                 script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
-                script.append("\"").append(shellEscape(plan.pythonCommand))
+                script.append("exec \"").append(shellEscape(plan.pythonCommand))
                     .append("\" \"").append(shellEscape(generatorScript))
                     .append("\" --prewarm 2>&1\n");
 
@@ -384,14 +420,19 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
                 if (ready) {
+                    markSharedServerWarm("PREWARM_READY");
                     mainHandler.post(() -> schedulePrewarmKill("idle after app-open prewarm"));
                 } else if (!process.isAlive()) {
                     prewarmProcess = null;
+                    clearSharedServerWarm("prewarm exited before ready");
                 }
             } catch (Exception e) {
                 Log.w(TAG, "startPrewarm failed", e);
                 prewarmProcess = null;
+                clearSharedServerWarm("prewarm failed");
                 // Prewarm is best-effort — don't crash the app
+            } finally {
+                prewarmStartQueued = false;
             }
         });
     }
@@ -641,6 +682,61 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void decodePreviewBitmapAsync(String previewPath, Runnable owner) {
+        ExecutorService localPreviewExecutor = previewExecutor;
+        if (localPreviewExecutor == null || previewDecodeInFlight) {
+            return;
+        }
+        previewDecodeInFlight = true;
+        try {
+            localPreviewExecutor.execute(() -> {
+                Bitmap decoded = null;
+                try {
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inPreferredConfig = Bitmap.Config.RGB_565;
+                    options.inDither = true;
+                    decoded = BitmapFactory.decodeFile(previewPath, options);
+                } catch (Exception e) {
+                    Log.w(TAG, "preview decode failed", e);
+                }
+
+                Bitmap finalDecoded = decoded;
+                mainHandler.post(() -> {
+                    try {
+                        if (finalDecoded != null) {
+                            if (isGenerating && activePreviewPoller == owner) {
+                                showPreviewBitmap(finalDecoded);
+                            } else {
+                                recycleBitmapQuietly(finalDecoded);
+                            }
+                        }
+                    } finally {
+                        previewDecodeInFlight = false;
+                    }
+                });
+            });
+        } catch (Exception e) {
+            previewDecodeInFlight = false;
+            Log.w(TAG, "preview decode scheduling failed", e);
+        }
+    }
+
+    private void restoreOrSchedulePrewarm(String reason) {
+        if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily()) || isGenerating) {
+            return;
+        }
+        Process process = prewarmProcess;
+        if (process != null && process.isAlive()) {
+            schedulePrewarmKill(reason);
+        } else if (isSharedServerWarmLikelyAvailable()) {
+            markSharedServerWarm(reason);
+            Log.i(TAG, "prewarm: shared server still warm after generation, skip helper restart");
+        } else {
+            prewarmProcess = null;
+            startPrewarm();
+        }
+    }
+
     private boolean appendBundledRuntimeEnvironment(StringBuilder script, File bundledRuntimePayloadDir) {
         if (bundledRuntimePayloadDir == null) {
             return false;
@@ -783,6 +879,16 @@ public class MainActivity extends AppCompatActivity {
         boolean preview = livePreview.isChecked();
         boolean progCfg = progressiveCfg.isChecked();
         cancelScheduledPrewarmKill();
+        if (MODEL_FAMILY_SDXL.equals(modelFamily)) {
+            Process process = prewarmProcess;
+            if (process == null || !process.isAlive()) {
+                if (isSharedServerWarmLikelyAvailable()) {
+                    Log.i(TAG, "startGeneration: reuse warm shared server without extra prewarm helper");
+                } else {
+                    startPrewarm();
+                }
+            }
+        }
 
         // Build output name
         String outName = "apk_s" + seed;
@@ -827,7 +933,7 @@ public class MainActivity extends AppCompatActivity {
                     generateButton.setEnabled(true);
                     stopButton.setVisibility(View.GONE);
                     progressBar.setVisibility(View.GONE);
-                    schedulePrewarmKill("idle after failed generation start");
+                    restoreOrSchedulePrewarm("idle after failed generation start");
                 });
             }
         });
@@ -848,7 +954,7 @@ public class MainActivity extends AppCompatActivity {
             generateButton.setEnabled(true);
             stopButton.setVisibility(View.GONE);
             progressBar.setVisibility(View.GONE);
-            schedulePrewarmKill("idle after cancelled generation");
+            restoreOrSchedulePrewarm("idle after cancelled generation");
         });
     }
 
@@ -935,6 +1041,9 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_CLIP_CACHE=1\n");
         script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
         script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
+        if (preview && !wanMode) {
+            script.append("export SDXL_QNN_PREVIEW_STRIDE=4\n");
+        }
         if (wanMode) {
             script.append("export SDXL_QNN_PROFILING_LEVEL=basic\n");
         }
@@ -992,7 +1101,7 @@ public class MainActivity extends AppCompatActivity {
             "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n", shellEscape(activeBaseDir)));
         script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
 
-        script.append("\"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
+        script.append("exec \"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
         if (wanMode) {
             script.append(" --model-family wan21 --check-runtime");
             script.append(" --width ").append(imgWidth);
@@ -1065,10 +1174,7 @@ public class MainActivity extends AppCompatActivity {
                 File previewFile = new File(previewPath);
                 if (previewFile.exists() && previewFile.lastModified() != previewLastModified[0]) {
                     previewLastModified[0] = previewFile.lastModified();
-                    Bitmap bm = BitmapFactory.decodeFile(previewPath);
-                    if (bm != null) {
-                        showPreviewBitmap(bm);
-                    }
+                    decodePreviewBitmapAsync(previewPath, this);
                 }
                 if (isGenerating && activePreviewPoller == this) {
                     mainHandler.postDelayed(this, 2000);
@@ -1296,7 +1402,7 @@ public class MainActivity extends AppCompatActivity {
             renderStatus();
             timingText.setText(finalTiming);
             timingText.setVisibility(View.VISIBLE);
-            schedulePrewarmKill("idle after generation");
+            restoreOrSchedulePrewarm("idle after generation");
         });
     }
 
@@ -1583,10 +1689,20 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String buildRunFailureMessage(int exitCode, boolean useRootShell, String rawLog) {
+        String safeRawLog = rawLog != null ? rawLog : "";
         String hint;
-        if (exitCode == 127) {
+        if (
+                safeRawLog.contains("Device Creation failure")
+                    || safeRawLog.contains("contextCreateFromBinary_failed")
+                    || safeRawLog.contains("Failed to load skel")
+                    || safeRawLog.contains("QnnDsp <E>")
+                    || safeRawLog.contains("qnn-net-run failed: exit 11")
+        ) {
+            hint = "QNN/HTP runtime не смог поднять backend на телефоне.\n"
+                + "Проверьте staged runtime paths, HTP skel/runtime libs и доступность DSP backend.";
+        } else if (exitCode == 127) {
             hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках или извлеките bundled runtime через Проверку в Настройках.";
-        } else if (exitCode == 2 && rawLog.contains("unrecognized arguments")) {
+        } else if (exitCode == 2 && safeRawLog.contains("unrecognized arguments")) {
             hint = "Python runtime запустился, но phone-side generate.py не понял новые аргументы.\n"
                 + "Обычно это означает устаревший runtime на телефоне. Обновите APK до свежей версии: она запускает bundled generate.py и актуальные fast-path бинарники.";
         } else if (useRootShell && (exitCode == 1 || exitCode == 13 || exitCode == 126)) {
@@ -1596,8 +1712,8 @@ public class MainActivity extends AppCompatActivity {
         } else {
             hint = "Генерация завершилась с ошибкой (код " + exitCode + ")";
         }
-        String details = rawLog != null && !rawLog.trim().isEmpty()
-            ? "\n\n" + rawLog.trim()
+        String details = !safeRawLog.trim().isEmpty()
+            ? "\n\n" + safeRawLog.trim()
             : "";
         return hint + details;
     }
@@ -1719,6 +1835,10 @@ public class MainActivity extends AppCompatActivity {
         // Kill generation process
         Process p = currentProcess;
         if (p != null) p.destroyForcibly();
+        if (previewExecutor != null) {
+            previewExecutor.shutdownNow();
+            previewExecutor = null;
+        }
         executor.shutdownNow();
     }
 }
