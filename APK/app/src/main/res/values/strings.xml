@@ -10,6 +10,7 @@
     <string name="contrast_stretch">Коррекция яркости (VAE)</string>
     <string name="live_preview">Live Preview (TAESD)</string>
     <string name="progressive_cfg">½ CFG только на первой половине шагов (с округлением вверх)</string>
+    <string name="wan21_basic_debug">WAN 2.1 basic debug (runtime check вместо SDXL генерации)</string>
     <string name="status_preview" formatted="false">Preview step %d/%d…</string>
     <string name="status_idle">Готово к генерации</string>
     <string name="status_clip">CLIP encoding…</string>
@@ -19,12 +20,15 @@
     <string name="image_desc">Сгенерированное изображение</string>
     <string name="settings">Настройки</string>
     <string name="settings_title">Настройки моделей</string>
-    <string name="settings_desc">Укажите путь к общей папке с моделями на телефоне.\nПо умолчанию используется /sdcard/Download/sdxl_qnn.\nМодели можно задеплоить через scripts/deploy_to_phone.py или скопировать вручную.</string>
+    <string name="settings_desc">Укажите путь к общей папке с моделями на телефоне.\nПо умолчанию используется /sdcard/Download/sdxl_qnn.\nДля WAN 2.1 basic debug APK также ищет /data/local/tmp/wan21_t2v_qnn и /sdcard/Download/wan21_t2v_qnn.\nМодели можно задеплоить через scripts/deploy_to_phone.py или скопировать вручную.</string>
     <string name="settings_base_dir_hint">Путь к папке моделей на телефоне</string>
     <string name="settings_python_hint">Команда или путь к Python3</string>
     <string name="settings_verify">Проверить файлы</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_reset">Сброс</string>
     <string name="settings_structure_info">Структура папки моделей:\n/context/\n  clip_l.serialized.bin.bin\n  clip_g.serialized.bin.bin\n  unet_encoder_fp16.serialized.bin.bin\n  unet_decoder_fp16.serialized.bin.bin\n  vae_decoder.serialized.bin.bin\n  taesd_decoder.serialized.bin.bin (optional, QNN Live Preview)\n/phone_gen/\n  generate.py\n  taesd_decoder.onnx (optional CPU fallback)\n  tokenizer/vocab.json\n  tokenizer/merges.txt\n/model/\n  libTAESDDecoder.so (optional)\n/lib/ (QNN runtime)\n/bin/ (qnn-net-run)</string>
-    <string name="resolution_label">Size:</string>
+    <string name="size_preset_label">Пресет:</string>
+    <string name="size_preset_custom">Свой размер</string>
+    <string name="size_preset_format" formatted="false">%1$d×%2$d</string>
+    <string name="resolution_label">WxH:</string>
 </resources>

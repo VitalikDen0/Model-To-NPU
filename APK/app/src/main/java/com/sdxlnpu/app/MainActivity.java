@@ -11,13 +11,18 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -77,6 +82,7 @@ public class MainActivity extends AppCompatActivity {
     private EditText widthInput;
     private EditText heightInput;
     private EditText seedInput;
+    private Spinner sizePresetSpinner;
     private SeekBar stepsSeekBar;
     private TextView stepsLabel;
     private SeekBar cfgSeekBar;
@@ -103,6 +109,31 @@ public class MainActivity extends AppCompatActivity {
     private volatile Process prewarmProcess = null;
     private Runnable prewarmKillRunnable = null;
     private static final long PREWARM_KILL_DELAY_MS = 30_000;
+    private boolean updatingSizePresetUi = false;
+
+    private static final int[][] SIZE_PRESET_DIMENSIONS = new int[][] {
+        {1024, 1024},
+        {1216, 832},
+        {832, 1216},
+        {1344, 768},
+        {768, 1344},
+        {832, 480},
+    };
+
+    private final TextWatcher sizeInputWatcher = new TextWatcher() {
+        @Override
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+        @Override
+        public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+        @Override
+        public void afterTextChanged(Editable s) {
+            if (!updatingSizePresetUi) {
+                selectSizePresetForCurrentInputs();
+            }
+        }
+    };
 
     // Patterns for parsing generate.py stdout
     private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
@@ -127,6 +158,7 @@ public class MainActivity extends AppCompatActivity {
         widthInput = findViewById(R.id.widthInput);
         heightInput = findViewById(R.id.heightInput);
         seedInput = findViewById(R.id.seedInput);
+        sizePresetSpinner = findViewById(R.id.sizePresetSpinner);
         stepsSeekBar = findViewById(R.id.stepsSeekBar);
         stepsLabel = findViewById(R.id.stepsLabel);
         cfgSeekBar = findViewById(R.id.cfgSeekBar);
@@ -147,6 +179,10 @@ public class MainActivity extends AppCompatActivity {
         mainHandler = new Handler(Looper.getMainLooper());
 
         loadSettings();
+        configureSizePresetSpinner();
+        widthInput.addTextChangedListener(sizeInputWatcher);
+        heightInput.addTextChangedListener(sizeInputWatcher);
+        selectSizePresetForCurrentInputs();
 
         stepsSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -168,6 +204,7 @@ public class MainActivity extends AppCompatActivity {
 
         wan21DebugMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
             applyModelFamilyDefaults(isChecked);
+            selectSizePresetForCurrentInputs();
             if (isChecked) {
                 killPrewarmNow("switch to WAN/basic-debug mode");
             } else {
@@ -378,6 +415,77 @@ public class MainActivity extends AppCompatActivity {
         applyModelFamilyDefaults(wan21DebugMode.isChecked());
     }
 
+    private void configureSizePresetSpinner() {
+        if (sizePresetSpinner == null) {
+            return;
+        }
+        String[] labels = new String[SIZE_PRESET_DIMENSIONS.length + 1];
+        labels[0] = getString(R.string.size_preset_custom);
+        for (int i = 0; i < SIZE_PRESET_DIMENSIONS.length; i++) {
+            int[] preset = SIZE_PRESET_DIMENSIONS[i];
+            labels[i + 1] = getString(R.string.size_preset_format, preset[0], preset[1]);
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+            this,
+            android.R.layout.simple_spinner_item,
+            labels
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sizePresetSpinner.setAdapter(adapter);
+        sizePresetSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (updatingSizePresetUi || position <= 0) {
+                    return;
+                }
+                int[] preset = SIZE_PRESET_DIMENSIONS[position - 1];
+                updatingSizePresetUi = true;
+                widthInput.setText(String.valueOf(preset[0]));
+                heightInput.setText(String.valueOf(preset[1]));
+                updatingSizePresetUi = false;
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+    }
+
+    private static int parsePositiveInt(EditText input) {
+        if (input == null || input.getText() == null) {
+            return 0;
+        }
+        String value = input.getText().toString().trim();
+        if (value.isEmpty()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    private void selectSizePresetForCurrentInputs() {
+        if (sizePresetSpinner == null) {
+            return;
+        }
+        int width = parsePositiveInt(widthInput);
+        int height = parsePositiveInt(heightInput);
+        int selection = 0;
+        for (int i = 0; i < SIZE_PRESET_DIMENSIONS.length; i++) {
+            int[] preset = SIZE_PRESET_DIMENSIONS[i];
+            if (preset[0] == width && preset[1] == height) {
+                selection = i + 1;
+                break;
+            }
+        }
+        if (sizePresetSpinner.getSelectedItemPosition() != selection) {
+            updatingSizePresetUi = true;
+            sizePresetSpinner.setSelection(selection, false);
+            updatingSizePresetUi = false;
+        }
+    }
+
     private void saveGenerationSettings() {
         SharedPreferences prefs = getSharedPreferences(
             SettingsActivity.PREFS_NAME, MODE_PRIVATE);
@@ -497,6 +605,7 @@ public class MainActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == 100 && resultCode == RESULT_OK) {
             loadSettings();
+            selectSizePresetForCurrentInputs();
             checkPrerequisites();
         }
     }
