@@ -71,7 +71,7 @@
 
 ### Текущая линия APK (v0.4.3) — shared prewarm reuse с жёсткой синхронизацией runtime payload
 
-Текущая линия APK сохраняет shared FIFO-backed prewarm server с детерминированными ID контекстов и собирает весь послепубличный APK/runtime прогресс после `0.4.2` в один нормальный релиз `0.4.3`. Обновления bundled runtime payload теперь принудительно переэкстрагируют on-device bundle, а старт shared-server ждёт готовности FIFO IPC перед первым `LOAD`. На практике это значит, что новые `generate.py` / server assets реально доезжают до телефона, а app-open prewarm действительно может переиспользоваться последующим foreground generate без старой гонки на раннем `READY`.
+Текущая линия APK сохраняет shared FIFO-backed prewarm server с детерминированными ID контекстов и собирает весь послепубличный APK/runtime прогресс после `0.4.2` в один нормальный релиз `0.4.3`. Обновления bundled runtime payload теперь принудительно переэкстрагируют on-device bundle, а старт shared-server ждёт готовности FIFO IPC перед первым `LOAD`. На практике это значит, что новые `generate.py` / server assets реально доезжают до телефона, а app-open prewarm действительно может переиспользоваться последующим foreground generate без старой гонки на раннем `READY`. Обновлённый публичный asset `v0.4.3` также выгружает shared prewarm через 30 секунд неактивности и в фоне, и после завершённой foreground-генерации, а также агрессивнее тащит TAESD preview-артефакты (ONNX плюс optional QNN context / model / GPU backend), чтобы preview меньше зависел от устаревших файлов в shared storage.
 
 ### v0.4.0 — Переменное разрешение + автономный APK
 

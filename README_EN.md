@@ -71,7 +71,7 @@ Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
 ### Current APK line (v0.4.3) — shared prewarm reuse with bundled runtime refresh hardening
 
-The current APK line keeps the shared FIFO-backed prewarm server with deterministic context IDs and folds all post-`0.4.2` APK/runtime work into one coherent public `0.4.3` release. Bundled runtime payload updates now force a refresh of the extracted on-device bundle, and shared-server startup waits for FIFO IPC readiness before the first `LOAD`. In practice, updated `generate.py` / server assets actually reach the phone, and app-open prewarm can be reused by the later foreground generate run without the old early-`READY` race.
+The current APK line keeps the shared FIFO-backed prewarm server with deterministic context IDs and folds all post-`0.4.2` APK/runtime work into one coherent public `0.4.3` release. Bundled runtime payload updates now force a refresh of the extracted on-device bundle, and shared-server startup waits for FIFO IPC readiness before the first `LOAD`. In practice, updated `generate.py` / server assets actually reach the phone, and app-open prewarm can be reused by the later foreground generate run without the old early-`READY` race. The refreshed `v0.4.3` asset also unloads shared prewarm after 30 seconds of inactivity both in background and after a completed foreground run, while bundling TAESD preview artifacts more aggressively (ONNX plus optional QNN context / model / GPU backend bits) so preview is less likely to inherit stale phone-side leftovers.
 
 ### v0.4.0 — Variable resolution + self-contained APK
 

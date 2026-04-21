@@ -128,9 +128,57 @@ tasks.register("stageBundledTermuxAssets") {
                 }
             }
 
+            def taesdContextCandidates = [
+                new File("D:/platform-tools/sdxl_npu/taesd_decoder/context/taesd_decoder.serialized.bin.bin"),
+                new File("D:/platform-tools/sdxl_npu/context/taesd_decoder.serialized.bin.bin"),
+                new File("D:/platform-tools/NPU/context/taesd_decoder.serialized.bin.bin"),
+                new File(bundledRepoRoot, "examples/rooted-phone-sample/context/taesd_decoder.serialized.bin.bin"),
+            ]
+            def taesdContext = taesdContextCandidates.find { it.isFile() }
+            if (taesdContext != null) {
+                copy {
+                    into bundledTermuxAssetsDir
+                    from(taesdContext) {
+                        into "termux_bundle/runtime_payload/phone_gen"
+                    }
+                }
+            }
+
+            def taesdModelCandidates = [
+                new File("D:/platform-tools/sdxl_npu/taesd_decoder/android_lib_rebuild/libTAESDDecoder.so"),
+                new File("D:/platform-tools/sdxl_npu/taesd_decoder/android_lib/libTAESDDecoder.so"),
+                new File("D:/platform-tools/NPU/taesd_decoder/android_lib/libTAESDDecoder.so"),
+                new File(bundledRepoRoot, "local_tools/taesd_decoder/android_lib/libTAESDDecoder.so"),
+            ]
+            def taesdModel = taesdModelCandidates.find { it.isFile() }
+            if (taesdModel != null) {
+                copy {
+                    into bundledTermuxAssetsDir
+                    from(taesdModel) {
+                        into "termux_bundle/runtime_payload/phone_gen/lib"
+                    }
+                }
+            }
+
+            def taesdGpuLibCandidates = [
+                new File("D:/platform-tools/sdxl_npu/qairt_2.44/qairt/2.44.0.260225/lib/aarch64-android/libQnnGpu.so"),
+                new File("C:/Qualcomm/AIStack/QAIRT/2.44.0.260225/lib/aarch64-android/libQnnGpu.so"),
+                new File("D:/platform-tools/sdxl_npu/qairt_2.31/qairt/2.31.0.250130/lib/aarch64-android/libQnnGpu.so"),
+                new File("C:/Qualcomm/AIStack/QAIRT/2.31.0.250130/lib/aarch64-android/libQnnGpu.so"),
+            ]
+            def taesdGpuLib = taesdGpuLibCandidates.find { it.isFile() }
+            if (taesdGpuLib != null) {
+                copy {
+                    into bundledTermuxAssetsDir
+                    from(taesdGpuLib) {
+                        into "termux_bundle/runtime_payload/phone_gen/lib"
+                    }
+                }
+            }
+
             def payloadVersionFile = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload/runtime_payload_version.txt")
             payloadVersionFile.parentFile.mkdirs()
-            payloadVersionFile.text = "apk-runtime-v0.4.3\n"
+            payloadVersionFile.text = "apk-runtime-v0.4.3-refresh-taesd-idle1\n"
         }
     }
 }

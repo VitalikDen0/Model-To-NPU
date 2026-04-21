@@ -30,6 +30,9 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.button.MaterialButton;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -55,6 +58,9 @@ import java.util.regex.Pattern;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "SDXLNPU";
+    private static final String MODEL_FAMILY_SDXL = "sdxl";
+    private static final String MODEL_FAMILY_WAN21 = "wan21";
+    private static final String PREF_KEY_WAN21_DEBUG = "wan21_basic_debug";
     private static final String LEGACY_BASE_DIR = SettingsActivity.LEGACY_BASE_DIR;
     private static final String[] TERMUX_PRIVATE_PREFIXES = new String[] {
         "/data/data/com.termux/",
@@ -78,6 +84,7 @@ public class MainActivity extends AppCompatActivity {
     private CheckBox contrastStretch;
     private CheckBox livePreview;
     private CheckBox progressiveCfg;
+    private CheckBox wan21DebugMode;
     private MaterialButton generateButton;
     private MaterialButton saveButton;
     private MaterialButton stopButton;
@@ -127,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
         contrastStretch = findViewById(R.id.contrastStretch);
         livePreview     = findViewById(R.id.livePreview);
         progressiveCfg  = findViewById(R.id.progressiveCfg);
+        wan21DebugMode  = findViewById(R.id.wan21DebugMode);
         generateButton  = findViewById(R.id.generateButton);
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
@@ -158,6 +166,16 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
 
+        wan21DebugMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            applyModelFamilyDefaults(isChecked);
+            if (isChecked) {
+                killPrewarmNow("switch to WAN/basic-debug mode");
+            } else {
+                startPrewarm();
+            }
+            checkPrerequisites();
+        });
+
         generateButton.setOnClickListener(v -> startGeneration());
         saveButton.setOnClickListener(v -> saveImage());
         stopButton.setOnClickListener(v -> stopGeneration());
@@ -173,10 +191,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onStart() {
         super.onStart();
         // Cancel any pending prewarm kill from minimize
-        if (prewarmKillRunnable != null) {
-            mainHandler.removeCallbacks(prewarmKillRunnable);
-            prewarmKillRunnable = null;
-        }
+        cancelScheduledPrewarmKill();
         // Restart prewarm if it was killed
         if (prewarmProcess == null || !prewarmProcess.isAlive()) {
             startPrewarm();
@@ -186,24 +201,73 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
-        // Kill prewarm 30s after app is minimized
-        if (prewarmProcess != null && prewarmProcess.isAlive()) {
-            prewarmKillRunnable = () -> {
-                Process p = prewarmProcess;
-                if (p != null) {
-                    p.destroyForcibly();
-                    prewarmProcess = null;
-                }
-            };
-            mainHandler.postDelayed(prewarmKillRunnable, PREWARM_KILL_DELAY_MS);
+        schedulePrewarmKill("app moved to background");
+    }
+
+    private void cancelScheduledPrewarmKill() {
+        if (prewarmKillRunnable != null) {
+            mainHandler.removeCallbacks(prewarmKillRunnable);
+            prewarmKillRunnable = null;
         }
     }
 
+    private void killPrewarmNow(String reason) {
+        cancelScheduledPrewarmKill();
+        Process process = prewarmProcess;
+        if (process == null) {
+            return;
+        }
+        try {
+            if (process.isAlive()) {
+                Log.i(TAG, "prewarm: stopping (" + reason + ")");
+                process.destroyForcibly();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "prewarm: failed to stop cleanly (" + reason + ")", e);
+        } finally {
+            prewarmProcess = null;
+        }
+    }
+
+    private void schedulePrewarmKill(String reason) {
+        cancelScheduledPrewarmKill();
+        if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily()) || isGenerating) {
+            return;
+        }
+        Process process = prewarmProcess;
+        if (process == null || !process.isAlive()) {
+            prewarmProcess = null;
+            return;
+        }
+        prewarmKillRunnable = () -> {
+            Process current = prewarmProcess;
+            if (current != null && current.isAlive() && !isGenerating) {
+                Log.i(TAG, "prewarm: idle timeout reached (" + reason + ")");
+                current.destroyForcibly();
+            }
+            prewarmProcess = null;
+            prewarmKillRunnable = null;
+        };
+        mainHandler.postDelayed(prewarmKillRunnable, PREWARM_KILL_DELAY_MS);
+        Log.i(TAG, "prewarm: scheduled release in " + PREWARM_KILL_DELAY_MS + "ms (" + reason + ")");
+    }
+
     private void startPrewarm() {
+        if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily())) {
+            Log.i(TAG, "startPrewarm: skip for WAN/basic-debug mode");
+            return;
+        }
+        Process running = prewarmProcess;
+        if (running != null && running.isAlive()) {
+            cancelScheduledPrewarmKill();
+            Log.i(TAG, "startPrewarm: already running");
+            return;
+        }
+        cancelScheduledPrewarmKill();
         executor.execute(() -> {
             try {
                 Log.i(TAG, "startPrewarm: begin");
-                ExecutionPlan plan = resolveExecutionPlan();
+                ExecutionPlan plan = resolveExecutionPlan(resolveActiveBaseDir(MODEL_FAMILY_SDXL));
                 Log.i(TAG, "startPrewarm: plan root=" + plan.useRootShell + ", python=" + plan.pythonCommand);
                 File bundledPayload = getBundledRuntimePayloadDirOrNull();
                 String generatorScript = resolveGeneratorScriptPath(bundledPayload);
@@ -260,18 +324,26 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, "startPrewarm: process started");
 
                 // Read output until PREWARM_READY or process dies
+                boolean ready = false;
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream()))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
                         Log.i(TAG, "prewarm> " + line);
                         if (line.contains("PREWARM_READY")) {
+                            ready = true;
                             break;
                         }
                     }
                 }
+                if (ready) {
+                    mainHandler.post(() -> schedulePrewarmKill("idle after app-open prewarm"));
+                } else if (!process.isAlive()) {
+                    prewarmProcess = null;
+                }
             } catch (Exception e) {
                 Log.w(TAG, "startPrewarm failed", e);
+                prewarmProcess = null;
                 // Prewarm is best-effort — don't crash the app
             }
         });
@@ -302,6 +374,8 @@ public class MainActivity extends AppCompatActivity {
         contrastStretch.setChecked(prefs.getBoolean("last_contrast_stretch", true));
         livePreview.setChecked(prefs.getBoolean("last_live_preview", false));
         progressiveCfg.setChecked(prefs.getBoolean("last_progressive_cfg", false));
+        wan21DebugMode.setChecked(prefs.getBoolean(PREF_KEY_WAN21_DEBUG, false));
+        applyModelFamilyDefaults(wan21DebugMode.isChecked());
     }
 
     private void saveGenerationSettings() {
@@ -318,6 +392,7 @@ public class MainActivity extends AppCompatActivity {
             .putBoolean("last_contrast_stretch", contrastStretch.isChecked())
             .putBoolean("last_live_preview", livePreview.isChecked())
             .putBoolean("last_progressive_cfg", progressiveCfg.isChecked())
+                .putBoolean(PREF_KEY_WAN21_DEBUG, wan21DebugMode.isChecked())
             .apply();
     }
 
@@ -327,18 +402,76 @@ public class MainActivity extends AppCompatActivity {
         saveGenerationSettings();
     }
 
+    private String getSelectedModelFamily() {
+        return wan21DebugMode != null && wan21DebugMode.isChecked()
+            ? MODEL_FAMILY_WAN21
+            : MODEL_FAMILY_SDXL;
+    }
+
+    private void applyModelFamilyDefaults(boolean wanMode) {
+        String widthText = widthInput.getText() != null ? widthInput.getText().toString().trim() : "";
+        String heightText = heightInput.getText() != null ? heightInput.getText().toString().trim() : "";
+        if (wanMode) {
+            if (widthText.isEmpty() || heightText.isEmpty()
+                || ("1024".equals(widthText) && "1024".equals(heightText))) {
+                widthInput.setText("832");
+                heightInput.setText("480");
+            }
+            livePreview.setChecked(false);
+        } else if (("832".equals(widthText) && "480".equals(heightText))
+                || (widthText.isEmpty() && heightText.isEmpty())) {
+            widthInput.setText("1024");
+            heightInput.setText("1024");
+        }
+    }
+
+    private String resolveActiveBaseDir(String modelFamily) {
+        if (MODEL_FAMILY_WAN21.equals(modelFamily)) {
+            if (BASE_DIR != null && BASE_DIR.contains("wan21") && new File(BASE_DIR).exists()) {
+                return BASE_DIR;
+            }
+            for (String candidate : new String[] {
+                SettingsActivity.WAN_LEGACY_BASE_DIR,
+                SettingsActivity.WAN_DOWNLOADS_BASE_DIR,
+                "/storage/emulated/0/Download/wan21_t2v_qnn",
+            }) {
+                if (new File(candidate).exists()) {
+                    return candidate;
+                }
+            }
+            return SettingsActivity.WAN_DOWNLOADS_BASE_DIR;
+        }
+        return BASE_DIR != null && !BASE_DIR.isEmpty()
+            ? BASE_DIR
+            : SettingsActivity.detectDefaultBaseDir();
+    }
+
+    private boolean isLegacyBaseDir(String baseDir) {
+        return baseDir != null && (
+            baseDir.startsWith(SettingsActivity.LEGACY_BASE_DIR)
+                || baseDir.startsWith(SettingsActivity.WAN_LEGACY_BASE_DIR)
+        );
+    }
+
     private void checkPrerequisites() {
-        if (!shouldUseRootShell() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-            statusText.setText("Нужен доступ ко всем файлам для чтения " + BASE_DIR +
+        String modelFamily = getSelectedModelFamily();
+        String activeBaseDir = resolveActiveBaseDir(modelFamily);
+        if (!shouldUseRootShell(activeBaseDir, PYTHON) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            statusText.setText("Нужен доступ ко всем файлам для чтения " + activeBaseDir +
                 "\nНажмите Generate или откройте системное разрешение вручную");
             return;
         }
-        File ctx = new File(BASE_DIR, "context");
+        File ctx = new File(activeBaseDir, "context");
         if (!ctx.exists()) {
-            statusText.setText("Модели не найдены в " + BASE_DIR +
-                "\nДеплойте через scripts/deploy_to_phone.py" +
+            String modeLabel = MODEL_FAMILY_WAN21.equals(modelFamily) ? "WAN 2.1" : "SDXL";
+            statusText.setText(modeLabel + " assets не найдены в " + activeBaseDir +
+                "\nДеплойте runtime/contexts на телефон" +
                 "\nили измените путь в Настройках (⚙)");
+            return;
         }
+        statusText.setText(MODEL_FAMILY_WAN21.equals(modelFamily)
+            ? "Готово к WAN 2.1 basic debug"
+            : getString(R.string.status_idle));
     }
 
     @Override
@@ -369,12 +502,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startGeneration() {
-        if (!ensureExternalStorageAccess()) {
+        String modelFamily = getSelectedModelFamily();
+        String activeBaseDir = resolveActiveBaseDir(modelFamily);
+        if (!ensureExternalStorageAccess(activeBaseDir)) {
             return;
         }
 
         String prompt = promptInput.getText().toString().trim();
-        if (prompt.isEmpty()) {
+        if (MODEL_FAMILY_SDXL.equals(modelFamily) && prompt.isEmpty()) {
             Toast.makeText(this, "Введите промпт", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -389,6 +524,7 @@ public class MainActivity extends AppCompatActivity {
         boolean stretch = contrastStretch.isChecked();
         boolean preview = livePreview.isChecked();
         boolean progCfg = progressiveCfg.isChecked();
+        cancelScheduledPrewarmKill();
 
         // Build output name
         String outName = "apk_s" + seed;
@@ -415,7 +551,9 @@ public class MainActivity extends AppCompatActivity {
         saveButton.setVisibility(View.GONE);
         timingText.setVisibility(View.GONE);
         latestTempStatus = "";
-        latestStageStatus = "Запуск...";
+        latestStageStatus = MODEL_FAMILY_WAN21.equals(modelFamily)
+            ? "WAN 2.1 basic debug..."
+            : "Запуск...";
         latestProgress = 0;
         renderStatus();
 
@@ -430,6 +568,7 @@ public class MainActivity extends AppCompatActivity {
                     generateButton.setEnabled(true);
                     stopButton.setVisibility(View.GONE);
                     progressBar.setVisibility(View.GONE);
+                    schedulePrewarmKill("idle after failed generation start");
                 });
             }
         });
@@ -449,6 +588,7 @@ public class MainActivity extends AppCompatActivity {
             generateButton.setEnabled(true);
             stopButton.setVisibility(View.GONE);
             progressBar.setVisibility(View.GONE);
+            schedulePrewarmKill("idle after cancelled generation");
         });
     }
 
@@ -490,7 +630,10 @@ public class MainActivity extends AppCompatActivity {
                              boolean preview, boolean progCfg, String outName,
                              int imgWidth, int imgHeight)
             throws IOException, InterruptedException {
-        ExecutionPlan executionPlan = resolveExecutionPlan();
+        String modelFamily = getSelectedModelFamily();
+        boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
+        String activeBaseDir = resolveActiveBaseDir(modelFamily);
+        ExecutionPlan executionPlan = resolveExecutionPlan(activeBaseDir);
         boolean useRootShell = executionPlan.useRootShell;
         String pythonCommand = executionPlan.pythonCommand;
         File bundledRuntimePayloadDir = getBundledRuntimePayloadDirOrNull();
@@ -509,7 +652,9 @@ public class MainActivity extends AppCompatActivity {
         // Build shell script (multi-line — no nested-quote issues)
         StringBuilder script = new StringBuilder();
         appendShellEnvironment(script);
-        script.append("export SDXL_QNN_BASE=\"").append(shellEscape(BASE_DIR)).append("\"\n");
+        script.append("export MODEL_TO_NPU_MODEL_FAMILY=\"").append(shellEscape(modelFamily)).append("\"\n");
+        script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
+        script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
         script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
         script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
         script.append("export SDXL_QNN_PREVIEW_PNG=\"").append(shellEscape(previewPath)).append("\"\n");
@@ -530,9 +675,12 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_CLIP_CACHE=1\n");
         script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
         script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
+        if (wanMode) {
+            script.append("export SDXL_QNN_PROFILING_LEVEL=basic\n");
+        }
         File accelLib = bundledRuntimePayloadDir != null
             ? new File(bundledRuntimePayloadDir, "phone_gen/lib/libsdxl_runtime_accel.so")
-            : new File(BASE_DIR, "phone_gen/lib/libsdxl_runtime_accel.so");
+            : new File(activeBaseDir, "phone_gen/lib/libsdxl_runtime_accel.so");
         if (accelLib.isFile()) {
             script.append("export SDXL_QNN_USE_NATIVE_ACCEL=1\n");
             script.append("export SDXL_QNN_ACCEL_LIB=\"")
@@ -560,44 +708,78 @@ public class MainActivity extends AppCompatActivity {
                     .append(shellEscape(bundledTaesdOnnx.getAbsolutePath()))
                     .append("\"\n");
             }
+
+            File bundledTaesdContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.serialized.bin.bin");
+            if (bundledTaesdContext.isFile()) {
+                script.append("export SDXL_QNN_TAESD_CONTEXT=\"")
+                    .append(shellEscape(bundledTaesdContext.getAbsolutePath()))
+                    .append("\"\n");
+            }
+
+            File bundledTaesdModel = new File(bundledRuntimePayloadDir, "phone_gen/lib/libTAESDDecoder.so");
+            if (bundledTaesdModel.isFile()) {
+                script.append("export SDXL_QNN_TAESD_MODEL=\"")
+                    .append(shellEscape(bundledTaesdModel.getAbsolutePath()))
+                    .append("\"\n");
+            }
+
+            File bundledTaesdGpuLib = new File(bundledRuntimePayloadDir, "phone_gen/lib/libQnnGpu.so");
+            if (bundledTaesdGpuLib.isFile()) {
+                script.append("export SDXL_QNN_TAESD_BACKEND=gpu\n");
+                script.append("export SDXL_QNN_TAESD_BACKEND_LIB=\"")
+                    .append(shellEscape(bundledTaesdGpuLib.getAbsolutePath()))
+                    .append("\"\n");
+            }
         }
-        script.append("if [ -f \"").append(shellEscape(BASE_DIR)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
-            .append(shellEscape(BASE_DIR)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
-        script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(BASE_DIR))
+        script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
+            .append(shellEscape(activeBaseDir)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
+        script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(activeBaseDir))
             .append("/htp_backend_extensions_lightning.json\"\n");
         script.append("fi\n");
         script.append(String.format(Locale.US,
             "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
-            shellEscape(BASE_DIR), shellEscape(BASE_DIR), shellEscape(BASE_DIR)));
+            shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
         script.append(String.format(Locale.US,
-            "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n", shellEscape(BASE_DIR)));
-        script.append("cd \"").append(shellEscape(BASE_DIR)).append("\"\n");
+            "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n", shellEscape(activeBaseDir)));
+        script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
 
         script.append("\"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
-        script.append(" \"").append(shellEscape(prompt)).append("\"");
-        script.append(" --seed ").append(seed);
-        script.append(" --steps ").append(steps);
-        script.append(" --width ").append(imgWidth);
-        script.append(" --height ").append(imgHeight);
-        script.append(" --name ").append(outName);
-        if (cfg > 1.0f) {
-            script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));
-            if (!neg.isEmpty()) {
-                script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+        if (wanMode) {
+            script.append(" --model-family wan21 --check-runtime");
+            script.append(" --width ").append(imgWidth);
+            script.append(" --height ").append(imgHeight);
+            script.append(" --probe-perf burst");
+        } else {
+            script.append(" \"").append(shellEscape(prompt)).append("\"");
+            script.append(" --seed ").append(seed);
+            script.append(" --steps ").append(steps);
+            script.append(" --width ").append(imgWidth);
+            script.append(" --height ").append(imgHeight);
+            script.append(" --name ").append(outName);
+            if (cfg > 1.0f) {
+                script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));
+                if (!neg.isEmpty()) {
+                    script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+                }
             }
-        }
-        if (!stretch) {
-            script.append(" --no-stretch");
-        }
-        if (preview) {
-            script.append(" --preview");
-        }
-        if (progCfg && cfg > 1.0f) {
-            script.append(" --prog-cfg");
+            if (!stretch) {
+                script.append(" --no-stretch");
+            }
+            if (preview) {
+                script.append(" --preview");
+            }
+            if (progCfg && cfg > 1.0f) {
+                script.append(" --prog-cfg");
+            }
         }
         script.append(" 2>&1\n");
 
-        updateStatus(useRootShell ? "Запуск (root shell)..." : "Запуск...", 2);
+        updateStatus(
+            wanMode
+                ? (useRootShell ? "WAN basic debug (root shell)..." : "WAN basic debug...")
+                : (useRootShell ? "Запуск (root shell)..." : "Запуск..."),
+            2
+        );
 
         ProcessBuilder pb;
         if (useRootShell) {
@@ -622,6 +804,7 @@ public class MainActivity extends AppCompatActivity {
         StringBuilder timingLog = new StringBuilder();
         StringBuilder rawLog = new StringBuilder();
         String savedPath = null;
+        String wanReportJson = null;
         int clipDone = 0;
 
         // Live preview polling: check for preview_current.png every 2 seconds
@@ -644,7 +827,7 @@ public class MainActivity extends AppCompatActivity {
             }
         };
         isGenerating = true;
-        if (preview) {
+        if (preview && !wanMode) {
             // Delete stale preview from last run
             new File(previewPath).delete();
             mainHandler.postDelayed(previewPoller, 2000);
@@ -656,6 +839,24 @@ public class MainActivity extends AppCompatActivity {
             while ((line = reader.readLine()) != null) {
                 if (currentProcess == null) break; // stopped
                 if (rawLog.length() < 16000) rawLog.append(line).append("\n");
+
+                if (wanMode) {
+                    if (line.startsWith("WAN_REPORT_JSON:")) {
+                        wanReportJson = line.substring("WAN_REPORT_JSON:".length()).trim();
+                        continue;
+                    }
+                    if (line.startsWith("[WAN]")) {
+                        timingLog.append(line.trim()).append("\n");
+                        if (line.startsWith("[WAN] status:")) {
+                            updateStatus(line.substring("[WAN] ".length()).trim(), 15);
+                        }
+                        continue;
+                    }
+                    if (line.startsWith("WAN_SUMMARY:") || line.startsWith("WAN_STATUS:")) {
+                        timingLog.append(line.trim()).append("\n");
+                        continue;
+                    }
+                }
 
                 // Parse CLIP progress
                 Matcher m = PAT_CLIP.matcher(line);
@@ -763,23 +964,48 @@ public class MainActivity extends AppCompatActivity {
         currentProcess = null;
         isGenerating = false;  // stop preview poller
 
-        if (exitCode != 0 && savedPath == null) {
-            String hint;
-            if (exitCode == 127) {
-                hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках или извлеките bundled runtime через Проверку в Настройках.";
-            } else if (exitCode == 2 && rawLog.toString().contains("unrecognized arguments")) {
-                hint = "Python runtime запустился, но phone-side generate.py не понял новые аргументы.\n"
-                    + "Обычно это означает устаревший runtime на телефоне. Обновите APK до свежей версии: она запускает bundled generate.py и актуальные fast-path бинарники.";
-            } else if (useRootShell && (exitCode == 1 || exitCode == 13 || exitCode == 126)) {
-                hint = "Root-доступ не предоставлен или окружение Termux недоступно.\nПроверьте Magisk и путь к Python в Настройках.";
-            } else if (exitCode == 1 || exitCode == 13 || exitCode == 126) {
-                hint = "Нет доступа к файлам или исполняемым компонентам.\nПроверьте путь к Downloads и команду Python в Настройках.";
-            } else {
-                hint = "Генерация завершилась с ошибкой (код " + exitCode + ")";
+        if (wanMode) {
+            if (exitCode != 0 && wanReportJson == null) {
+                throw new IOException(buildRunFailureMessage(exitCode, useRootShell, rawLog.toString()));
             }
-            String details = rawLog.length() > 0
-                ? "\n\n" + rawLog.toString().trim() : "";
-            throw new IOException(hint + details);
+
+            JSONObject wanReport = null;
+            if (wanReportJson != null && !wanReportJson.isEmpty()) {
+                try {
+                    wanReport = new JSONObject(wanReportJson);
+                } catch (Exception e) {
+                    timingLog.append("WAN report parse failed: ").append(e.getMessage()).append("\n");
+                }
+            }
+
+            final String finalWanStatus = formatWanStatus(wanReport);
+            final String finalWanTiming = formatWanTiming(
+                wanReport,
+                rawLog.toString(),
+                activeBaseDir,
+                imgWidth,
+                imgHeight,
+                timingLog.toString()
+            );
+            mainHandler.post(() -> {
+                latestTempStatus = "";
+                latestStageStatus = finalWanStatus;
+                currentBitmap = null;
+                imagePreview.setImageBitmap(null);
+                saveButton.setVisibility(View.GONE);
+                stopButton.setVisibility(View.GONE);
+                progressBar.setVisibility(View.GONE);
+                generateButton.setEnabled(true);
+                renderStatus();
+                timingText.setText(finalWanTiming);
+                timingText.setVisibility(View.VISIBLE);
+                schedulePrewarmKill("idle after WAN runtime check");
+            });
+            return;
+        }
+
+        if (exitCode != 0 && savedPath == null) {
+            throw new IOException(buildRunFailureMessage(exitCode, useRootShell, rawLog.toString()));
         }
 
         // Load the generated PNG
@@ -810,6 +1036,7 @@ public class MainActivity extends AppCompatActivity {
             renderStatus();
             timingText.setText(finalTiming);
             timingText.setVisibility(View.VISIBLE);
+            schedulePrewarmKill("idle after generation");
         });
     }
 
@@ -828,8 +1055,8 @@ public class MainActivity extends AppCompatActivity {
         throw new IOException("Не удалось создать каталог: " + dir.getAbsolutePath());
     }
 
-    private boolean ensureExternalStorageAccess() {
-        if (shouldUseRootShell()) {
+    private boolean ensureExternalStorageAccess(String activeBaseDir) {
+        if (shouldUseRootShell(activeBaseDir, PYTHON)) {
             return true;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
@@ -851,9 +1078,8 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
-    private boolean shouldUseRootShell() {
-        return (BASE_DIR != null && BASE_DIR.startsWith(LEGACY_BASE_DIR))
-            || looksLikePrivatePythonPath(PYTHON);
+    private boolean shouldUseRootShell(String baseDir, String pythonCommand) {
+        return isLegacyBaseDir(baseDir) || looksLikePrivatePythonPath(pythonCommand);
     }
 
     private void appendShellEnvironment(StringBuilder script) {
@@ -874,7 +1100,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
     }
 
-    private ExecutionPlan resolveExecutionPlan() throws IOException, InterruptedException {
+    private ExecutionPlan resolveExecutionPlan(String activeBaseDir) throws IOException, InterruptedException {
         try {
             RuntimeBootstrap.ensureBundledAssetsExtracted(this);
         } catch (IOException ignored) {
@@ -882,6 +1108,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String bundledPython = RuntimeBootstrap.findBundledPython(this);
+        String detectedPython = SettingsActivity.detectDefaultPython(activeBaseDir);
         LinkedHashSet<String> noRootCandidates = new LinkedHashSet<>();
         LinkedHashSet<String> rootCandidates = new LinkedHashSet<>();
 
@@ -889,6 +1116,7 @@ public class MainActivity extends AppCompatActivity {
         if (!looksLikePrivatePythonPath(PYTHON)) {
             addIfPresent(noRootCandidates, PYTHON);
         }
+        addIfPresent(noRootCandidates, detectedPython);
         if (isSimpleCommandName(PYTHON)) {
             addIfPresent(noRootCandidates, "python3");
             addIfPresent(noRootCandidates, "python");
@@ -896,13 +1124,14 @@ public class MainActivity extends AppCompatActivity {
 
         addIfPresent(rootCandidates, bundledPython);
         addIfPresent(rootCandidates, PYTHON);
+        addIfPresent(rootCandidates, detectedPython);
         addIfPresent(rootCandidates, SettingsActivity.LEGACY_PYTHON);
         if (isSimpleCommandName(PYTHON)) {
             addIfPresent(rootCandidates, "python3");
             addIfPresent(rootCandidates, "python");
         }
 
-        boolean preferRoot = shouldUseRootShell();
+        boolean preferRoot = shouldUseRootShell(activeBaseDir, PYTHON);
         if (preferRoot) {
             ExecutionPlan rootPlan = firstUsablePlan(rootCandidates, true);
             if (rootPlan != null) {
@@ -1093,6 +1322,106 @@ public class MainActivity extends AppCompatActivity {
         return GEN_SCRIPT;
     }
 
+    private String buildRunFailureMessage(int exitCode, boolean useRootShell, String rawLog) {
+        String hint;
+        if (exitCode == 127) {
+            hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках или извлеките bundled runtime через Проверку в Настройках.";
+        } else if (exitCode == 2 && rawLog.contains("unrecognized arguments")) {
+            hint = "Python runtime запустился, но phone-side generate.py не понял новые аргументы.\n"
+                + "Обычно это означает устаревший runtime на телефоне. Обновите APK до свежей версии: она запускает bundled generate.py и актуальные fast-path бинарники.";
+        } else if (useRootShell && (exitCode == 1 || exitCode == 13 || exitCode == 126)) {
+            hint = "Root-доступ не предоставлен или окружение Termux недоступно.\nПроверьте Magisk и путь к Python в Настройках.";
+        } else if (exitCode == 1 || exitCode == 13 || exitCode == 126) {
+            hint = "Нет доступа к файлам или исполняемым компонентам.\nПроверьте путь к Downloads и команду Python в Настройках.";
+        } else {
+            hint = "Генерация завершилась с ошибкой (код " + exitCode + ")";
+        }
+        String details = rawLog != null && !rawLog.trim().isEmpty()
+            ? "\n\n" + rawLog.trim()
+            : "";
+        return hint + details;
+    }
+
+    private String formatWanStatus(JSONObject report) {
+        if (report == null) {
+            return "WAN basic debug завершён";
+        }
+        String status = report.optString("status", "UNKNOWN");
+        return "WAN basic debug: " + status;
+    }
+
+    private void appendWanProbeRun(StringBuilder sb, JSONObject probeRuns, String key, String label) {
+        if (probeRuns == null) {
+            return;
+        }
+        JSONObject run = probeRuns.optJSONObject(key);
+        if (run == null) {
+            return;
+        }
+        sb.append(label)
+            .append(": wall=")
+            .append(String.format(Locale.US, "%.1f", run.optDouble("wall_ms", 0.0)))
+            .append("ms, reported=")
+            .append(String.format(Locale.US, "%.1f", run.optDouble("reported_ms", 0.0)))
+            .append("ms, overhead=")
+            .append(String.format(Locale.US, "%.1f", run.optDouble("overhead_ms", 0.0)))
+            .append("ms\n");
+    }
+
+    private void appendJsonArray(StringBuilder sb, String title, JSONArray values) {
+        if (values == null || values.length() == 0) {
+            return;
+        }
+        sb.append(title).append(":\n");
+        for (int i = 0; i < values.length(); i++) {
+            sb.append("- ").append(values.optString(i)).append("\n");
+        }
+    }
+
+    private String formatWanTiming(
+            JSONObject report,
+            String rawLog,
+            String activeBaseDir,
+            int imgWidth,
+            int imgHeight,
+            String parsedLines) {
+        if (report == null) {
+            return !parsedLines.trim().isEmpty() ? parsedLines.trim() : rawLog.trim();
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("WAN 2.1 basic debug\n");
+        sb.append("Status: ").append(report.optString("status", "UNKNOWN")).append("\n");
+        sb.append("Base: ").append(report.optString("base_dir", activeBaseDir)).append("\n");
+        sb.append("Requested: ").append(report.optString("requested_resolution", imgWidth + "x" + imgHeight)).append("\n");
+        if (!report.optString("run_tag", "").isEmpty()) {
+            sb.append("Run tag: ").append(report.optString("run_tag")).append("\n");
+        }
+        sb.append("Perf: ").append(report.optString("probe_perf_profile", "burst"));
+        sb.append(" | Profiling: ").append(report.optString("qnn_profiling_level", "off")).append("\n");
+
+        JSONObject probeRuns = report.optJSONObject("probe_runs");
+        appendWanProbeRun(sb, probeRuns, "direct", "Direct");
+        appendWanProbeRun(sb, probeRuns, "server_cold", "Server cold");
+        appendWanProbeRun(sb, probeRuns, "server_warm", "Server warm");
+
+        if (report.has("reuse_gain_ms")) {
+            sb.append("Reuse gain: ")
+                .append(String.format(Locale.US, "%.1f", report.optDouble("reuse_gain_ms", 0.0)))
+                .append("ms (")
+                .append(String.format(Locale.US, "%.2f", report.optDouble("reuse_gain_pct", 0.0)))
+                .append("%)\n");
+        }
+
+        appendJsonArray(sb, "Warnings", report.optJSONArray("warnings"));
+        appendJsonArray(sb, "Missing", report.optJSONArray("missing"));
+
+        if (!parsedLines.trim().isEmpty()) {
+            sb.append("\nParsed log:\n").append(parsedLines.trim()).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
     private void saveImage() {
         if (currentBitmap == null) return;
 
@@ -1120,14 +1449,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         // Cancel pending prewarm kill timer
-        if (prewarmKillRunnable != null) {
-            mainHandler.removeCallbacks(prewarmKillRunnable);
-            prewarmKillRunnable = null;
-        }
-        // Kill prewarm process
-        Process pw = prewarmProcess;
-        if (pw != null) pw.destroyForcibly();
-        prewarmProcess = null;
+        killPrewarmNow("activity destroy");
         // Kill generation process
         Process p = currentProcess;
         if (p != null) p.destroyForcibly();
