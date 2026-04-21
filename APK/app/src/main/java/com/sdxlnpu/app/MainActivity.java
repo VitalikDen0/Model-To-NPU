@@ -10,7 +10,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.Editable;
@@ -111,7 +110,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile Process currentProcess;
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
-    private static final String APK_QNN_PERF_PROFILE = "sustained_high_performance";
+    private static final String APK_QNN_PERF_PROFILE = "burst";
     private static final int PREVIEW_DISPLAY_MAX_EDGE = 640;
     private static final int FINAL_DISPLAY_MAX_EDGE = 960;
     private volatile Boolean rootShellAvailable = null;
@@ -120,7 +119,6 @@ public class MainActivity extends AppCompatActivity {
     private Runnable prewarmKillRunnable = null;
     private Runnable activePreviewPoller = null;
     private volatile boolean previewDecodeInFlight = false;
-    private volatile long sharedServerWarmUntilMs = 0L;
     private static final long PREWARM_KILL_DELAY_MS = 30_000;
     private boolean updatingSizePresetUi = false;
 
@@ -267,26 +265,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean isSharedServerWarmLikelyAvailable() {
-        return sharedServerWarmUntilMs > SystemClock.elapsedRealtime();
-    }
-
-    private void markSharedServerWarm(String reason) {
-        sharedServerWarmUntilMs = SystemClock.elapsedRealtime() + PREWARM_KILL_DELAY_MS;
-        Log.i(TAG, "prewarm: keeping shared-server warm window for "
-            + PREWARM_KILL_DELAY_MS + "ms (" + reason + ")");
-    }
-
-    private void clearSharedServerWarm(String reason) {
-        if (sharedServerWarmUntilMs != 0L) {
-            Log.i(TAG, "prewarm: cleared shared-server warm window (" + reason + ")");
-        }
-        sharedServerWarmUntilMs = 0L;
-    }
-
     private void killPrewarmNow(String reason) {
         cancelScheduledPrewarmKill();
-        clearSharedServerWarm(reason);
         Process process = prewarmProcess;
         if (process == null) {
             return;
@@ -308,7 +288,6 @@ public class MainActivity extends AppCompatActivity {
         if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily()) || isGenerating) {
             return;
         }
-        markSharedServerWarm(reason);
         Process process = prewarmProcess;
         if (process == null || !process.isAlive()) {
             prewarmProcess = null;
@@ -320,7 +299,6 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, "prewarm: idle timeout reached (" + reason + ")");
                 current.destroyForcibly();
             }
-            clearSharedServerWarm("idle timeout reached");
             prewarmProcess = null;
             prewarmKillRunnable = null;
         };
@@ -343,15 +321,14 @@ public class MainActivity extends AppCompatActivity {
             Log.i(TAG, "startPrewarm: helper launch already queued");
             return;
         }
-        if (isSharedServerWarmLikelyAvailable()) {
-            cancelScheduledPrewarmKill();
-            Log.i(TAG, "startPrewarm: shared server is still warm, skip helper restart");
-            return;
-        }
         cancelScheduledPrewarmKill();
         prewarmStartQueued = true;
         executor.execute(() -> {
             try {
+                if (isGenerating) {
+                    Log.i(TAG, "startPrewarm: skip because generation is already active");
+                    return;
+                }
                 Log.i(TAG, "startPrewarm: begin");
                 String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
                 ExecutionPlan plan = resolveExecutionPlan(activeBaseDir);
@@ -371,7 +348,7 @@ public class MainActivity extends AppCompatActivity {
                 script.append("export SDXL_QNN_USE_MMAP=1\n");
                 script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
                 script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
-                script.append("export SDXL_QNN_SHARED_SERVER=1\n");
+                script.append("export SDXL_QNN_SHARED_SERVER=0\n");
                 script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
                 boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledPayload);
                 if (!bundledQnnConfigReady) {
@@ -424,17 +401,12 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
                 }
-                if (ready) {
-                    markSharedServerWarm("PREWARM_READY");
-                    mainHandler.post(() -> schedulePrewarmKill("idle after app-open prewarm"));
-                } else if (!process.isAlive()) {
+                if (!ready && !process.isAlive()) {
                     prewarmProcess = null;
-                    clearSharedServerWarm("prewarm exited before ready");
                 }
             } catch (Exception e) {
                 Log.w(TAG, "startPrewarm failed", e);
                 prewarmProcess = null;
-                clearSharedServerWarm("prewarm failed");
                 // Prewarm is best-effort — don't crash the app
             } finally {
                 prewarmStartQueued = false;
@@ -841,12 +813,6 @@ public class MainActivity extends AppCompatActivity {
         Process process = prewarmProcess;
         if (process != null && process.isAlive()) {
             schedulePrewarmKill(reason);
-        } else if (isSharedServerWarmLikelyAvailable()) {
-            markSharedServerWarm(reason);
-            Log.i(TAG, "prewarm: shared server still warm after generation, skip helper restart");
-        } else {
-            prewarmProcess = null;
-            startPrewarm();
         }
     }
 
@@ -991,16 +957,10 @@ public class MainActivity extends AppCompatActivity {
         boolean stretch = contrastStretch.isChecked();
         boolean preview = livePreview.isChecked();
         boolean progCfg = progressiveCfg.isChecked();
+        isGenerating = true;
         cancelScheduledPrewarmKill();
         if (MODEL_FAMILY_SDXL.equals(modelFamily)) {
-            Process process = prewarmProcess;
-            if (process == null || !process.isAlive()) {
-                if (isSharedServerWarmLikelyAvailable()) {
-                    Log.i(TAG, "startGeneration: reuse warm shared server without extra prewarm helper");
-                } else {
-                    startPrewarm();
-                }
-            }
+            killPrewarmNow("handoff to foreground generation");
         }
 
         // Build output name
@@ -1039,6 +999,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight);
             } catch (Exception e) {
+                isGenerating = false;
                 mainHandler.post(() -> {
                     latestTempStatus = "";
                     latestStageStatus = "Ошибка: " + e.getMessage();
@@ -1146,7 +1107,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
         script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
         script.append("export SDXL_QNN_USE_DAEMON=0\n");
-        script.append("export SDXL_QNN_SHARED_SERVER=1\n");
+        script.append("export SDXL_QNN_SHARED_SERVER=0\n");
         script.append("export SDXL_QNN_ASYNC_PREP=1\n");
         script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
         script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=1\n");

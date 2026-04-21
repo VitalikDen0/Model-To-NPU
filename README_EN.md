@@ -69,9 +69,9 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Current APK line (v0.4.4) — smoother preset-only Android pass
+### Current APK line (v0.4.5) — late-step freeze rollback
 
-The current public `v0.4.4` line is a stability-focused follow-up for the Android app. Manual `WxH` editing is now hidden from the main screen so generation stays on the validated preset list only, preview/final PNGs are decoded into screen-sized display bitmaps before being shown, and the APK exports the gentler `sustained_high_performance` QNN profile instead of the more aggressive `burst` default to reduce device-wide stutter and app-crash risk during generation. The earlier `v0.4.3` shared FIFO-backed prewarm/runtime fixes remain in place; this session validated APK compilation for the new line, but did not record a fresh phone-side timing run yet, so the last validated end-to-end runtime marker in the docs is still the earlier `75.6 s` rebuilt-phone result.
+The current public `v0.4.5` line keeps the recent UI/display smoothing work, but rolls back the regression-prone APK-side runtime changes that were most likely responsible for the hard late-step freezes: foreground runs now explicitly force `SDXL_QNN_SHARED_SERVER=0`, the app kills any app-open prewarm helper before starting a real generation so only one heavy QNN owner stays alive, and the APK-exported perf profile is back to `burst` instead of `sustained_high_performance`. This session also recorded a direct phone-side validation with the same env the APK now exports (`prompt=cat`, `seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`): the run finished in **29.9 s total** (`UNet 14.891 s`, `VAE 1.942 s`), and the formerly problematic late unguided region returned to the expected ~`1.2 s` class (`step 7 = 1218 ms`) without freezing the phone.
 
 ### v0.4.0 — Variable resolution + self-contained APK
 
