@@ -13,9 +13,11 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.4.3`**.
+Current documented APK version: **`0.4.4`**.
 
-Fresh local review on OnePlus 13 for the standard path (`seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`, Live Preview OFF) reached **75.6 s total** with `burst` + native runtime accel; the rerun with `basic` profiling stayed effectively the same at **75.2 s total**.
+The current `0.4.4` line shifts the APK toward a smoother user-facing path: only the preset picker stays on the main screen, manual `WxH` editing is hidden, preview/final PNGs are decoded to screen-sized display bitmaps, and the APK-side runtime now requests `sustained_high_performance` instead of `burst` by default to reduce visible whole-device lag and app-crash risk during generation.
+
+The last validated local review on OnePlus 13 for the standard path (`seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`, Live Preview OFF) reached **75.6 s total** with `burst` + native runtime accel; the rerun with `basic` profiling stayed effectively the same at **75.2 s total**. For the new `0.4.4` line, this session has validated APK compilation, but not yet recorded a fresh phone-side timing run.
 
 Historical note: the older best-known **62.0 s** runtime result belonged to the pre-reset phone state. The run itself was real, but after the later factory reset the exact phone-side context/runtime state, screenshots, and supporting technical artifacts were not preserved, so the repository can no longer honestly reproduce or independently prove that exact chain as a current result.
 
@@ -177,6 +179,9 @@ Recent overhead re-checks also showed that moving the runtime tree back to `/dat
 - APK version and runtime speed do not always move in lockstep: speed-ups can come from updated `phone_generate.py` even when the APK version number is unchanged.
 - the APK launches `phone_generate.py` without `su`, through a normal shell and a configurable Python command;
 - the default layout uses `/sdcard/Download/sdxl_qnn`;
+- APK `v0.4.4` hides manual `WxH` editing on the main screen and always snaps generation back to the nearest validated preset, so the user-facing path no longer drifts into arbitrary sizes with a higher stability risk;
+- APK `v0.4.4` decodes preview/final PNGs for display through a screen-sized `ImageDecoder` path (with a `BitmapFactory` fallback), reducing the need to keep extra full-resolution UI bitmaps around;
+- APK `v0.4.4` exports `SDXL_QNN_PERF_PROFILE=sustained_high_performance` from the Android app itself, dialing back runtime aggressiveness relative to the older APK-side `burst` default;
 - The refreshed public `v0.4.3` asset fixes the real `v0.4.3` regression path: when the app exports bundled QNN runtime paths, the phone runtime should no longer silently jump back to stale `/data/local/tmp/sdxl_qnn` leftovers;
 - The refreshed public `v0.4.3` asset now actually packages `qnn-net-run` plus the core QNN HTP/System libraries into the payload, so the bundled fast path depends less on whatever old runtime tree happens to be left on the phone;
 - The refreshed public `v0.4.3` asset safely restages bundled backend-extension configs that still use relative paths, instead of trusting the raw app-private extracted JSON and then losing backend extensions at runtime;
@@ -197,5 +202,5 @@ Recent overhead re-checks also showed that moving the runtime tree back to `/dat
 - the **half-CFG** toggle forwards `--prog-cfg` to the phone runtime and keeps guidance enabled only for the first `ceil(steps / 2)` steps as a speed/quality compromise;
 - the status parser now keeps the live `CPU / GPU / NPU` line separate from the main stage/progress text;
 - stdout is parsed in real time to display progress;
-- the resulting PNG is loaded through `BitmapFactory.decodeFile()`;
+- the resulting PNG shown in the UI is now decoded into a screen-sized bitmap through `ImageDecoder` with a `BitmapFactory` fallback;
 - gallery saving uses the Android `MediaStore` API.

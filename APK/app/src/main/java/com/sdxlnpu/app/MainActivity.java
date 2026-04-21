@@ -3,6 +3,7 @@ package com.sdxlnpu.app;
 import android.content.ContentValues;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -15,6 +16,7 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
+import android.util.Size;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -109,6 +111,9 @@ public class MainActivity extends AppCompatActivity {
     private volatile Process currentProcess;
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
+    private static final String APK_QNN_PERF_PROFILE = "sustained_high_performance";
+    private static final int PREVIEW_DISPLAY_MAX_EDGE = 640;
+    private static final int FINAL_DISPLAY_MAX_EDGE = 960;
     private volatile Boolean rootShellAvailable = null;
     private volatile Process prewarmProcess = null;
     private volatile boolean prewarmStartQueued = false;
@@ -365,7 +370,7 @@ public class MainActivity extends AppCompatActivity {
                 script.append("export PYTHONDONTWRITEBYTECODE=1\n");
                 script.append("export SDXL_QNN_USE_MMAP=1\n");
                 script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
-                script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
+                script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
                 script.append("export SDXL_QNN_SHARED_SERVER=1\n");
                 script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
                 boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledPayload);
@@ -474,14 +479,14 @@ public class MainActivity extends AppCompatActivity {
         sizePresetSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (updatingSizePresetUi || position <= 0) {
+                if (updatingSizePresetUi || position < 0) {
                     return;
                 }
                 int[][] presets = getActiveSizePresetDimensions();
-                if (position - 1 >= presets.length) {
+                if (position >= presets.length) {
                     return;
                 }
-                int[] preset = presets[position - 1];
+                int[] preset = presets[position];
                 updatingSizePresetUi = true;
                 widthInput.setText(String.valueOf(preset[0]));
                 heightInput.setText(String.valueOf(preset[1]));
@@ -508,20 +513,60 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private int findNearestSizePresetIndex(int width, int height) {
+        int[][] presets = getActiveSizePresetDimensions();
+        if (presets.length == 0) {
+            return 0;
+        }
+        if (width <= 0 || height <= 0) {
+            return 0;
+        }
+        int bestIndex = 0;
+        long bestScore = Long.MAX_VALUE;
+        for (int i = 0; i < presets.length; i++) {
+            int[] preset = presets[i];
+            long dw = (long) preset[0] - width;
+            long dh = (long) preset[1] - height;
+            long score = dw * dw + dh * dh;
+            if (score < bestScore) {
+                bestScore = score;
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
+    }
+
+    private void applySizePresetByIndex(int index) {
+        int[][] presets = getActiveSizePresetDimensions();
+        if (presets.length == 0) {
+            return;
+        }
+        int safeIndex = Math.max(0, Math.min(index, presets.length - 1));
+        int[] preset = presets[safeIndex];
+        updatingSizePresetUi = true;
+        widthInput.setText(String.valueOf(preset[0]));
+        heightInput.setText(String.valueOf(preset[1]));
+        if (sizePresetSpinner != null && sizePresetSpinner.getSelectedItemPosition() != safeIndex) {
+            sizePresetSpinner.setSelection(safeIndex, false);
+        }
+        updatingSizePresetUi = false;
+    }
+
     private void selectSizePresetForCurrentInputs() {
         if (sizePresetSpinner == null) {
             return;
         }
         int width = parsePositiveInt(widthInput);
         int height = parsePositiveInt(heightInput);
-        int selection = 0;
+        int selection = findNearestSizePresetIndex(width, height);
         int[][] presets = getActiveSizePresetDimensions();
-        for (int i = 0; i < presets.length; i++) {
-            int[] preset = presets[i];
-            if (preset[0] == width && preset[1] == height) {
-                selection = i + 1;
-                break;
-            }
+        if (presets.length == 0) {
+            return;
+        }
+        int[] preset = presets[selection];
+        if (preset[0] != width || preset[1] != height) {
+            applySizePresetByIndex(selection);
+            return;
         }
         if (sizePresetSpinner.getSelectedItemPosition() != selection) {
             updatingSizePresetUi = true;
@@ -588,11 +633,10 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int[][] presets = getActiveSizePresetDimensions();
-        String[] labels = new String[presets.length + 1];
-        labels[0] = getString(R.string.size_preset_custom);
+        String[] labels = new String[presets.length];
         for (int i = 0; i < presets.length; i++) {
             int[] preset = presets[i];
-            labels[i + 1] = getString(R.string.size_preset_format, preset[0], preset[1]);
+            labels[i] = getString(R.string.size_preset_format, preset[0], preset[1]);
         }
         ArrayAdapter<String> adapter = new ArrayAdapter<>(
             this,
@@ -692,10 +736,7 @@ public class MainActivity extends AppCompatActivity {
             localPreviewExecutor.execute(() -> {
                 Bitmap decoded = null;
                 try {
-                    BitmapFactory.Options options = new BitmapFactory.Options();
-                    options.inPreferredConfig = Bitmap.Config.RGB_565;
-                    options.inDither = true;
-                    decoded = BitmapFactory.decodeFile(previewPath, options);
+                    decoded = decodeBitmapForDisplay(previewPath, true);
                 } catch (Exception e) {
                     Log.w(TAG, "preview decode failed", e);
                 }
@@ -718,6 +759,78 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) {
             previewDecodeInFlight = false;
             Log.w(TAG, "preview decode scheduling failed", e);
+        }
+    }
+
+    private int resolveDisplayDecodeMaxEdge(boolean previewMode) {
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int preferredMaxEdge = previewMode ? PREVIEW_DISPLAY_MAX_EDGE : FINAL_DISPLAY_MAX_EDGE;
+        return Math.max(512, Math.min(screenWidth, preferredMaxEdge));
+    }
+
+    private static int[] constrainBitmapSize(int width, int height, int maxEdge) {
+        if (width <= 0 || height <= 0 || maxEdge <= 0) {
+            return new int[] {Math.max(1, width), Math.max(1, height)};
+        }
+        int longestEdge = Math.max(width, height);
+        if (longestEdge <= maxEdge) {
+            return new int[] {width, height};
+        }
+        float scale = maxEdge / (float) longestEdge;
+        return new int[] {
+            Math.max(1, Math.round(width * scale)),
+            Math.max(1, Math.round(height * scale))
+        };
+    }
+
+    private static int calculateInSampleSize(int width, int height, int maxEdge) {
+        if (width <= 0 || height <= 0 || maxEdge <= 0) {
+            return 1;
+        }
+        int sample = 1;
+        int longestEdge = Math.max(width, height);
+        while ((longestEdge / sample) > maxEdge) {
+            sample *= 2;
+        }
+        return Math.max(1, sample);
+    }
+
+    private Bitmap decodeBitmapForDisplayFallback(String path, boolean previewMode, int maxEdge) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(path, bounds);
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inPreferredConfig = previewMode ? Bitmap.Config.RGB_565 : Bitmap.Config.ARGB_8888;
+        options.inDither = previewMode;
+        options.inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxEdge);
+        return BitmapFactory.decodeFile(path, options);
+    }
+
+    private Bitmap decodeBitmapForDisplay(String path, boolean previewMode) {
+        File imageFile = new File(path);
+        if (!imageFile.isFile()) {
+            return null;
+        }
+
+        int maxEdge = resolveDisplayDecodeMaxEdge(previewMode);
+        try {
+            ImageDecoder.Source source = ImageDecoder.createSource(imageFile);
+            return ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
+                Size sourceSize = info.getSize();
+                int[] targetSize = constrainBitmapSize(
+                    sourceSize.getWidth(),
+                    sourceSize.getHeight(),
+                    maxEdge
+                );
+                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
+                decoder.setMutableRequired(false);
+                decoder.setTargetSize(targetSize[0], targetSize[1]);
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "display decode fallback for " + path, e);
+            return decodeBitmapForDisplayFallback(path, previewMode, maxEdge);
         }
     }
 
@@ -1031,7 +1144,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
         script.append("export SDXL_SHOW_TEMP=1\n");
         script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
-        script.append("export SDXL_QNN_PERF_PROFILE=burst\n");
+        script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
         script.append("export SDXL_QNN_USE_DAEMON=0\n");
         script.append("export SDXL_QNN_SHARED_SERVER=1\n");
         script.append("export SDXL_QNN_ASYNC_PREP=1\n");
@@ -1385,7 +1498,7 @@ public class MainActivity extends AppCompatActivity {
             throw new IOException("Файл не найден: " + finalPath);
         }
 
-        Bitmap bitmap = BitmapFactory.decodeFile(finalPath);
+        Bitmap bitmap = decodeBitmapForDisplay(finalPath, false);
         if (bitmap == null) {
             throw new IOException("Не удалось загрузить изображение: " + finalPath);
         }
