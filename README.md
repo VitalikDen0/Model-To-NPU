@@ -134,12 +134,13 @@ All gallery samples and the currently documented phone-side examples are **1024�
     </td>
     <td width="50%" align="center">
       <b>Current cold-start APK proof — 34.6s total</b><br>
-      <img src="https://github.com/user-attachments/assets/6478e08d-9c51-4bb4-a5fc-afa63300bddc" alt="Current phone-side proof screenshot at 34.6 seconds (cold start)" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/04b6e61a-79d6-4ce5-a7d6-158461ca97e6" alt="Current phone-side proof screenshot at 34.6 seconds (cold start)" width="100%"><br>
       <sub>Measured accelerator-visible time inside this run: ~16.25 s.</sub>
     </td>
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
+
 
 Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s**, with the fourth slot now showing the current **34.6 s cold-start APK** proof image.
 
