@@ -13,11 +13,13 @@ APK для генерации изображений непосредствен�
 Текущая реализованная цель приложения — **SDXL Lightning**.  
 **Полностью автономно** — ПК не нужен после деплоя моделей.
 
-Текущая документированная версия APK: **`0.4.6`**.
+Текущая документированная версия APK: **`0.4.7`**.
 
-Текущая линия `0.4.6` — stability-first refresh: публичный APK больше не держит app-open background prewarm, foreground generation не просит phone runtime агрессивно прогревать все контексты / preview assets заранее, а `runtime_payload_version.txt` теперь строится из fingerprint реально упакованного payload, чтобы обновлённые `generate.py` и bundled QNN assets гарантированно переэкстрагировались на устройстве.
+Текущая линия `0.4.7` сохраняет stability-first refresh из `0.4.6`: публичный APK по-прежнему не держит app-open background prewarm, foreground generation не просит phone runtime агрессивно прогревать все контексты / preview assets заранее, а `runtime_payload_version.txt` всё так же строится из fingerprint реально упакованного payload, чтобы обновлённые `generate.py` и bundled QNN assets гарантированно переэкстрагировались на устройстве.
 
-В этой сессии для `0.4.6` успешно прошли локальные сборки **debug** и **release** APK. Свежий direct phone-side validation run для новой линии ещё не записан, потому что телефон сейчас не подключён.
+Поверх этой базы `0.4.7` добавляет два user-facing hotfix: приложение теперь всегда прокидывает в runtime точное значение `CFG`, включая **`1.0`**, поэтому ручной `CFG=1.0` больше не откатывается молча на CLI default `3.5`; а проблемы TAESD/live preview теперь явно попадают в UI как **не критическая ошибка / warning**, пока сама генерация продолжает идти дальше.
+
+В этой сессии для `0.4.7` успешно прошли свежие локальные сборки **debug** и **release** APK. Свежий direct phone-side validation run для новой линии ещё не записан, потому что телефон сейчас не подключён.
 
 Историческая заметка: старый лучший runtime-результат **62.0 s** относился к доресторовому состоянию телефона. Сам тест был реальным, но после factory reset точное phone-side состояние, скриншоты и вспомогательные технические артефакты не были сохранены, поэтому репозиторий больше не может честно воспроизвести или документально доказать именно эту цепочку как текущую.
 
@@ -180,10 +182,12 @@ Live preview через TAESD после переноса на rebuilt **QNN GPU
 - Версия APK и скорость runtime не всегда меняются синхронно: ускорения часто приходят из обновлённого `phone_generate.py`, даже если номер APK остаётся тем же.
 - APK запускает `phone_generate.py` без `su`, через обычный shell и настраиваемую Python-команду
 - По умолчанию используется общая папка `/sdcard/Download/sdxl_qnn`
-- APK `v0.4.6` оставляет generation-path на валидированных preset-ориентирах и сохраняет screen-sized decode path для preview/final PNG, чтобы UI не тащил лишние full-resolution bitmap'ы
-- APK `v0.4.6` полностью отключает app-open background prewarm в публичной линии, чтобы QNN server / контексты не сидели в памяти телефона ещё до реального запуска генерации
-- APK `v0.4.6` оставляет APK-side `SDXL_QNN_PERF_PROFILE` на `burst`, но больше не просит runtime агрессивно prewarm-ить все контексты и preview assets в foreground-run
-- APK `v0.4.6` пишет content-derived marker в `runtime_payload_version.txt`, поэтому новые bundled `generate.py` / QNN runtime assets действительно заменяют старые распакованные on-device копии
+- APK `v0.4.7` оставляет generation-path на валидированных preset-ориентирах и сохраняет screen-sized decode path для preview/final PNG, чтобы UI не тащил лишние full-resolution bitmap'ы
+- APK `v0.4.7` полностью отключает app-open background prewarm в публичной линии, чтобы QNN server / контексты не сидели в памяти телефона ещё до реального запуска генерации
+- APK `v0.4.7` оставляет APK-side `SDXL_QNN_PERF_PROFILE` на `burst`, но больше не просит runtime агрессивно prewarm-ить все контексты и preview assets в foreground-run
+- APK `v0.4.7` пишет content-derived marker в `runtime_payload_version.txt`, поэтому новые bundled `generate.py` / QNN runtime assets действительно заменяют старые распакованные on-device копии
+- APK `v0.4.7` теперь всегда прокидывает в phone runtime точное значение `--cfg`, включая `1.0`, поэтому ручной no-guidance режим больше не сваливается обратно на Python default `3.5`
+- APK `v0.4.7` парсит структурированные `TAESD_WARNING:`-линии из runtime и явно показывает нефатальную проблему live preview в статусе/таймингах вместо молчаливого отсутствия preview
 - Обновлённый публичный asset `v0.4.3` чинит реальную regression path из `v0.4.3`: если приложение экспортирует bundled QNN runtime paths, phone runtime больше не должен молча перескакивать на устаревший `/data/local/tmp/sdxl_qnn`
 - Обновлённый публичный asset `v0.4.3` теперь действительно включает в payload `qnn-net-run` и базовый набор QNN HTP/System библиотек, так что bundled fast path меньше зависит от случайно оставшихся phone-side runtime файлов
 - Обновлённый публичный asset `v0.4.3` корректно перестейдживает bundled backend-extension config с относительными путями и тем самым не теряет backend extensions только из-за app-private extraction path
