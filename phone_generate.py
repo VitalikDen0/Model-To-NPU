@@ -382,6 +382,7 @@ _RUNTIME_PREP_DONE = False
 _PREVIEW_PREP_DONE = False
 _RUNTIME_ACCEL = get_runtime_accel(prefer_native=QNN_USE_NATIVE_ACCEL, library_path=QNN_ACCEL_LIB)
 _RUNTIME_STAGE_ROOT: str | None = None
+_TAESD_WARNINGS_EMITTED: set[str] = set()
 
 
 def _log(line: str = "") -> None:
@@ -827,6 +828,13 @@ def _is_htp_backend(backend_lib: str) -> bool:
     return "htp" in os.path.basename(backend_lib).lower()
 
 
+def _emit_taesd_warning_once(key: str, message: str) -> None:
+    if key in _TAESD_WARNINGS_EMITTED:
+        return
+    _TAESD_WARNINGS_EMITTED.add(key)
+    _log(f"TAESD_WARNING: {message}")
+
+
 def _get_taesd_qnn_plan() -> dict | None:
     global _TAESD_QNN_CHECKED, _TAESD_QNN_PLAN
     if _TAESD_QNN_CHECKED:
@@ -839,10 +847,18 @@ def _get_taesd_qnn_plan() -> dict | None:
     try:
         backend_lib = TAESD_BACKEND_LIB or _resolve_backend_lib(TAESD_BACKEND)
     except Exception as e:
+        _emit_taesd_warning_once(
+            "invalid_backend",
+            f"invalid QNN preview backend '{TAESD_BACKEND}'; generation will continue without live preview unless ONNX CPU fallback is available",
+        )
         _log(f"  [TAESD] invalid QNN backend '{TAESD_BACKEND}': {e}")
         return None
 
     if not os.path.exists(backend_lib):
+        _emit_taesd_warning_once(
+            "missing_backend_lib",
+            f"QNN preview backend library '{os.path.basename(backend_lib)}' is missing; generation will continue without live preview unless ONNX CPU fallback is available",
+        )
         return None
 
     if os.path.exists(TAESD_CONTEXT):
@@ -877,6 +893,12 @@ def _prepare_preview_backend() -> None:
         return
 
     if os.path.exists(TAESD_ONNX):
+        if not TAESD_FORCE_ONNX and TAESD_BACKEND not in ("", "off", "none", "onnx", "cpu"):
+            backend_lib = TAESD_BACKEND_LIB or TAESD_BACKEND
+            _emit_taesd_warning_once(
+                "qnn_fallback_to_onnx",
+                f"QNN TAESD preview artifacts were not found for backend '{os.path.basename(backend_lib)}'; falling back to ONNX CPU",
+            )
         _get_ort_session()
         return
 
@@ -887,6 +909,10 @@ def _prepare_preview_backend() -> None:
             "falling back to ONNX CPU if available"
         )
     else:
+        _emit_taesd_warning_once(
+            "no_preview_backend",
+            "TAESD live preview is unavailable; generation will continue without live preview",
+        )
         _log("  [TAESD] no preview backend available")
 
 
@@ -899,6 +925,10 @@ def _get_ort_session():
 
     if not os.path.exists(TAESD_ONNX):
         _ort_avail = False
+        _emit_taesd_warning_once(
+            "onnx_missing",
+            "TAESD live preview is unavailable: taesd_decoder.onnx was not found; generation will continue without live preview",
+        )
         _log(f"  [TAESD] ONNX not found: {TAESD_ONNX}")
         _log("  [TAESD] Export: python SDXL/debug/export_taesd_to_onnx.py --validate")
         return None
@@ -907,6 +937,10 @@ def _get_ort_session():
         ort = importlib.import_module("onnxruntime")
     except ImportError:
         _ort_avail = False
+        _emit_taesd_warning_once(
+            "onnxruntime_missing",
+            "TAESD live preview is unavailable: onnxruntime is not installed in Termux; generation will continue without live preview",
+        )
         _log("  [TAESD] onnxruntime not found — run in Termux: pip install onnxruntime")
         return None
 
@@ -922,6 +956,10 @@ def _get_ort_session():
         _log("  [TAESD] onnxruntime session ready (CPU)")
     except Exception as e:
         _ort_avail = False
+        _emit_taesd_warning_once(
+            "ort_session_failed",
+            "TAESD live preview is unavailable: ONNX preview backend failed to start; generation will continue without live preview",
+        )
         _log(f"  [TAESD] ort session failed: {e}")
     return _ort_session
 
@@ -2832,7 +2870,7 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
 
 
 def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
-    global _TAESD_QNN_FAILED
+    global _TAESD_QNN_FAILED, _ort_session, _ort_avail
 
     plan = None if _TAESD_QNN_FAILED else _get_taesd_qnn_plan()
     if plan is not None:
@@ -2845,6 +2883,10 @@ def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
             return
         except Exception as e:
             _TAESD_QNN_FAILED = True
+            _emit_taesd_warning_once(
+                "qnn_preview_failed",
+                "TAESD QNN preview failed; falling back to ONNX CPU while generation continues",
+            )
             _log(f"  [TAESD] QNN preview fallback to ONNX CPU: {e}")
 
     sess = _get_ort_session()
@@ -2854,11 +2896,16 @@ def _preview_step(latents: np.ndarray, step_idx: int, total_steps: int) -> None:
     t0 = time.time()
     try:
         result = sess.run(None, {"latents": latents.astype(np.float32, copy=False)})
+        _save_preview_png(result[0])
     except Exception as e:
-        _log(f"  [TAESD] inference error: {e}")
+        _ort_avail = False
+        _ort_session = None
+        _emit_taesd_warning_once(
+            "preview_runtime_failed",
+            "TAESD live preview failed during generation; generation will continue without live preview",
+        )
+        _log(f"  [TAESD] preview error: {e}")
         return
-
-    _save_preview_png(result[0])
 
     ms = (time.time() - t0) * 1000
     _log(f"  [PREVIEW step {step_idx+1}/{total_steps}] CPU {ms:.0f}ms")

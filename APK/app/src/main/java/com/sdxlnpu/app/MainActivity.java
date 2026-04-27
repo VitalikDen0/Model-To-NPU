@@ -111,7 +111,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
     private static final String APK_QNN_PERF_PROFILE = "burst";
-    // v0.4.6 stability-first release: keep heavyweight resident warmup disabled
+    // v0.4.7 line keeps the stability-first warmup policy disabled
     // until it is re-validated on a real phone without RAM-pressure regressions.
     private static final boolean APK_BACKGROUND_PREWARM_ENABLED = false;
     private static final boolean APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED = false;
@@ -158,12 +158,14 @@ public class MainActivity extends AppCompatActivity {
     private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
     private static final Pattern PAT_UNET  = Pattern.compile("^\\s*\\[UNet (\\d+)/(\\d+)\\][^\\n]*?\\s(\\d+)ms(?:\\s|$)");
     private static final Pattern PAT_PREV  = Pattern.compile("^\\s*\\[PREVIEW step (\\d+)/(\\d+)\\]\\s+(?:[A-Z]+(?:\\s+[A-Z]+)?\\s+)?(\\d+)ms\\s*$");
+    private static final Pattern PAT_TAESD_WARNING = Pattern.compile("^TAESD_WARNING:\\s*(.+?)\\s*$");
     private static final Pattern PAT_TEMP_LINE = Pattern.compile("^\\s*\\[TEMP\\]\\s+(.+)$");
     private static final Pattern PAT_TEMP_ITEM = Pattern.compile("(CPU|GPU|NPU)=([\\d.]+)°C");
     private static final Pattern PAT_VAE   = Pattern.compile("^\\[VAE\\]\\s+(\\d+)ms\\s*$");
     private static final Pattern PAT_SAVED = Pattern.compile("Saved:\\s+(.+\\.png)");
     private static final Pattern PAT_TOTAL = Pattern.compile("Total:\\s+([\\d.]+)s");
     private volatile String latestStageStatus = "";
+    private volatile String latestWarningStatus = "";
     private volatile String latestTempStatus = "";
     private volatile int latestProgress = 0;
 
@@ -1002,6 +1004,7 @@ public class MainActivity extends AppCompatActivity {
         saveButton.setVisibility(View.GONE);
         timingText.setVisibility(View.GONE);
         latestTempStatus = "";
+        latestWarningStatus = "";
         latestStageStatus = MODEL_FAMILY_WAN21.equals(modelFamily)
             ? "WAN 2.1 basic debug..."
             : "Запуск...";
@@ -1058,14 +1061,26 @@ public class MainActivity extends AppCompatActivity {
         renderStatus();
     }
 
+    private void updateWarningStatus(String warningStatus) {
+        latestWarningStatus = warningStatus;
+        renderStatus();
+    }
+
     private void renderStatus() {
         final String stage = latestStageStatus;
+        final String warning = latestWarningStatus;
         final String temp = latestTempStatus;
         final int progress = latestProgress;
         mainHandler.post(() -> {
             StringBuilder sb = new StringBuilder();
             if (stage != null && !stage.isEmpty()) {
                 sb.append(stage);
+            }
+            if (warning != null && !warning.isEmpty()) {
+                if (sb.length() > 0) {
+                    sb.append("\n");
+                }
+                sb.append(warning);
             }
             if (temp != null && !temp.isEmpty()) {
                 if (sb.length() > 0) {
@@ -1202,11 +1217,11 @@ public class MainActivity extends AppCompatActivity {
             script.append(" \"").append(shellEscape(prompt)).append("\"");
             script.append(" --seed ").append(seed);
             script.append(" --steps ").append(steps);
+            script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));
             script.append(" --width ").append(imgWidth);
             script.append(" --height ").append(imgHeight);
             script.append(" --name ").append(outName);
             if (cfg > 1.0f) {
-                script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));
                 if (!neg.isEmpty()) {
                     script.append(" --neg \"").append(shellEscape(neg)).append("\"");
                 }
@@ -1366,6 +1381,16 @@ public class MainActivity extends AppCompatActivity {
                                 cpu != null ? cpu : "—",
                                 gpu != null ? gpu : "—",
                                 npu != null ? npu : "—"));
+                        }
+                        continue;
+                    }
+
+                    m = PAT_TAESD_WARNING.matcher(line);
+                    if (m.find()) {
+                        String warning = m.group(1).trim();
+                        if (!warning.isEmpty()) {
+                            timingLog.append("TAESD: ").append(warning).append("\n");
+                            updateWarningStatus("⚠ TAESD: " + warning);
                         }
                         continue;
                     }
