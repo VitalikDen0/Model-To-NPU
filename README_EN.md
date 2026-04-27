@@ -2,7 +2,7 @@
 
 **Languages:** [English](README_EN.md) | [Русский](README_RU.md)
 
-> **SDXL on Snapdragon 8 Elite NPU — ~30 s total** (UNet ~19 s, VAE ~1.9 s, CLIP ~9 ms cached)
+> **Best validated historical SDXL warm path (v0.3.0) — ~30 s total** (UNet ~19 s, VAE ~1.9 s, CLIP ~9 ms cached)
 > at 1024×1024, 8 steps, CFG=3.5, progressive guidance.
 
 > [!TIP]
@@ -71,13 +71,15 @@ Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
 ### Current APK line (v0.4.6) — stability-first refresh
 
-The current public `v0.4.6` line prioritizes stability over speculative warm-state reuse: app-open background prewarm is disabled in the APK line, foreground runs no longer ask the phone runtime to aggressively prewarm all contexts / preview assets, and the packaged runtime payload marker is now derived from the staged payload fingerprint so updated `generate.py` / bundled QNN assets reliably replace stale extracted copies on-device. In this session, the updated line completed both local **debug** and **release** APK builds successfully; a fresh phone-side timing / thermal validation run is still pending because no device was attached.
+The current public `v0.4.6` line prioritizes stability over speculative warm-state reuse: app-open background prewarm is disabled in the APK line, foreground runs no longer ask the phone runtime to aggressively prewarm all contexts / preview assets, and the packaged runtime payload marker is now derived from the staged payload fingerprint so updated `generate.py` / bundled QNN assets reliably replace stale extracted copies on-device. The refreshed line has now also been re-validated by a real on-device cold-start proof shot at **34.6 s total**. Inside that run, the accelerator-visible stages sum to **~16.25 s** (`CLIP 0.134 s`, `UNet 14.248 s`, `VAE 1.872 s`), while the screenshot-visible total still includes cold start / runtime bring-up; observed fast-path thermals sat around **85–95°C** without visible throttling across a few short consecutive runs.
 
 ### v0.4.0 — Variable resolution + self-contained APK
 
 Variable resolution support (512×512 to 1536×1536, any multiple of 8). Per-resolution QNN context directories. APK resolution picker. `build_termux_prefix.py` for standalone prefix extraction.
 
 ### v0.3.0 — Persistent multi-context server
+
+In the current git history, the `0.3.x` line is represented by the single tag **`v0.3.0`**.
 
 `seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
 
@@ -100,7 +102,7 @@ Resolution: **1024×1024** (fixed)
 | v0.1.3 | 104.4 s | 91.5 s | 2.0 s | 9.0 s | mmap enabled |
 | v0.1.0 | 273.6 s | — | — | — | first public screenshot |
 
-For detailed historical data and archived experiments, see [HISTORY_EN.md](HISTORY_EN.md).
+For detailed historical data and archived `0.3.x` / `0.2.x` notes, see [HISTORY_EN.md](HISTORY_EN.md).
 
 ## How UNet ~19 s was achieved — optimization deep dive
 

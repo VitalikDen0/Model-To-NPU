@@ -79,7 +79,7 @@ In short:
 
 ## Changelog
 
-- **0.4.6** — **APK stability-first refresh + deterministic payload updates**: the Android app now keeps app-open background prewarm disabled in the public APK line, stops asking the phone runtime to aggressively prewarm all contexts / preview assets during foreground runs, and fingerprints the staged bundled runtime payload when writing `runtime_payload_version.txt`, so updated `generate.py` / bundled QNN assets reliably force a clean on-device re-extract instead of silently reusing stale extracted files. In this session, both **debug** and **release** APK builds completed successfully; a fresh phone-side timing / thermal validation run is still pending because no device was attached.
+- **0.4.6** — **APK stability-first refresh + deterministic payload updates**: the Android app now keeps app-open background prewarm disabled in the public APK line, stops asking the phone runtime to aggressively prewarm all contexts / preview assets during foreground runs, and fingerprints the staged bundled runtime payload when writing `runtime_payload_version.txt`, so updated `generate.py` / bundled QNN assets reliably force a clean on-device re-extract instead of silently reusing stale extracted files. The refreshed line has now also been re-validated by a real on-device cold-start proof shot at **34.6 s total**; inside that run, the measured accelerator-visible stages add up to **~16.25 s** (`CLIP 0.134 s`, `UNet 14.248 s`, `VAE 1.872 s`), so the screenshot-visible total still includes cold start / app/runtime bring-up overhead.
 - **0.4.5** — **APK stability rollback for late-step freezes**: the Android app now explicitly disables shared prewarm/server reuse for foreground runs, kills any app-open prewarm helper before starting generation so only one heavy QNN owner remains alive, and reverts the APK-exported QNN perf profile from `sustained_high_performance` back to `burst`. In this session, a direct phone-side validation with the same runtime env (`prompt=cat`, `seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`) completed in **29.9 s total** with **UNet 14.891 s**; the formerly problematic late unguided step returned to the expected ~`1.2 s` class (`step 7 = 1218 ms`) and the run finished without a freeze.
 - **0.4.4** — **preset-only APK smoothing pass**: the Android app now hides manual `WxH` editing and snaps generation back to the validated preset list only, decodes preview/final images to screen-sized display bitmaps instead of always pushing full-resolution UI loads, and exports the gentler `sustained_high_performance` QNN profile from the APK to reduce whole-device lag / app-crash risk during generation. This session validated compilation of the updated APK, but did not yet record a fresh on-device timing run for the new line.
 - **0.4.3** — **shared prewarm reuse + self-contained runtime hotfix**: `qnn-multi-context-server` now supports shared FIFO IPC plus deterministic context IDs, so the app-open prewarm can be reused by later foreground generate runs instead of warming a private throwaway child process. APK prewarm and foreground generation now share the same app-cache work directory and opt into `SDXL_QNN_SHARED_SERVER=1`, which is the practical path toward one logical multi-resolution QNN runtime built from multiple fixed-shape contexts. Device-side validation also hardened bundled runtime delivery: APK now forces payload refresh when the packaged runtime version changes, and shared-server startup waits for FIFO IPC readiness after `READY`, fixing the race where the first `LOAD` could fail before request/response FIFOs became visible. The refreshed public `v0.4.3` asset also releases shared prewarm after 30 seconds of foreground/background inactivity (including after generation completes), stages TAESD preview assets more aggressively inside the bundled payload so preview stops depending on stale shared-storage leftovers, prefers the APK-bundled QNN runtime over stale `/data/local/tmp` leftovers when explicit bundled paths are exported, safely restages backend-extension configs with relative paths, packages the missing core QNN runtime pieces (`qnn-net-run` plus the required HTP/System libs), tightens preview/final bitmap cleanup, moves preview PNG decode off the UI thread with a stride-4 live-preview throttle, retries transient shared-FIFO `BlockingIOError` / `InterruptedError` races during warm reuse, and prevents duplicate prewarm helpers by queue-guarding app-open launches and tracking the real Python helper via `exec`.
@@ -118,23 +118,36 @@ All gallery samples and the currently documented phone-side examples are **1024�
 <!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <b>Earlier public screenshot — 273.6s total</b><br>
       <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Earlier phone-side proof screenshot at 273.6 seconds" width="100%">
     </td>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <b>v0.2.0 public marker — 100.8s total</b><br>
       <img src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" alt="Phone-side proof screenshot for v0.2.0 at 100.8 seconds" width="100%">
     </td>
-    <td width="33%" align="center">
+  </tr>
+  <tr>
+    <td width="50%" align="center">
       <b>v0.2.3 screenshot (Live Preview ON) — 78.0s total</b><br>
       <img src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" alt="Phone-side proof screenshot for v0.2.3 at 78.0 seconds" width="100%">
+    </td>
+    <td width="50%" align="center">
+      <b>Current cold-start APK proof — 34.6s total</b><br>
+      <img src="https://github.com/user-attachments/assets/6478e08d-9c51-4bb4-a5fc-afa63300bddc" alt="Current phone-side proof screenshot at 34.6 seconds (cold start)" width="100%"><br>
+      <sub>Measured accelerator-visible time inside this run: ~16.25 s.</sub>
     </td>
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
 
-Speedup since the first public screenshot: **273.6 s → 30.4 s** (~**9× faster**, ~**89% reduction**).
+Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s**, with the fourth slot now showing the current **34.6 s cold-start APK** proof image.
+
+Inside that latest run, the accelerator-visible stages add up to **~16.25 s** total: `CLIP 0.134 s` + `UNet 14.248 s` + `VAE 1.872 s`. The screenshot-visible **34.6 s total** therefore still includes cold start / runtime bring-up / UI orchestration overhead rather than pure accelerator work.
+
+The best validated historical warm-path marker remains **30.4 s total**. The new proof slot is intentionally described as a **cold-start APK** run, not as a replacement for that warm-path number.
+
+Observed fast-path thermals in the current short-run proof cycle sat around **85–95°C** without visible throttling, so a few back-to-back generations remained practically safe/usable in the tested burst window.
 
 ## Current repository layout
 
