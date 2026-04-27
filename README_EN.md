@@ -69,9 +69,9 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
 
-### Current APK line (v0.4.5) — late-step freeze rollback
+### Current APK line (v0.4.6) — stability-first refresh
 
-The current public `v0.4.5` line keeps the recent UI/display smoothing work, but rolls back the regression-prone APK-side runtime changes that were most likely responsible for the hard late-step freezes: foreground runs now explicitly force `SDXL_QNN_SHARED_SERVER=0`, the app kills any app-open prewarm helper before starting a real generation so only one heavy QNN owner stays alive, and the APK-exported perf profile is back to `burst` instead of `sustained_high_performance`. This session also recorded a direct phone-side validation with the same env the APK now exports (`prompt=cat`, `seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`): the run finished in **29.9 s total** (`UNet 14.891 s`, `VAE 1.942 s`), and the formerly problematic late unguided region returned to the expected ~`1.2 s` class (`step 7 = 1218 ms`) without freezing the phone.
+The current public `v0.4.6` line prioritizes stability over speculative warm-state reuse: app-open background prewarm is disabled in the APK line, foreground runs no longer ask the phone runtime to aggressively prewarm all contexts / preview assets, and the packaged runtime payload marker is now derived from the staged payload fingerprint so updated `generate.py` / bundled QNN assets reliably replace stale extracted copies on-device. In this session, the updated line completed both local **debug** and **release** APK builds successfully; a fresh phone-side timing / thermal validation run is still pending because no device was attached.
 
 ### v0.4.0 — Variable resolution + self-contained APK
 
