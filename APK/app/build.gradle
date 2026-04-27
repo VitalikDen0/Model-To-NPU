@@ -1,7 +1,11 @@
+import java.security.MessageDigest
+
 plugins {
     id 'com.android.application'
 }
 
+def apkVersionCode = 30
+def apkVersionName = "0.4.6"
 def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
 def resolveExistingDir = { candidate ->
     if (candidate == null) {
@@ -93,6 +97,35 @@ def resolveQnnLibPath = { qnnLibDir, libName ->
         new File(qnnLibDir.parentFile?.parentFile, "lib/hexagon-v79/unsigned/${libName}"),
     ]
     return siblingCandidates.find { it != null && it.isFile() }
+}
+def computeDirectoryFingerprint = { dir ->
+    if (!(dir instanceof File) || !dir.isDirectory()) {
+        return "missing"
+    }
+    MessageDigest md = MessageDigest.getInstance("SHA-256")
+    List<File> files = fileTree(dir: dir).matching {
+        exclude "runtime_payload_version.txt"
+    }.files.toList()
+    files.sort { a, b ->
+        dir.toPath().relativize(a.toPath()).toString().replace('\\', '/') <=>
+            dir.toPath().relativize(b.toPath()).toString().replace('\\', '/')
+    }
+    byte[] buffer = new byte[1024 * 1024]
+    files.each { file ->
+        def relativePath = dir.toPath().relativize(file.toPath()).toString().replace('\\', '/')
+        md.update(relativePath.getBytes("UTF-8"))
+        md.update((byte) 0)
+        md.update(Long.toString(file.length()).getBytes("UTF-8"))
+        md.update((byte) 0)
+        file.withInputStream { stream ->
+            int read
+            while ((read = stream.read(buffer)) != -1) {
+                md.update(buffer, 0, read)
+            }
+        }
+        md.update((byte) 0)
+    }
+    return md.digest().encodeHex().toString()
 }
 
 tasks.register("stageBundledTermuxAssets") {
@@ -271,9 +304,12 @@ tasks.register("stageBundledTermuxAssets") {
                 }
             }
 
-            def payloadVersionFile = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload/runtime_payload_version.txt")
+            def runtimePayloadDir = new File(bundledTermuxAssetsDir, "termux_bundle/runtime_payload")
+            def payloadFingerprint = computeDirectoryFingerprint(runtimePayloadDir)
+            def payloadVersionFile = new File(runtimePayloadDir, "runtime_payload_version.txt")
             payloadVersionFile.parentFile.mkdirs()
-            payloadVersionFile.text = "apk-runtime-v0.4.5-stability-rollback\n"
+            payloadVersionFile.text = "apk-runtime-${apkVersionName}-${payloadFingerprint.substring(0, 16)}\n"
+            logger.lifecycle("Bundled runtime payload fingerprint: ${payloadVersionFile.text.trim()}")
         }
     }
 }
@@ -286,8 +322,8 @@ android {
         applicationId "com.sdxlnpu.app"
         minSdk 28
         targetSdk 34
-        versionCode 29
-        versionName "0.4.5"
+        versionCode apkVersionCode
+        versionName apkVersionName
     }
 
     buildTypes {

@@ -111,6 +111,10 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean isGenerating = false;
     private static final String PREVIEW_PNG_NAME = "preview_current.png";
     private static final String APK_QNN_PERF_PROFILE = "burst";
+    // v0.4.6 stability-first release: keep heavyweight resident warmup disabled
+    // until it is re-validated on a real phone without RAM-pressure regressions.
+    private static final boolean APK_BACKGROUND_PREWARM_ENABLED = false;
+    private static final boolean APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED = false;
     private static final int PREVIEW_DISPLAY_MAX_EDGE = 640;
     private static final int FINAL_DISPLAY_MAX_EDGE = 960;
     private volatile Boolean rootShellAvailable = null;
@@ -224,7 +228,7 @@ public class MainActivity extends AppCompatActivity {
             selectSizePresetForCurrentInputs();
             if (isChecked) {
                 killPrewarmNow("switch to WAN/basic-debug mode");
-            } else {
+            } else if (APK_BACKGROUND_PREWARM_ENABLED) {
                 startPrewarm();
             }
             checkPrerequisites();
@@ -238,7 +242,9 @@ public class MainActivity extends AppCompatActivity {
         checkPrerequisites();
 
         // Start prewarm in background
-        startPrewarm();
+        if (APK_BACKGROUND_PREWARM_ENABLED) {
+            startPrewarm();
+        }
     }
 
     @Override
@@ -247,7 +253,7 @@ public class MainActivity extends AppCompatActivity {
         // Cancel any pending prewarm kill from minimize
         cancelScheduledPrewarmKill();
         // Restart prewarm if it was killed
-        if (prewarmProcess == null || !prewarmProcess.isAlive()) {
+        if (APK_BACKGROUND_PREWARM_ENABLED && (prewarmProcess == null || !prewarmProcess.isAlive())) {
             startPrewarm();
         }
     }
@@ -307,6 +313,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startPrewarm() {
+        if (!APK_BACKGROUND_PREWARM_ENABLED) {
+            Log.i(TAG, "startPrewarm: disabled for stability-first APK line");
+            return;
+        }
         if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily())) {
             Log.i(TAG, "startPrewarm: skip for WAN/basic-debug mode");
             return;
@@ -807,6 +817,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void restoreOrSchedulePrewarm(String reason) {
+        if (!APK_BACKGROUND_PREWARM_ENABLED) {
+            return;
+        }
         if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily()) || isGenerating) {
             return;
         }
@@ -1110,8 +1123,12 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_QNN_SHARED_SERVER=0\n");
         script.append("export SDXL_QNN_ASYNC_PREP=1\n");
         script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
-        script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=1\n");
-        script.append("export SDXL_QNN_PREWARM_PREVIEW=1\n");
+        script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=")
+            .append(APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED ? "1" : "0")
+            .append("\n");
+        script.append("export SDXL_QNN_PREWARM_PREVIEW=")
+            .append(APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED && preview && !wanMode ? "1" : "0")
+            .append("\n");
         script.append("export SDXL_QNN_CLIP_CACHE=1\n");
         script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
         script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
