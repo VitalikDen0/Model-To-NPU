@@ -4,6 +4,8 @@ This document preserves historical performance measurements, optimization experi
 
 **Languages:** [English](HISTORY_EN.md) | [Русский](HISTORY_RU.md)
 
+In the current git history, the `0.3.x` line is represented by the single tag **`v0.3.0`**.
+
 ---
 
 ## Historical timeline
@@ -40,10 +42,11 @@ This document preserves historical performance measurements, optimization experi
 - That run was real, but the exact phone-side state was not archived before a factory reset, so it is now historical rather than reproducible.
 - UNet step progression: CFG steps 1..4: `9.765 → 8.230 → 8.386 → 7.936 s`; no-guidance steps 5..8: `5.377 → 5.513 → 5.294 → 5.479 s`.
 
-### v0.2.4-beta — Native C accelerator
+### v0.2.4 — Native C accelerator / runtime groundwork
 
 - Optional native C accelerator for scheduler/layout hot spots.
 - Transition snapshot; exact APK artifact not preserved.
+- The work-in-progress commit message still used the label `v0.2.4-beta`, but the published repository tag is **`v0.2.4`**.
 
 ### v0.2.5 — Burst mode, runtime accel staging fix
 
