@@ -41,14 +41,6 @@ Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM), `seed=44`, `steps=8`, `C
 
 **Speedup history:** 273.6 s → 104.4 s → 75.6 s → **30.4 s** (current)
 
-## APK Changelog (last 5)
-
-- **v0.4.8-beta**: bundled Python 3.13 runtime (Termux-free), dual base-dir Settings (root + no-root) with auto-switch, TAESD live preview intentionally disabled (HTP causes +200 ms/step; GPU linker restriction; pending fix)
-- **v0.4.7**: stability-first refresh; exact CFG forwarding (including 1.0); TAESD failures shown as non-critical UI warning
-- **v0.4.6**: stability-first packaging; background prewarm disabled in public line
-- **v0.4.3**: shared FIFO-backed `_QnnMultiContextServer`; bundled runtime re-extraction on payload change; TAESD preview assets bundled in payload
-- **v0.4.0**: variable resolution; self-contained APK with bundled QNN runtime
-
 ## Quick links
 
 - [English documentation](README_EN.md)
@@ -87,6 +79,8 @@ In short:
 
 ## Changelog
 
+- **0.4.8-beta2** — **APK runtime bug hotfix + error-copy UX**: fixed a generation runtime bug in the Android app line, added explicit error-state handling with a dedicated bottom “Copy error” action for long runtime failures, and hardened input validation in the APK flow (including safer seed parsing) to reduce crash-like failure paths.
+- **0.4.8-beta** — **APK bundled runtime + dual-path settings + TAESD off**: the Android app now ships a bundled `py_runtime` (Python 3.13 + numpy + Pillow) for Termux-free generation on supported devices, adds separate Settings paths for no-root (`/sdcard/Download/sdxl_qnn`) and root (`/data/local/tmp/sdxl_qnn`) with startup auto-switch to root when accessible, and intentionally disables TAESD live preview in this beta (`SDXL_QNN_TAESD_BACKEND=off`) because shared HTP TAESD added about +200 ms per UNet step while the GPU backend remains blocked by Android linker namespace restrictions in app process.
 - **0.4.7** — **APK CFG/TAESD UX hotfix**: the Android app now always forwards the exact user-selected CFG value including **`1.0`**, so `CFG=1.0` no longer silently falls back to the phone runtime default `3.5`; `--prog-cfg` still remains gated to real guidance-enabled runs only. TAESD/live-preview failures are now surfaced as explicit **non-critical warnings** in the APK status/timing UI while generation continues, and the local docs tree is synced with the currently published **34.6 s cold-start proof** image from GitHub. In this session, fresh local **debug** and **release** APK builds passed for `v0.4.7`.
 - **0.4.6** — **APK stability-first refresh + deterministic payload updates**: the Android app now keeps app-open background prewarm disabled in the public APK line, stops asking the phone runtime to aggressively prewarm all contexts / preview assets during foreground runs, and fingerprints the staged bundled runtime payload when writing `runtime_payload_version.txt`, so updated `generate.py` / bundled QNN assets reliably force a clean on-device re-extract instead of silently reusing stale extracted files. The refreshed line has now also been re-validated by a real on-device cold-start proof shot at **34.6 s total**; inside that run, the measured accelerator-visible stages add up to **~16.25 s** (`CLIP 0.134 s`, `UNet 14.248 s`, `VAE 1.872 s`), so the screenshot-visible total still includes cold start / app/runtime bring-up overhead.
 - **0.4.5** — **APK stability rollback for late-step freezes**: the Android app now explicitly disables shared prewarm/server reuse for foreground runs, kills any app-open prewarm helper before starting generation so only one heavy QNN owner remains alive, and reverts the APK-exported QNN perf profile from `sustained_high_performance` back to `burst`. In this session, a direct phone-side validation with the same runtime env (`prompt=cat`, `seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`) completed in **29.9 s total** with **UNet 14.891 s**; the formerly problematic late unguided step returned to the expected ~`1.2 s` class (`step 7 = 1218 ms`) and the run finished without a freeze.
@@ -146,7 +140,6 @@ All gallery samples and the currently documented phone-side examples are **1024�
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
-
 
 Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s**, with the fourth slot now showing the current **34.6 s cold-start APK** proof image.
 
