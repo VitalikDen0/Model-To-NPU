@@ -31,6 +31,22 @@
                 android:textSize="14sp" />
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Root base directory (root mode) -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="@string/settings_root_base_dir_hint">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/rootBaseDirInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textNoSuggestions"
+                android:fontFamily="monospace"
+                android:textSize="14sp" />
+        </com.google.android.material.textfield.TextInputLayout>
+
         <!-- Python path -->
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"

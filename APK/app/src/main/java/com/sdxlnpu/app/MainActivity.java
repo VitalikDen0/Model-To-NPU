@@ -75,6 +75,7 @@ public class MainActivity extends AppCompatActivity {
     };
 
     private String BASE_DIR;
+    private String ROOT_BASE_DIR;
     private String GEN_SCRIPT;
     private String OUTPUT_DIR;
     private String PYTHON;
@@ -247,6 +248,15 @@ public class MainActivity extends AppCompatActivity {
         if (APK_BACKGROUND_PREWARM_ENABLED) {
             startPrewarm();
         }
+
+        // Pre-extract py_runtime in background so it's ready when generation starts
+        executor.submit(() -> {
+            try {
+                RuntimeBootstrap.ensurePyRuntimeExtracted(this);
+            } catch (Exception e) {
+                Log.w(TAG, "Background py_runtime extraction failed: " + e.getMessage());
+            }
+        });
     }
 
     @Override
@@ -433,6 +443,8 @@ public class MainActivity extends AppCompatActivity {
         String detectedPython = SettingsActivity.detectDefaultPython(detectedBaseDir);
         BASE_DIR = prefs.getString(SettingsActivity.KEY_BASE_DIR,
             detectedBaseDir);
+        ROOT_BASE_DIR = prefs.getString(SettingsActivity.KEY_ROOT_BASE_DIR,
+            SettingsActivity.DEFAULT_ROOT_BASE_DIR);
         PYTHON = prefs.getString(SettingsActivity.KEY_PYTHON_PATH,
             detectedPython);
         GEN_SCRIPT = BASE_DIR + "/phone_gen/generate.py";
@@ -888,6 +900,10 @@ public class MainActivity extends AppCompatActivity {
             }
             return SettingsActivity.WAN_DOWNLOADS_BASE_DIR;
         }
+        // SDXL: auto-switch to root path if accessible
+        if (ROOT_BASE_DIR != null && !ROOT_BASE_DIR.isEmpty() && new File(ROOT_BASE_DIR).exists()) {
+            return ROOT_BASE_DIR;
+        }
         return BASE_DIR != null && !BASE_DIR.isEmpty()
             ? BASE_DIR
             : SettingsActivity.detectDefaultBaseDir();
@@ -1171,10 +1187,13 @@ public class MainActivity extends AppCompatActivity {
                     .append("\"\n");
             }
 
-            File bundledTaesdContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.serialized.bin.bin");
-            if (bundledTaesdContext.isFile()) {
+            // Prefer HTP context (NPU) over GPU context for TAESD preview
+            File bundledTaesdHtpContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_htp.bin");
+            File bundledTaesdGpuContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.serialized.bin.bin");
+            File taesdContextToUse = bundledTaesdHtpContext.isFile() ? bundledTaesdHtpContext : bundledTaesdGpuContext;
+            if (taesdContextToUse.isFile()) {
                 script.append("export SDXL_QNN_TAESD_CONTEXT=\"")
-                    .append(shellEscape(bundledTaesdContext.getAbsolutePath()))
+                    .append(shellEscape(taesdContextToUse.getAbsolutePath()))
                     .append("\"\n");
             }
 
@@ -1185,13 +1204,11 @@ public class MainActivity extends AppCompatActivity {
                     .append("\"\n");
             }
 
-            File bundledTaesdGpuLib = new File(bundledRuntimePayloadDir, "phone_gen/lib/libQnnGpu.so");
-            if (bundledTaesdGpuLib.isFile()) {
-                script.append("export SDXL_QNN_TAESD_BACKEND=gpu\n");
-                script.append("export SDXL_QNN_TAESD_BACKEND_LIB=\"")
-                    .append(shellEscape(bundledTaesdGpuLib.getAbsolutePath()))
-                    .append("\"\n");
-            }
+            // TAESD preview disabled in v0.4.8-beta:
+            // HTP shares server with UNet → +200ms/step overhead; GPU backend (libQnnGpu.so)
+            // fails with dlerror(): null in app process (Android linker namespace restriction).
+            // Re-enable when dedicated GPU backend is resolved.
+            script.append("export SDXL_QNN_TAESD_BACKEND=off\n");
         }
         if (!bundledQnnConfigReady) {
             script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
@@ -1561,10 +1578,29 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean shouldUseRootShell(String baseDir, String pythonCommand) {
+        // py_runtime path is in app's own filesDir — never needs root
+        String pyRuntimePython = RuntimeBootstrap.findBundledPyRuntimePython(this);
+        if (pyRuntimePython != null && pyRuntimePython.equals(pythonCommand)) {
+            return false;
+        }
         return isLegacyBaseDir(baseDir) || looksLikePrivatePythonPath(pythonCommand);
     }
 
     private void appendShellEnvironment(StringBuilder script) {
+        // Prefer py_runtime (no-root, self-contained Python bundle)
+        String pyRuntimePython = RuntimeBootstrap.findBundledPyRuntimePython(this);
+        if (pyRuntimePython != null) {
+            String home = RuntimeBootstrap.getPyRuntimeHome(this);
+            String libDir = RuntimeBootstrap.getPyRuntimeLibDir(this);
+            String binDir = new File(home, "bin").getAbsolutePath();
+            script.append("export PYTHONHOME=\"").append(shellEscape(home)).append("\"\n");
+            script.append("export LD_LIBRARY_PATH=\"")
+                .append(shellEscape(libDir)).append(":$LD_LIBRARY_PATH\"\n");
+            script.append("export PATH=\"")
+                .append(shellEscape(binDir)).append(":$PATH\"\n");
+            return;
+        }
+        // Fall back to bundled Termux prefix
         File bundledPrefix = RuntimeBootstrap.getBundledPrefixDir(this);
         if (bundledPrefix.isDirectory()) {
             File bundledBin = new File(bundledPrefix, "bin");
@@ -1583,17 +1619,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private ExecutionPlan resolveExecutionPlan(String activeBaseDir) throws IOException, InterruptedException {
+        // Try to extract py_runtime (no-root, self-contained Python bundle)
+        try {
+            RuntimeBootstrap.ensurePyRuntimeExtracted(this);
+        } catch (IOException ignored) {
+            // py_runtime extraction failed or not bundled; continue with other options
+        }
+        // Also try bundled Termux assets (root path)
         try {
             RuntimeBootstrap.ensureBundledAssetsExtracted(this);
         } catch (IOException ignored) {
             // Fall back to external Python discovery if bundle extraction failed.
         }
 
+        String pyRuntimePython = RuntimeBootstrap.findBundledPyRuntimePython(this);
         String bundledPython = RuntimeBootstrap.findBundledPython(this);
         String detectedPython = SettingsActivity.detectDefaultPython(activeBaseDir);
         LinkedHashSet<String> noRootCandidates = new LinkedHashSet<>();
         LinkedHashSet<String> rootCandidates = new LinkedHashSet<>();
 
+        // py_runtime is the top-priority no-root candidate
+        addIfPresent(noRootCandidates, pyRuntimePython);
         addIfPresent(noRootCandidates, bundledPython);
         if (!looksLikePrivatePythonPath(PYTHON)) {
             addIfPresent(noRootCandidates, PYTHON);

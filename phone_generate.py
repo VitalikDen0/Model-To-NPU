@@ -1436,6 +1436,8 @@ def _daemon_supports_context(ctx_path: str | None) -> bool:
         return name in {
             "unet_encoder_fp16.serialized.bin.bin",
             "unet_decoder_fp16.serialized.bin.bin",
+            "taesd_htp.bin",
+            "taesd_htp.serialized.bin.bin",
         }
 
     allowed = {part.strip() for part in QNN_DAEMON_CONTEXT_SCOPE.split(",") if part.strip()}
@@ -3025,6 +3027,9 @@ def _preview_step_qnn(latents: np.ndarray, plan: dict) -> float:
     np.transpose(latents, (0, 2, 3, 1)).astype(np.float16, copy=False).tofile(lat_path)
     _write_input_list_once(il_path, [lat_path])
 
+    # For HTP backend, omit net_run_path so qnn_run() can use server/daemon mode.
+    # For GPU or custom net_run, pass the explicit path.
+    _is_htp = plan.get("backend_lib", "").endswith("libQnnHtp.so")
     ms = qnn_run(
         plan.get("ctx_path"),
         il_path,
@@ -3035,7 +3040,7 @@ def _preview_step_qnn(latents: np.ndarray, plan: dict) -> float:
         model_path=plan.get("model_path"),
         config_file=TAESD_CONFIG_FILE or "",
         use_mmap=(plan["mode"] == "context"),
-        net_run_path=TAESD_QNN_NET_RUN,
+        net_run_path=None if _is_htp else TAESD_QNN_NET_RUN,
         profile_tag="taesd_preview",
     )
     # Infer expected image resolution from latent shape

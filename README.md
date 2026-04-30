@@ -41,6 +41,14 @@ Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM), `seed=44`, `steps=8`, `C
 
 **Speedup history:** 273.6 s → 104.4 s → 75.6 s → **30.4 s** (current)
 
+## APK Changelog (last 5)
+
+- **v0.4.8-beta**: bundled Python 3.13 runtime (Termux-free), dual base-dir Settings (root + no-root) with auto-switch, TAESD live preview intentionally disabled (HTP causes +200 ms/step; GPU linker restriction; pending fix)
+- **v0.4.7**: stability-first refresh; exact CFG forwarding (including 1.0); TAESD failures shown as non-critical UI warning
+- **v0.4.6**: stability-first packaging; background prewarm disabled in public line
+- **v0.4.3**: shared FIFO-backed `_QnnMultiContextServer`; bundled runtime re-extraction on payload change; TAESD preview assets bundled in payload
+- **v0.4.0**: variable resolution; self-contained APK with bundled QNN runtime
+
 ## Quick links
 
 - [English documentation](README_EN.md)
