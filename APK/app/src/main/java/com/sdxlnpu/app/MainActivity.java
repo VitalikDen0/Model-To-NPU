@@ -1,5 +1,7 @@
 package com.sdxlnpu.app;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -97,6 +99,7 @@ public class MainActivity extends AppCompatActivity {
     private MaterialButton generateButton;
     private MaterialButton saveButton;
     private MaterialButton stopButton;
+    private MaterialButton copyErrorButton;
     private ProgressBar progressBar;
     private TextView statusText;
     private TextView timingText;
@@ -168,6 +171,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile String latestStageStatus = "";
     private volatile String latestWarningStatus = "";
     private volatile String latestTempStatus = "";
+    private volatile String lastErrorDetails = "";
     private volatile int latestProgress = 0;
 
     @Override
@@ -192,6 +196,7 @@ public class MainActivity extends AppCompatActivity {
         generateButton  = findViewById(R.id.generateButton);
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
+        copyErrorButton = findViewById(R.id.copyErrorButton);
         progressBar = findViewById(R.id.progressBar);
         statusText = findViewById(R.id.statusText);
         timingText = findViewById(R.id.timingText);
@@ -240,6 +245,7 @@ public class MainActivity extends AppCompatActivity {
         generateButton.setOnClickListener(v -> startGeneration());
         saveButton.setOnClickListener(v -> saveImage());
         stopButton.setOnClickListener(v -> stopGeneration());
+        copyErrorButton.setOnClickListener(v -> copyLastErrorToClipboard());
 
         // Check prerequisites
         checkPrerequisites();
@@ -917,6 +923,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void checkPrerequisites() {
+        clearErrorState();
         String modelFamily = getSelectedModelFamily();
         String activeBaseDir = resolveActiveBaseDir(modelFamily);
         if (!shouldUseRootShell(activeBaseDir, PYTHON) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
@@ -979,9 +986,15 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String seedStr = seedInput.getText().toString().trim();
-        long seed = seedStr.isEmpty()
-            ? (new Random().nextInt(900000) + 100000)
-            : Long.parseLong(seedStr);
+        long seed;
+        try {
+            seed = seedStr.isEmpty()
+                ? (new Random().nextInt(900000) + 100000)
+                : Long.parseLong(seedStr);
+        } catch (NumberFormatException e) {
+            Toast.makeText(this, "Seed должен быть числом", Toast.LENGTH_SHORT).show();
+            return;
+        }
         int steps = stepsSeekBar.getProgress();
         float cfg = cfgSeekBar.getProgress() / 10f;
         String neg = negPromptInput.getText().toString().trim();
@@ -1019,6 +1032,7 @@ public class MainActivity extends AppCompatActivity {
         progressBar.setProgress(0);
         saveButton.setVisibility(View.GONE);
         timingText.setVisibility(View.GONE);
+        clearErrorState();
         latestTempStatus = "";
         latestWarningStatus = "";
         latestStageStatus = MODEL_FAMILY_WAN21.equals(modelFamily)
@@ -1034,7 +1048,7 @@ public class MainActivity extends AppCompatActivity {
                 isGenerating = false;
                 mainHandler.post(() -> {
                     latestTempStatus = "";
-                    latestStageStatus = "Ошибка: " + e.getMessage();
+                    showErrorState(getString(R.string.status_error_short), "Ошибка: " + (e.getMessage() != null ? e.getMessage() : "unknown"));
                     renderStatus();
                     generateButton.setEnabled(true);
                     stopButton.setVisibility(View.GONE);
@@ -1054,6 +1068,7 @@ public class MainActivity extends AppCompatActivity {
         cancelPreviewPolling();
         isGenerating = false;
         mainHandler.post(() -> {
+            clearErrorState();
             latestTempStatus = "";
             latestStageStatus = "Остановлено";
             renderStatus();
@@ -1107,6 +1122,36 @@ public class MainActivity extends AppCompatActivity {
             statusText.setText(sb.toString());
             progressBar.setProgress(progress);
         });
+    }
+
+    private void clearErrorState() {
+        lastErrorDetails = "";
+        if (copyErrorButton != null) {
+            copyErrorButton.setVisibility(View.GONE);
+        }
+    }
+
+    private void showErrorState(String statusMessage, String details) {
+        latestStageStatus = statusMessage;
+        lastErrorDetails = (details != null && !details.trim().isEmpty())
+            ? details.trim()
+            : statusMessage;
+        if (copyErrorButton != null) {
+            copyErrorButton.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void copyLastErrorToClipboard() {
+        String textToCopy = (lastErrorDetails != null && !lastErrorDetails.trim().isEmpty())
+            ? lastErrorDetails.trim()
+            : statusText.getText().toString();
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard == null || textToCopy.isEmpty()) {
+            Toast.makeText(this, "Нет текста ошибки для копирования", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("sdxl_error", textToCopy));
+        Toast.makeText(this, getString(R.string.error_copied), Toast.LENGTH_SHORT).show();
     }
 
     private void runPipeline(String prompt, long seed, int steps,
@@ -1489,6 +1534,7 @@ public class MainActivity extends AppCompatActivity {
                 timingLog.toString()
             );
             mainHandler.post(() -> {
+                clearErrorState();
                 latestTempStatus = "";
                 latestStageStatus = finalWanStatus;
                 clearDisplayedImage(true);
@@ -1525,6 +1571,7 @@ public class MainActivity extends AppCompatActivity {
 
         final String finalTiming = timingLog.toString();
         mainHandler.post(() -> {
+            clearErrorState();
             latestTempStatus = "";
             latestStageStatus = "Готово!";
             showFinalBitmap(bitmap);

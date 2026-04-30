@@ -13,7 +13,13 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.4.8-beta`**.
+Current documented APK version: **`0.4.8-beta2`**.
+
+### v0.4.8-beta2 — Runtime bug fix and error copy UX
+
+- fixed a runtime bug in the APK line that could cause generation startup/runtime failures on some configurations;
+- added a dedicated bottom **“Copy error”** action that appears only in error state and copies full error details to clipboard;
+- hardened invalid `seed` and related UI error paths to reduce crash-like behavior.
 
 ### v0.4.8-beta — Bundled Python runtime, no-root path, dual-dir Settings
 
