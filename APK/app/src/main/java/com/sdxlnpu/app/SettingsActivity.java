@@ -24,9 +24,11 @@ public class SettingsActivity extends AppCompatActivity {
 
     public static final String PREFS_NAME = "sdxl_npu_prefs";
     public static final String KEY_BASE_DIR = "base_dir";
+    public static final String KEY_ROOT_BASE_DIR = "root_base_dir";
     public static final String KEY_PYTHON_PATH = "python_path";
     public static final String DOWNLOADS_BASE_DIR = "/sdcard/Download/sdxl_qnn";
     public static final String LEGACY_BASE_DIR = "/data/local/tmp/sdxl_qnn";
+    public static final String DEFAULT_ROOT_BASE_DIR = LEGACY_BASE_DIR;
     public static final String WAN_DOWNLOADS_BASE_DIR = "/sdcard/Download/wan21_t2v_qnn";
     public static final String WAN_LEGACY_BASE_DIR = "/data/local/tmp/wan21_t2v_qnn";
     public static final String DEFAULT_BASE_DIR = DOWNLOADS_BASE_DIR;
@@ -34,6 +36,7 @@ public class SettingsActivity extends AppCompatActivity {
     public static final String LEGACY_PYTHON = "/data/data/com.termux/files/usr/bin/python3";
 
     private TextInputEditText baseDirInput;
+    private TextInputEditText rootBaseDirInput;
     private TextInputEditText pythonPathInput;
 
     @Override
@@ -47,6 +50,7 @@ public class SettingsActivity extends AppCompatActivity {
         }
 
         baseDirInput = findViewById(R.id.baseDirInput);
+        rootBaseDirInput = findViewById(R.id.rootBaseDirInput);
         pythonPathInput = findViewById(R.id.pythonPathInput);
 
         MaterialButton saveBtn = findViewById(R.id.saveSettingsButton);
@@ -58,6 +62,7 @@ public class SettingsActivity extends AppCompatActivity {
         String detectedBaseDir = detectDefaultBaseDir();
         String detectedPython = detectDefaultPython(detectedBaseDir);
         baseDirInput.setText(prefs.getString(KEY_BASE_DIR, detectedBaseDir));
+        rootBaseDirInput.setText(prefs.getString(KEY_ROOT_BASE_DIR, DEFAULT_ROOT_BASE_DIR));
         pythonPathInput.setText(prefs.getString(KEY_PYTHON_PATH, detectedPython));
 
         saveBtn.setOnClickListener(v -> saveSettings());
@@ -76,6 +81,7 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void saveSettings() {
         String baseDir = baseDirInput.getText().toString().trim();
+        String rootBaseDir = rootBaseDirInput.getText().toString().trim();
         String python = pythonPathInput.getText().toString().trim();
 
         if (baseDir.isEmpty()) baseDir = detectDefaultBaseDir();
@@ -83,6 +89,7 @@ public class SettingsActivity extends AppCompatActivity {
 
         // Basic validation — no command injection
         if (baseDir.contains(";") || baseDir.contains("&") || baseDir.contains("|")
+            || rootBaseDir.contains(";") || rootBaseDir.contains("&") || rootBaseDir.contains("|")
             || python.contains(";") || python.contains("&") || python.contains("|")) {
             Toast.makeText(this, "Недопустимые символы в пути", Toast.LENGTH_SHORT).show();
             return;
@@ -90,6 +97,7 @@ public class SettingsActivity extends AppCompatActivity {
 
         SharedPreferences.Editor editor = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit();
         editor.putString(KEY_BASE_DIR, baseDir);
+        editor.putString(KEY_ROOT_BASE_DIR, rootBaseDir.isEmpty() ? DEFAULT_ROOT_BASE_DIR : rootBaseDir);
         editor.putString(KEY_PYTHON_PATH, python);
         editor.apply();
 
@@ -101,6 +109,7 @@ public class SettingsActivity extends AppCompatActivity {
     private void resetSettings() {
         String detectedBaseDir = detectDefaultBaseDir();
         baseDirInput.setText(detectedBaseDir);
+        rootBaseDirInput.setText(DEFAULT_ROOT_BASE_DIR);
         pythonPathInput.setText(detectDefaultPython(detectedBaseDir));
         Toast.makeText(this, "Сброшено к значениям по умолчанию", Toast.LENGTH_SHORT).show();
     }

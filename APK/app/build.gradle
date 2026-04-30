@@ -4,8 +4,8 @@ plugins {
     id 'com.android.application'
 }
 
-def apkVersionCode = 31
-def apkVersionName = "0.4.7"
+def apkVersionCode = 34
+def apkVersionName = "0.4.8"
 def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
 def resolveExistingDir = { candidate ->
     if (candidate == null) {
@@ -272,6 +272,26 @@ tasks.register("stageBundledTermuxAssets") {
                 }
             }
 
+            // Bundle HTP context for TAESD (device-compiled, preferred over GPU)
+            def taesdHtpContextCandidates = [
+                new File("D:/platform-tools/sdxl_npu/taesd_decoder/taesd_htp.bin"),
+                new File("D:/platform-tools/sdxl_npu/taesd_decoder/context/taesd_htp.bin"),
+                new File("D:/platform-tools/NPU/taesd_decoder/taesd_htp.bin"),
+                new File(bundledRepoRoot, "build/taesd_htp.bin"),
+            ]
+            def taesdHtpContext = taesdHtpContextCandidates.find { it.isFile() }
+            if (taesdHtpContext != null) {
+                copy {
+                    into bundledTermuxAssetsDir
+                    from(taesdHtpContext) {
+                        into "termux_bundle/runtime_payload/phone_gen"
+                    }
+                }
+                logger.lifecycle("Bundled TAESD HTP context: ${taesdHtpContext}")
+            } else {
+                logger.lifecycle("TAESD HTP context not found — will fall back to GPU context")
+            }
+
             def taesdModelCandidates = [
                 new File("D:/platform-tools/sdxl_npu/taesd_decoder/android_lib_rebuild/libTAESDDecoder.so"),
                 new File("D:/platform-tools/sdxl_npu/taesd_decoder/android_lib/libTAESDDecoder.so"),
@@ -310,6 +330,22 @@ tasks.register("stageBundledTermuxAssets") {
             payloadVersionFile.parentFile.mkdirs()
             payloadVersionFile.text = "apk-runtime-${apkVersionName}-${payloadFingerprint.substring(0, 16)}\n"
             logger.lifecycle("Bundled runtime payload fingerprint: ${payloadVersionFile.text.trim()}")
+        }
+
+        // Bundle pre-built Python 3.13 + numpy + PIL runtime (no-root path)
+        if (bundledLocalToolsDir != null) {
+            def pyRuntimeZip = new File(bundledLocalToolsDir, "py_runtime/py_runtime.zip")
+            if (pyRuntimeZip.isFile()) {
+                copy {
+                    into bundledTermuxAssetsDir
+                    from(pyRuntimeZip) {
+                        into "."
+                    }
+                }
+                logger.lifecycle("Bundled py_runtime.zip (${pyRuntimeZip.length() / 1024 / 1024}MB)")
+            } else {
+                logger.warn("py_runtime.zip not found at ${pyRuntimeZip}, skipping no-root Python bundle")
+            }
         }
     }
 }

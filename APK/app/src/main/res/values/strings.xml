@@ -21,7 +21,8 @@
     <string name="settings">Настройки</string>
     <string name="settings_title">Настройки моделей</string>
     <string name="settings_desc">Укажите путь к общей папке с моделями на телефоне.\nПо умолчанию используется /sdcard/Download/sdxl_qnn.\nДля WAN 2.1 basic debug APK также ищет /data/local/tmp/wan21_t2v_qnn и /sdcard/Download/wan21_t2v_qnn.\nМодели можно задеплоить через scripts/deploy_to_phone.py или скопировать вручную.</string>
-    <string name="settings_base_dir_hint">Путь к папке моделей на телефоне</string>
+    <string name="settings_base_dir_hint">Путь (no-root: /sdcard/Download/sdxl_qnn)</string>
+    <string name="settings_root_base_dir_hint">Путь (root: /data/local/tmp/sdxl_qnn)</string>
     <string name="settings_python_hint">Команда или путь к Python3</string>
     <string name="settings_verify">Проверить файлы</string>
     <string name="settings_save">Сохранить</string>
