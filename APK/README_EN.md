@@ -13,7 +13,15 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.4.8-beta2`**.
+Current documented APK version: **`0.4.8-beta3`**.
+
+### v0.4.8-beta3 — speed-fix release (HTP perf tuning)
+
+- `qnn-multi-context-server` perf execution path was strengthened (DCVS off, MAX corners, RPC latency/polling controls);
+- local validation improved decoder latency from roughly `~820 ms` to around `~725–776 ms`;
+- a residual ~`50 ms` tail versus the historical `v0.4.7` ideal marker is still not fully explained and is tracked as a known release limitation.
+
+**Roadmap note:** SDXL is temporarily frozen as a product branch; active development focus moves to **WAN** and **FLUX**. SD1.5/SD3.5 remain developer training testbeds (not mandatory deliverables).
 
 ### v0.4.8-beta2 — Runtime bug fix and error copy UX
 
