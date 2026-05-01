@@ -4,7 +4,6 @@
 
 > **Best validated historical SDXL warm path (v0.3.0) — ~30 s total** (UNet ~19 s, VAE ~1.9 s, CLIP ~9 ms cached)
 > at 1024×1024, 8 steps, CFG=3.5, progressive guidance.
-
 > [!TIP]
 > End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
 > Work on **SD3**, **Flux**, **Wan** and other model families has started — they will be released as the methods are developed and validated.
@@ -43,6 +42,8 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 - **Status of scripts:** full practical SDXL loop (checkpoint → image) re-validated on current layout
 - **Status of docs:** updated to the current known layout
 
+**Roadmap update (v0.4.8-beta3):** SDXL is temporarily frozen as a product direction while active engineering focus moves to **WAN** and **FLUX**. SD1.5 and SD3.5 are treated as **developer training testbeds** for method learning/debugging rather than mandatory deliverables.
+
 ## Requirements for the current SDXL pipeline
 
 ### Phone
@@ -68,6 +69,12 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 ## Performance
 
 Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM):
+
+### v0.4.8-beta3 — generation speed fixes + known residual latency
+
+`qnn-multi-context-server` HTP perf-mode was tuned to a stronger burst-like profile (DCVS disabled, MAX corners, RPC latency/polling controls). Local validation reduced split-UNet decoder latency from the ~`820 ms` class to roughly ~`725–776 ms`.
+
+There is still a residual ~`50 ms` decoder gap versus the historical `v0.4.7` ideal marker in this environment. Direct code-path comparison did not fully explain that tail yet, so it is documented explicitly for this release.
 
 ### Current APK line (v0.4.7) — stability-first refresh + CFG/TAESD hotfixes
 

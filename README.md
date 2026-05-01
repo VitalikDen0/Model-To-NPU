@@ -2,10 +2,11 @@
 
 > **SDXL on Snapdragon 8 Elite NPU — ~30 s total** (UNet ~19 s, VAE ~1.9 s, CLIP ~9 ms cached)
 > at 1024×1024, 8 steps, CFG=3.5, progressive guidance.
-
 > [!TIP]
 > End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
 > Work on **SD3**, **Flux**, **Wan** and other model families has started — they will be released as the methods are developed and validated.
+
+**Roadmap update (v0.4.8-beta3):** SDXL is temporarily frozen as a product direction while core effort shifts to **WAN** and **FLUX**. SD1.5 and SD3.5 will be kept as **developer training testbeds** ("обучающие стенды") — useful for method learning/debug, but not mandatory deliverables.
 
 <p align="center">
   <a href="README_EN.md"><img src="https://img.shields.io/badge/docs-English-0A66C2?style=for-the-badge" alt="English docs"></a>
@@ -79,6 +80,7 @@ In short:
 
 ## Changelog
 
+- **0.4.8-beta3** — **generation speed fixes + release freeze note**: tuned `qnn-multi-context-server` HTP perf mode to a stronger burst-like profile (DCVS disabled, MAX corners, RPC latency/polling controls), which reduced decoder latency from the ~`820 ms` class to ~`725–776 ms` in local validation. A residual ~`50 ms` gap vs the historical `v0.4.7` ideal path is still present and not fully explained after direct code/path comparison; this release documents it explicitly instead of hiding it.
 - **0.4.8-beta2** — **APK runtime bug hotfix + error-copy UX**: fixed a generation runtime bug in the Android app line, added explicit error-state handling with a dedicated bottom “Copy error” action for long runtime failures, and hardened input validation in the APK flow (including safer seed parsing) to reduce crash-like failure paths.
 - **0.4.8-beta** — **APK bundled runtime + dual-path settings + TAESD off**: the Android app now ships a bundled `py_runtime` (Python 3.13 + numpy + Pillow) for Termux-free generation on supported devices, adds separate Settings paths for no-root (`/sdcard/Download/sdxl_qnn`) and root (`/data/local/tmp/sdxl_qnn`) with startup auto-switch to root when accessible, and intentionally disables TAESD live preview in this beta (`SDXL_QNN_TAESD_BACKEND=off`) because shared HTP TAESD added about +200 ms per UNet step while the GPU backend remains blocked by Android linker namespace restrictions in app process.
 - **0.4.7** — **APK CFG/TAESD UX hotfix**: the Android app now always forwards the exact user-selected CFG value including **`1.0`**, so `CFG=1.0` no longer silently falls back to the phone runtime default `3.5`; `--prog-cfg` still remains gated to real guidance-enabled runs only. TAESD/live-preview failures are now surfaced as explicit **non-critical warnings** in the APK status/timing UI while generation continues, and the local docs tree is synced with the currently published **34.6 s cold-start proof** image from GitHub. In this session, fresh local **debug** and **release** APK builds passed for `v0.4.7`.

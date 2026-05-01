@@ -424,20 +424,31 @@ static void set_perf_mode(void) {
     dcvs.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_DCVS_V3;
     dcvs.dcvsV3Config.contextId = g_powerConfigId;
     dcvs.dcvsV3Config.setDcvsEnable = 1;
-    dcvs.dcvsV3Config.dcvsEnable = 1;
+    dcvs.dcvsV3Config.dcvsEnable = 0;  /* burst: disable DCVS, pin to max freq */
     dcvs.dcvsV3Config.powerMode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_PERFORMANCE_MODE;
     dcvs.dcvsV3Config.setSleepDisable = 1;
     dcvs.dcvsV3Config.sleepDisable = 1;
     dcvs.dcvsV3Config.setBusParams = 1;
-    dcvs.dcvsV3Config.busVoltageCornerMin = DCVS_VOLTAGE_VCORNER_TURBO;
-    dcvs.dcvsV3Config.busVoltageCornerTarget = DCVS_VOLTAGE_VCORNER_TURBO_PLUS;
+    dcvs.dcvsV3Config.busVoltageCornerMin = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
+    dcvs.dcvsV3Config.busVoltageCornerTarget = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
     dcvs.dcvsV3Config.busVoltageCornerMax = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
     dcvs.dcvsV3Config.setCoreParams = 1;
-    dcvs.dcvsV3Config.coreVoltageCornerMin = DCVS_VOLTAGE_VCORNER_TURBO;
-    dcvs.dcvsV3Config.coreVoltageCornerTarget = DCVS_VOLTAGE_VCORNER_TURBO_PLUS;
+    dcvs.dcvsV3Config.coreVoltageCornerMin = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
+    dcvs.dcvsV3Config.coreVoltageCornerTarget = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
     dcvs.dcvsV3Config.coreVoltageCornerMax = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
 
-    const QnnHtpPerfInfrastructure_PowerConfig_t* configs[] = { &dcvs, NULL };
+    /* Add RPC control latency (0us) and polling time (9999us) for true burst */
+    QnnHtpPerfInfrastructure_PowerConfig_t rpc_lat;
+    memset(&rpc_lat, 0, sizeof(rpc_lat));
+    rpc_lat.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_CONTROL_LATENCY;
+    rpc_lat.rpcControlLatencyConfig = 0;
+
+    QnnHtpPerfInfrastructure_PowerConfig_t rpc_poll;
+    memset(&rpc_poll, 0, sizeof(rpc_poll));
+    rpc_poll.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_POLLING_TIME;
+    rpc_poll.rpcPollingTimeConfig = 9999;
+
+    const QnnHtpPerfInfrastructure_PowerConfig_t* configs[] = { &dcvs, &rpc_lat, &rpc_poll, NULL };
     err = htpInfra->perfInfra.setPowerConfig(g_powerConfigId, configs);
     if (QNN_SUCCESS == err) {
         fprintf(stderr, "[server] HTP performance mode set (powerConfigId=%u)\n", g_powerConfigId);
