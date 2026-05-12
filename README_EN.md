@@ -7,6 +7,10 @@
 > [!TIP]
 > End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
 > Work on **SD3**, **Flux**, **Wan** and other model families has started — they will be released as the methods are developed and validated.
+> [!WARNING]
+> WAN end-to-end beta is currently **NOT VERIFIED** and may fail or be unstable.
+> Hot-swap `WxH` buckets and HotSwap LoRA are testing-stage features and can break.
+> Stabilization/polish target after `v0.5.0`: about **2 weeks**.
 
 <p align="center">
   <b>Repository for model-to-NPU pipelines on Qualcomm Snapdragon devices</b><br>
@@ -38,6 +42,7 @@ Right now the implemented and documented pipeline is **Stable Diffusion XL** run
 - **Repository direction:** multi-model Snapdragon NPU pipelines (SDXL, SD3, Flux, Wan, ...)
 - **Currently implemented family:** `SDXL/`
 - **Exploratory Wan workspace:** `WAN 2.1 1.3B/` (candidate scouting, download helpers, phone probing, 480p-first plan)
+- **APK `v0.5.0`:** SDXL and WAN are split into separate tabs, with settings persisted independently per tab
 - **Current phone app target:** SDXL
 - **Status of scripts:** full practical SDXL loop (checkpoint → image) re-validated on current layout
 - **Status of docs:** updated to the current known layout

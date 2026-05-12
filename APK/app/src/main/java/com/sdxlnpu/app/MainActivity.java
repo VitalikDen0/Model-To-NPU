@@ -38,6 +38,7 @@ import android.view.MenuItem;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.tabs.TabLayout;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -69,7 +70,17 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "SDXLNPU";
     private static final String MODEL_FAMILY_SDXL = "sdxl";
     private static final String MODEL_FAMILY_WAN21 = "wan21";
-    private static final String PREF_KEY_WAN21_DEBUG = "wan21_basic_debug";
+    private static final String PREF_KEY_SELECTED_MODEL_FAMILY = "selected_model_family";
+    private static final String PREF_PREFIX_PROMPT = "last_prompt_";
+    private static final String PREF_PREFIX_NEG_PROMPT = "last_neg_prompt_";
+    private static final String PREF_PREFIX_SEED = "last_seed_";
+    private static final String PREF_PREFIX_STEPS = "last_steps_";
+    private static final String PREF_PREFIX_CFG_X10 = "last_cfg_x10_";
+    private static final String PREF_PREFIX_WIDTH = "last_width_";
+    private static final String PREF_PREFIX_HEIGHT = "last_height_";
+    private static final String PREF_PREFIX_CONTRAST = "last_contrast_stretch_";
+    private static final String PREF_PREFIX_LIVE_PREVIEW = "last_live_preview_";
+    private static final String PREF_PREFIX_PROGRESSIVE_CFG = "last_progressive_cfg_";
     private static final String LEGACY_BASE_DIR = SettingsActivity.LEGACY_BASE_DIR;
     private static final String[] TERMUX_PRIVATE_PREFIXES = new String[] {
         "/data/data/com.termux/",
@@ -87,6 +98,7 @@ public class MainActivity extends AppCompatActivity {
     private EditText widthInput;
     private EditText heightInput;
     private EditText seedInput;
+    private TabLayout modelFamilyTabs;
     private Spinner sizePresetSpinner;
     private SeekBar stepsSeekBar;
     private TextView stepsLabel;
@@ -95,7 +107,6 @@ public class MainActivity extends AppCompatActivity {
     private CheckBox contrastStretch;
     private CheckBox livePreview;
     private CheckBox progressiveCfg;
-    private CheckBox wan21DebugMode;
     private MaterialButton generateButton;
     private MaterialButton saveButton;
     private MaterialButton stopButton;
@@ -129,6 +140,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean previewDecodeInFlight = false;
     private static final long PREWARM_KILL_DELAY_MS = 30_000;
     private boolean updatingSizePresetUi = false;
+    private String selectedModelFamily = MODEL_FAMILY_SDXL;
 
     private static final int[][] SDXL_SIZE_PRESET_DIMENSIONS = new int[][] {
         {1024, 1024},
@@ -173,6 +185,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile String latestTempStatus = "";
     private volatile String lastErrorDetails = "";
     private volatile int latestProgress = 0;
+    private volatile boolean storageAccessPromptShown = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -184,6 +197,7 @@ public class MainActivity extends AppCompatActivity {
         widthInput = findViewById(R.id.widthInput);
         heightInput = findViewById(R.id.heightInput);
         seedInput = findViewById(R.id.seedInput);
+        modelFamilyTabs = findViewById(R.id.modelFamilyTabs);
         sizePresetSpinner = findViewById(R.id.sizePresetSpinner);
         stepsSeekBar = findViewById(R.id.stepsSeekBar);
         stepsLabel = findViewById(R.id.stepsLabel);
@@ -192,7 +206,6 @@ public class MainActivity extends AppCompatActivity {
         contrastStretch = findViewById(R.id.contrastStretch);
         livePreview     = findViewById(R.id.livePreview);
         progressiveCfg  = findViewById(R.id.progressiveCfg);
-        wan21DebugMode  = findViewById(R.id.wan21DebugMode);
         generateButton  = findViewById(R.id.generateButton);
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
@@ -207,6 +220,7 @@ public class MainActivity extends AppCompatActivity {
         mainHandler = new Handler(Looper.getMainLooper());
 
         loadSettings();
+        configureModelFamilyTabs();
         configureSizePresetSpinner();
         widthInput.addTextChangedListener(sizeInputWatcher);
         heightInput.addTextChangedListener(sizeInputWatcher);
@@ -228,18 +242,6 @@ public class MainActivity extends AppCompatActivity {
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-
-        wan21DebugMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            applyModelFamilyDefaults(isChecked);
-            refreshSizePresetSpinnerItems();
-            selectSizePresetForCurrentInputs();
-            if (isChecked) {
-                killPrewarmNow("switch to WAN/basic-debug mode");
-            } else if (APK_BACKGROUND_PREWARM_ENABLED) {
-                startPrewarm();
-            }
-            checkPrerequisites();
         });
 
         generateButton.setOnClickListener(v -> startGeneration());
@@ -442,6 +444,179 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private static boolean isKnownModelFamily(String modelFamily) {
+        return MODEL_FAMILY_SDXL.equals(modelFamily) || MODEL_FAMILY_WAN21.equals(modelFamily);
+    }
+
+    private static String prefKeyForFamily(String prefix, String modelFamily) {
+        return prefix + modelFamily;
+    }
+
+    private void saveGenerationSettingsForFamily(SharedPreferences.Editor editor, String modelFamily) {
+        editor.putString(prefKeyForFamily(PREF_PREFIX_PROMPT, modelFamily), promptInput.getText().toString());
+        editor.putString(prefKeyForFamily(PREF_PREFIX_NEG_PROMPT, modelFamily), negPromptInput.getText().toString());
+        editor.putString(prefKeyForFamily(PREF_PREFIX_SEED, modelFamily), seedInput.getText().toString());
+        editor.putInt(prefKeyForFamily(PREF_PREFIX_STEPS, modelFamily), stepsSeekBar.getProgress());
+        editor.putInt(prefKeyForFamily(PREF_PREFIX_CFG_X10, modelFamily), cfgSeekBar.getProgress());
+        editor.putString(prefKeyForFamily(PREF_PREFIX_WIDTH, modelFamily), widthInput.getText().toString());
+        editor.putString(prefKeyForFamily(PREF_PREFIX_HEIGHT, modelFamily), heightInput.getText().toString());
+        editor.putBoolean(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily), contrastStretch.isChecked());
+        editor.putBoolean(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily), livePreview.isChecked());
+        editor.putBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), progressiveCfg.isChecked());
+    }
+
+    private void restoreGenerationSettingsForFamily(
+            SharedPreferences prefs,
+            String modelFamily,
+            boolean allowLegacyFallback) {
+        final boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
+        final int defaultSteps = 8;
+        final int defaultCfgX10 = wanMode ? 10 : 35;
+        final String defaultWidth = wanMode ? "832" : "1024";
+        final String defaultHeight = wanMode ? "480" : "1024";
+
+        String prompt = prefs.getString(prefKeyForFamily(PREF_PREFIX_PROMPT, modelFamily), null);
+        String negativePrompt = prefs.getString(prefKeyForFamily(PREF_PREFIX_NEG_PROMPT, modelFamily), null);
+        String seed = prefs.getString(prefKeyForFamily(PREF_PREFIX_SEED, modelFamily), null);
+        Integer steps = prefs.contains(prefKeyForFamily(PREF_PREFIX_STEPS, modelFamily))
+            ? prefs.getInt(prefKeyForFamily(PREF_PREFIX_STEPS, modelFamily), defaultSteps)
+            : null;
+        Integer cfgX10 = prefs.contains(prefKeyForFamily(PREF_PREFIX_CFG_X10, modelFamily))
+            ? prefs.getInt(prefKeyForFamily(PREF_PREFIX_CFG_X10, modelFamily), defaultCfgX10)
+            : null;
+        String width = prefs.getString(prefKeyForFamily(PREF_PREFIX_WIDTH, modelFamily), null);
+        String height = prefs.getString(prefKeyForFamily(PREF_PREFIX_HEIGHT, modelFamily), null);
+        Boolean contrast = prefs.contains(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily))
+            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily), true)
+            : null;
+        Boolean preview = prefs.contains(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily))
+            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily), false)
+            : null;
+        Boolean progCfg = prefs.contains(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily))
+            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), false)
+            : null;
+
+        if (allowLegacyFallback && MODEL_FAMILY_SDXL.equals(modelFamily)) {
+            if (prompt == null) {
+                prompt = prefs.getString("last_prompt", "");
+            }
+            if (negativePrompt == null) {
+                negativePrompt = prefs.getString("last_neg_prompt", "");
+            }
+            if (seed == null) {
+                seed = prefs.getString("last_seed", "");
+            }
+            if (steps == null) {
+                steps = prefs.getInt("last_steps", defaultSteps);
+            }
+            if (cfgX10 == null) {
+                cfgX10 = prefs.getInt("last_cfg_x10", defaultCfgX10);
+            }
+            if (width == null) {
+                width = prefs.getString("last_width", defaultWidth);
+            }
+            if (height == null) {
+                height = prefs.getString("last_height", defaultHeight);
+            }
+            if (contrast == null) {
+                contrast = prefs.getBoolean("last_contrast_stretch", true);
+            }
+            if (preview == null) {
+                preview = prefs.getBoolean("last_live_preview", false);
+            }
+            if (progCfg == null) {
+                progCfg = prefs.getBoolean("last_progressive_cfg", false);
+            }
+        }
+
+        promptInput.setText(prompt != null ? prompt : "");
+        negPromptInput.setText(negativePrompt != null ? negativePrompt : "");
+        seedInput.setText(seed != null ? seed : "");
+        stepsSeekBar.setProgress(steps != null ? steps : defaultSteps);
+        stepsLabel.setText(String.format(Locale.US, "Steps: %d", stepsSeekBar.getProgress()));
+        cfgSeekBar.setProgress(cfgX10 != null ? cfgX10 : defaultCfgX10);
+        cfgLabel.setText(String.format(Locale.US, "CFG: %.1f", cfgSeekBar.getProgress() / 10f));
+        widthInput.setText(width != null ? width : defaultWidth);
+        heightInput.setText(height != null ? height : defaultHeight);
+        contrastStretch.setChecked(contrast != null ? contrast : true);
+        livePreview.setChecked(preview != null ? preview : false);
+        progressiveCfg.setChecked(progCfg != null ? progCfg : false);
+
+        applyModelFamilyDefaults(wanMode);
+    }
+
+    private void configureModelFamilyTabs() {
+        if (modelFamilyTabs == null) {
+            return;
+        }
+        modelFamilyTabs.removeAllTabs();
+        modelFamilyTabs.addTab(
+            modelFamilyTabs.newTab().setText(getString(R.string.model_family_tab_sdxl)),
+            MODEL_FAMILY_SDXL.equals(selectedModelFamily)
+        );
+        modelFamilyTabs.addTab(
+            modelFamilyTabs.newTab().setText(getString(R.string.model_family_tab_wan)),
+            MODEL_FAMILY_WAN21.equals(selectedModelFamily)
+        );
+        modelFamilyTabs.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
+            @Override
+            public void onTabSelected(TabLayout.Tab tab) {
+                if (tab == null) {
+                    return;
+                }
+                String modelFamily = tab.getPosition() == 1
+                    ? MODEL_FAMILY_WAN21
+                    : MODEL_FAMILY_SDXL;
+                switchModelFamily(modelFamily);
+            }
+
+            @Override
+            public void onTabUnselected(TabLayout.Tab tab) {}
+
+            @Override
+            public void onTabReselected(TabLayout.Tab tab) {}
+        });
+        syncModelFamilyTabSelection();
+    }
+
+    private void syncModelFamilyTabSelection() {
+        if (modelFamilyTabs == null || modelFamilyTabs.getTabCount() < 2) {
+            return;
+        }
+        int tabIndex = MODEL_FAMILY_WAN21.equals(selectedModelFamily) ? 1 : 0;
+        TabLayout.Tab tab = modelFamilyTabs.getTabAt(tabIndex);
+        if (tab != null && !tab.isSelected()) {
+            tab.select();
+        }
+    }
+
+    private void switchModelFamily(String modelFamily) {
+        String normalized = isKnownModelFamily(modelFamily) ? modelFamily : MODEL_FAMILY_SDXL;
+        if (normalized.equals(selectedModelFamily)) {
+            return;
+        }
+
+        String previous = selectedModelFamily;
+        SharedPreferences prefs = getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        saveGenerationSettingsForFamily(editor, previous);
+        editor.putString(PREF_KEY_SELECTED_MODEL_FAMILY, normalized);
+        editor.apply();
+
+        selectedModelFamily = normalized;
+        restoreGenerationSettingsForFamily(prefs, selectedModelFamily, false);
+        refreshSizePresetSpinnerItems();
+        selectSizePresetForCurrentInputs();
+
+        if (MODEL_FAMILY_WAN21.equals(selectedModelFamily)) {
+            killPrewarmNow("switch to WAN/basic-debug mode");
+        } else if (APK_BACKGROUND_PREWARM_ENABLED) {
+            startPrewarm();
+        }
+
+        checkPrerequisites();
+    }
+
     private void loadSettings() {
         SharedPreferences prefs = getSharedPreferences(
             SettingsActivity.PREFS_NAME, MODE_PRIVATE);
@@ -456,21 +631,10 @@ public class MainActivity extends AppCompatActivity {
         GEN_SCRIPT = BASE_DIR + "/phone_gen/generate.py";
         OUTPUT_DIR = BASE_DIR + "/outputs";
 
-        // Restore last used generation settings
-        promptInput.setText(prefs.getString("last_prompt", ""));
-        negPromptInput.setText(prefs.getString("last_neg_prompt", ""));
-        seedInput.setText(prefs.getString("last_seed", ""));
-        stepsSeekBar.setProgress(prefs.getInt("last_steps", 8));
-        stepsLabel.setText(String.format(Locale.US, "Steps: %d", stepsSeekBar.getProgress()));
-        cfgSeekBar.setProgress(prefs.getInt("last_cfg_x10", 35));
-        cfgLabel.setText(String.format(Locale.US, "CFG: %.1f", cfgSeekBar.getProgress() / 10f));
-        widthInput.setText(prefs.getString("last_width", "1024"));
-        heightInput.setText(prefs.getString("last_height", "1024"));
-        contrastStretch.setChecked(prefs.getBoolean("last_contrast_stretch", true));
-        livePreview.setChecked(prefs.getBoolean("last_live_preview", false));
-        progressiveCfg.setChecked(prefs.getBoolean("last_progressive_cfg", false));
-        wan21DebugMode.setChecked(prefs.getBoolean(PREF_KEY_WAN21_DEBUG, false));
-        applyModelFamilyDefaults(wan21DebugMode.isChecked());
+        String storedFamily = prefs.getString(PREF_KEY_SELECTED_MODEL_FAMILY, MODEL_FAMILY_SDXL);
+        selectedModelFamily = isKnownModelFamily(storedFamily) ? storedFamily : MODEL_FAMILY_SDXL;
+        restoreGenerationSettingsForFamily(prefs, selectedModelFamily, true);
+        syncModelFamilyTabSelection();
     }
 
     private void configureSizePresetSpinner() {
@@ -580,19 +744,25 @@ public class MainActivity extends AppCompatActivity {
     private void saveGenerationSettings() {
         SharedPreferences prefs = getSharedPreferences(
             SettingsActivity.PREFS_NAME, MODE_PRIVATE);
-        prefs.edit()
-            .putString("last_prompt", promptInput.getText().toString())
-            .putString("last_neg_prompt", negPromptInput.getText().toString())
-            .putString("last_seed", seedInput.getText().toString())
-            .putInt("last_steps", stepsSeekBar.getProgress())
-            .putInt("last_cfg_x10", cfgSeekBar.getProgress())
-            .putString("last_width", widthInput.getText().toString())
-            .putString("last_height", heightInput.getText().toString())
-            .putBoolean("last_contrast_stretch", contrastStretch.isChecked())
-            .putBoolean("last_live_preview", livePreview.isChecked())
-            .putBoolean("last_progressive_cfg", progressiveCfg.isChecked())
-                .putBoolean(PREF_KEY_WAN21_DEBUG, wan21DebugMode.isChecked())
-            .apply();
+        SharedPreferences.Editor editor = prefs.edit();
+        String modelFamily = getSelectedModelFamily();
+        saveGenerationSettingsForFamily(editor, modelFamily);
+        editor.putString(PREF_KEY_SELECTED_MODEL_FAMILY, modelFamily);
+
+        // Backward-compatibility keys for older APK lines (SDXL defaults).
+        if (MODEL_FAMILY_SDXL.equals(modelFamily)) {
+            editor.putString("last_prompt", promptInput.getText().toString());
+            editor.putString("last_neg_prompt", negPromptInput.getText().toString());
+            editor.putString("last_seed", seedInput.getText().toString());
+            editor.putInt("last_steps", stepsSeekBar.getProgress());
+            editor.putInt("last_cfg_x10", cfgSeekBar.getProgress());
+            editor.putString("last_width", widthInput.getText().toString());
+            editor.putString("last_height", heightInput.getText().toString());
+            editor.putBoolean("last_contrast_stretch", contrastStretch.isChecked());
+            editor.putBoolean("last_live_preview", livePreview.isChecked());
+            editor.putBoolean("last_progressive_cfg", progressiveCfg.isChecked());
+        }
+        editor.apply();
     }
 
     @Override
@@ -602,9 +772,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String getSelectedModelFamily() {
-        return wan21DebugMode != null && wan21DebugMode.isChecked()
-            ? MODEL_FAMILY_WAN21
-            : MODEL_FAMILY_SDXL;
+        return selectedModelFamily;
     }
 
     private void applyModelFamilyDefaults(boolean wanMode) {
@@ -915,6 +1083,35 @@ public class MainActivity extends AppCompatActivity {
             : SettingsActivity.detectDefaultBaseDir();
     }
 
+    private String resolveConfiguredBaseDir(String modelFamily) {
+        if (MODEL_FAMILY_WAN21.equals(modelFamily)) {
+            return BASE_DIR != null && !BASE_DIR.isEmpty()
+                ? BASE_DIR
+                : SettingsActivity.WAN_DOWNLOADS_BASE_DIR;
+        }
+        return BASE_DIR != null && !BASE_DIR.isEmpty()
+            ? BASE_DIR
+            : SettingsActivity.detectDefaultBaseDir();
+    }
+
+    private String buildBaseRedirectWarning(String modelFamily, String configuredBaseDir, String activeBaseDir) {
+        if (!MODEL_FAMILY_SDXL.equals(modelFamily)) {
+            return null;
+        }
+        if (configuredBaseDir == null || configuredBaseDir.isEmpty()
+                || activeBaseDir == null || activeBaseDir.isEmpty()) {
+            return null;
+        }
+        if (configuredBaseDir.equals(activeBaseDir)) {
+            return null;
+        }
+        if (ROOT_BASE_DIR != null && !ROOT_BASE_DIR.isEmpty() && ROOT_BASE_DIR.equals(activeBaseDir)) {
+            return "SDXL base автоматически переадресован на legacy/root путь: "
+                + activeBaseDir + " (вместо " + configuredBaseDir + ")";
+        }
+        return null;
+    }
+
     private boolean isLegacyBaseDir(String baseDir) {
         return baseDir != null && (
             baseDir.startsWith(SettingsActivity.LEGACY_BASE_DIR)
@@ -926,11 +1123,23 @@ public class MainActivity extends AppCompatActivity {
         clearErrorState();
         String modelFamily = getSelectedModelFamily();
         String activeBaseDir = resolveActiveBaseDir(modelFamily);
+        String configuredBaseDir = resolveConfiguredBaseDir(modelFamily);
+        String baseRedirectWarning = buildBaseRedirectWarning(modelFamily, configuredBaseDir, activeBaseDir);
+        if (baseRedirectWarning != null) {
+            Log.w(TAG, "BASE_REDIRECT: " + baseRedirectWarning);
+            updateWarningStatus("⚠ ROUTE: " + baseRedirectWarning);
+        }
+
         if (!shouldUseRootShell(activeBaseDir, PYTHON) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            if (!storageAccessPromptShown) {
+                storageAccessPromptShown = true;
+                ensureExternalStorageAccess(activeBaseDir);
+            }
             statusText.setText("Нужен доступ ко всем файлам для чтения " + activeBaseDir +
                 "\nНажмите Generate или откройте системное разрешение вручную");
             return;
         }
+        storageAccessPromptShown = false;
         File ctx = new File(activeBaseDir, "context");
         if (!ctx.exists()) {
             String modeLabel = MODEL_FAMILY_WAN21.equals(modelFamily) ? "WAN 2.1" : "SDXL";
@@ -940,7 +1149,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         statusText.setText(MODEL_FAMILY_WAN21.equals(modelFamily)
-            ? "Готово к WAN 2.1 basic debug"
+            ? "Готово к WAN 2.1 runtime probe"
             : getString(R.string.status_idle));
     }
 
@@ -967,6 +1176,7 @@ public class MainActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == 100 && resultCode == RESULT_OK) {
             loadSettings();
+            refreshSizePresetSpinnerItems();
             selectSizePresetForCurrentInputs();
             checkPrerequisites();
         }
@@ -975,6 +1185,8 @@ public class MainActivity extends AppCompatActivity {
     private void startGeneration() {
         String modelFamily = getSelectedModelFamily();
         String activeBaseDir = resolveActiveBaseDir(modelFamily);
+        String configuredBaseDir = resolveConfiguredBaseDir(modelFamily);
+        String baseRedirectWarning = buildBaseRedirectWarning(modelFamily, configuredBaseDir, activeBaseDir);
         if (!ensureExternalStorageAccess(activeBaseDir)) {
             return;
         }
@@ -1034,9 +1246,9 @@ public class MainActivity extends AppCompatActivity {
         timingText.setVisibility(View.GONE);
         clearErrorState();
         latestTempStatus = "";
-        latestWarningStatus = "";
+        latestWarningStatus = baseRedirectWarning != null ? "⚠ ROUTE: " + baseRedirectWarning : "";
         latestStageStatus = MODEL_FAMILY_WAN21.equals(modelFamily)
-            ? "WAN 2.1 basic debug..."
+            ? "WAN 2.1 runtime probe..."
             : "Запуск...";
         latestProgress = 0;
         renderStatus();
@@ -1161,13 +1373,24 @@ public class MainActivity extends AppCompatActivity {
             throws IOException, InterruptedException {
         String modelFamily = getSelectedModelFamily();
         boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
+        String configuredBaseDir = resolveConfiguredBaseDir(modelFamily);
         String activeBaseDir = resolveActiveBaseDir(modelFamily);
+        String baseRedirectWarning = buildBaseRedirectWarning(modelFamily, configuredBaseDir, activeBaseDir);
         ExecutionPlan executionPlan = resolveExecutionPlan(activeBaseDir);
         boolean useRootShell = executionPlan.useRootShell;
         String pythonCommand = executionPlan.pythonCommand;
+        Log.i(TAG, "runtimePlan: model=" + modelFamily
+            + ", configuredBase=" + configuredBaseDir
+            + ", activeBase=" + activeBaseDir
+            + ", root=" + useRootShell
+            + ", python=" + pythonCommand);
+        if (baseRedirectWarning != null) {
+            Log.w(TAG, "BASE_REDIRECT: " + baseRedirectWarning);
+        }
         File bundledRuntimePayloadDir = getBundledRuntimePayloadDirOrNull();
         String generatorScript = resolveGeneratorScriptPath(bundledRuntimePayloadDir);
         if (!useRootShell && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            mainHandler.post(() -> ensureExternalStorageAccess(activeBaseDir));
             throw new IOException("Нет доступа к общей папке Downloads. Выдайте приложению доступ ко всем файлам.");
         }
 
@@ -1302,7 +1525,7 @@ public class MainActivity extends AppCompatActivity {
 
         updateStatus(
             wanMode
-                ? (useRootShell ? "WAN basic debug (root shell)..." : "WAN basic debug...")
+                ? (useRootShell ? "WAN runtime probe (root shell)..." : "WAN runtime probe...")
                 : (useRootShell ? "Запуск (root shell)..." : "Запуск..."),
             2
         );
@@ -1332,6 +1555,10 @@ public class MainActivity extends AppCompatActivity {
         String savedPath = null;
         String wanReportJson = null;
         int clipDone = 0;
+
+        if (baseRedirectWarning != null) {
+            timingLog.append("ROUTE: ").append(baseRedirectWarning).append("\n");
+        }
 
         // Live preview polling: check for preview_current.png every 2 seconds
         final long[] previewLastModified = {0};
@@ -1621,6 +1848,7 @@ public class MainActivity extends AppCompatActivity {
             statusText.setText("Ожидается разрешение на доступ ко всем файлам");
             return false;
         }
+        storageAccessPromptShown = false;
         return true;
     }
 
@@ -1640,6 +1868,7 @@ public class MainActivity extends AppCompatActivity {
             String home = RuntimeBootstrap.getPyRuntimeHome(this);
             String libDir = RuntimeBootstrap.getPyRuntimeLibDir(this);
             String binDir = new File(home, "bin").getAbsolutePath();
+            Log.i(TAG, "runtimeEnv: mode=py_runtime, home=" + home + ", libDir=" + libDir);
             script.append("export PYTHONHOME=\"").append(shellEscape(home)).append("\"\n");
             script.append("export LD_LIBRARY_PATH=\"")
                 .append(shellEscape(libDir)).append(":$LD_LIBRARY_PATH\"\n");
@@ -1652,6 +1881,7 @@ public class MainActivity extends AppCompatActivity {
         if (bundledPrefix.isDirectory()) {
             File bundledBin = new File(bundledPrefix, "bin");
             File bundledLib = new File(bundledPrefix, "lib");
+            Log.i(TAG, "runtimeEnv: mode=bundled_termux, prefix=" + bundledPrefix.getAbsolutePath());
             script.append("export PREFIX=\"").append(shellEscape(bundledPrefix.getAbsolutePath())).append("\"\n");
             script.append("export HOME=\"").append(shellEscape(new File(bundledPrefix, "home").getAbsolutePath())).append("\"\n");
             script.append("export LD_LIBRARY_PATH=\"")
@@ -1662,6 +1892,7 @@ public class MainActivity extends AppCompatActivity {
                 .append(":/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\"\n");
             return;
         }
+        Log.i(TAG, "runtimeEnv: mode=system_sh_fallback");
         script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
     }
 
@@ -1929,10 +2160,10 @@ public class MainActivity extends AppCompatActivity {
 
     private String formatWanStatus(JSONObject report) {
         if (report == null) {
-            return "WAN basic debug завершён";
+            return "WAN runtime probe завершён";
         }
         String status = report.optString("status", "UNKNOWN");
-        return "WAN basic debug: " + status;
+        return "WAN runtime probe: " + status;
     }
 
     private void appendWanProbeRun(StringBuilder sb, JSONObject probeRuns, String key, String label) {
@@ -1975,7 +2206,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("WAN 2.1 basic debug\n");
+        sb.append("WAN 2.1 runtime probe (не генерация)\n");
         sb.append("Status: ").append(report.optString("status", "UNKNOWN")).append("\n");
         sb.append("Base: ").append(report.optString("base_dir", activeBaseDir)).append("\n");
         sb.append("Requested: ").append(report.optString("requested_resolution", imgWidth + "x" + imgHeight)).append("\n");

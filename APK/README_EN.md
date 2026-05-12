@@ -13,7 +13,14 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.4.8-beta3`**.
+Current documented APK version: **`0.5.0`**.
+
+### v0.5.0 — SDXL/WAN split tabs + beta guardrails
+
+- main screen is split into separate **SDXL** and **WAN 2.1** tabs;
+- generation settings are now persisted **independently per tab** (prompt/seed/steps/cfg/WxH, etc.);
+- WAN path is still beta/runtime-oriented and should not be treated as a validated production flow;
+- added a dedicated WAN end-to-end helper: `WAN 2.1 1.3B/run_end_to_end.ps1`.
 
 ### v0.4.8-beta3 — speed-fix release (HTP perf tuning)
 
