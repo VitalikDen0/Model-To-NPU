@@ -10,7 +10,9 @@
     <string name="contrast_stretch">Коррекция яркости (VAE)</string>
     <string name="live_preview">Live Preview (TAESD)</string>
     <string name="progressive_cfg">½ CFG только на первой половине шагов (с округлением вверх)</string>
-    <string name="wan21_basic_debug">WAN 2.1 basic debug (runtime check вместо SDXL генерации)</string>
+    <string name="wan21_basic_debug">WAN 2.1 runtime probe (не генерация)</string>
+    <string name="model_family_tab_sdxl">SDXL</string>
+    <string name="model_family_tab_wan">WAN 2.1</string>
     <string name="status_preview" formatted="false">Preview step %d/%d…</string>
     <string name="status_idle">Готово к генерации</string>
     <string name="status_clip">CLIP encoding…</string>
@@ -23,7 +25,7 @@
     <string name="error_copied">Текст ошибки скопирован</string>
     <string name="settings">Настройки</string>
     <string name="settings_title">Настройки моделей</string>
-    <string name="settings_desc">Укажите путь к общей папке с моделями на телефоне.\nПо умолчанию используется /sdcard/Download/sdxl_qnn.\nДля WAN 2.1 basic debug APK также ищет /data/local/tmp/wan21_t2v_qnn и /sdcard/Download/wan21_t2v_qnn.\nМодели можно задеплоить через scripts/deploy_to_phone.py или скопировать вручную.</string>
+    <string name="settings_desc">Укажите путь к общей папке с моделями на телефоне.\nПо умолчанию используется /sdcard/Download/sdxl_qnn.\nДля WAN 2.1 runtime probe APK также ищет /data/local/tmp/wan21_t2v_qnn и /sdcard/Download/wan21_t2v_qnn.\nМодели можно задеплоить через scripts/deploy_to_phone.py или скопировать вручную.</string>
     <string name="settings_base_dir_hint">Путь (no-root: /sdcard/Download/sdxl_qnn)</string>
     <string name="settings_root_base_dir_hint">Путь (root: /data/local/tmp/sdxl_qnn)</string>
     <string name="settings_python_hint">Команда или путь к Python3</string>

@@ -1,102 +1,52 @@
 # Model-to-NPU Pipeline for Snapdragon
 
-> **SDXL on Snapdragon 8 Elite NPU — ~30 s total** (UNet ~19 s, VAE ~1.9 s, CLIP ~9 ms cached)
-> at 1024×1024, 8 steps, CFG=3.5, progressive guidance.
-> [!TIP]
-> End-to-end SDXL flow is available and practically validated (`checkpoint -> final phone-generated PNG`).
-> Work on **SD3**, **Flux**, **Wan** and other model families has started — they will be released as the methods are developed and validated.
+> Snapdragon NPU experiments that grew into a real phone-side SDXL pipeline.
+> [!WARNING]
+> **WAN end-to-end beta is NOT VERIFIED (`НЕ ПРОВЕРЕН`) and may not work at all.**
+> Hot-swap `WxH` buckets and HotSwap LoRA are still test-stage features and can break.
+> Stabilization/polish target after `v0.5.0`: about **2 weeks**.
 
-**Roadmap update (v0.4.8-beta3):** SDXL is temporarily frozen as a product direction while core effort shifts to **WAN** and **FLUX**. SD1.5 and SD3.5 will be kept as **developer training testbeds** ("обучающие стенды") — useful for method learning/debug, but not mandatory deliverables.
+**Docs:** [English](README_EN.md) · [Русский](README_RU.md) · [Android APK](APK/README.md)
 
-<p align="center">
-  <a href="README_EN.md"><img src="https://img.shields.io/badge/docs-English-0A66C2?style=for-the-badge" alt="English docs"></a>
-  <a href="README_RU.md"><img src="https://img.shields.io/badge/docs-Русский-1F883D?style=for-the-badge" alt="Russian docs"></a>
-  <a href="APK/README.md"><img src="https://img.shields.io/badge/Android-APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android APK"></a>
-</p>
+This repository is about **running large diffusion models on Qualcomm Snapdragon devices**, not just exporting graphs and calling it a day.
 
-<p align="center">
-  <a href="README_EN.md#requirements-for-the-current-sdxl-pipeline"><img src="https://img.shields.io/badge/Phone%20Python-3.13%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Phone Python 3.13+"></a>
-  <a href="README_EN.md#requirements-for-the-current-sdxl-pipeline"><img src="https://img.shields.io/badge/Host%20Python-3.10-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Host Python 3.10"></a>
-  <a href="README_EN.md#performance"><img src="https://img.shields.io/badge/Snapdragon-8%20Elite-5C2D91?style=for-the-badge" alt="Snapdragon 8 Elite"></a>
-  <a href="README_EN.md#architecture"><img src="https://img.shields.io/badge/QNN%20%2F%20QAIRT-Hexagon%20NPU-CB2E6D?style=for-the-badge" alt="QNN / QAIRT"></a>
-</p>
+Right now the most complete path is:
 
-Repository for **model-to-NPU pipelines** targeting Qualcomm Snapdragon devices.
+- **SDXL on Snapdragon 8 Elite NPU**;
+- real phone-side generation with **CLIP + split UNet + VAE**;
+- a custom **persistent QNN server** in C;
+- a standalone phone runtime via `phone_generate.py`;
+- an Android app in `APK/`.
 
-**Current implemented family:** `SDXL/`
-**Exploratory Wan workspace:** `WAN 2.1 1.3B/` (research / selection / 480p-first planning)
-**Future models:** SD3, Flux, Wan, and others — as the optimization methods are developed
+## What is working today
 
-**Current public beta result:** SDXL generation on a Snapdragon phone NPU with a persistent multi-context QNN server, CLIP-L + CLIP-G (cached), split UNet (encoder→decoder via in-memory RUN_CHAIN), VAE, Termux runtime, and an Android APK.
+- **SDXL end-to-end exists**: `checkpoint -> build/export -> deploy -> phone PNG`;
+- **`v0.5.0` APK split SDXL/WAN into separate tabs** with independent per-tab generation settings;
+- **WAN remains beta**: end-to-end path and hot resolution switching are available for testing, but not validated for production;
+- **AI Hub helpers already exist** for heavyweight compile flows, especially useful for WAN and large UNet pieces.
 
-## Performance snapshot (v0.4.1)
+## Current direction
 
-Measured on OnePlus 13 (Snapdragon 8 Elite, 16 GB RAM), `seed=44`, `steps=8`, `CFG=3.5`, `--prog-cfg`, Live Preview OFF:
+- **Publicly usable now:** SDXL
+- **Active engineering focus:** WAN and FLUX
+- **Training / method labs:** SD1.5 and SD3.5
 
-| Stage | Time | Notes |
-| ----- | ---- | ----- |
-| CLIP-L + CLIP-G | ~9 ms | cached result (first run ~2.8 s) |
-| UNet (8 steps) | ~19.3 s | ~2411 ms/step via persistent server |
-| VAE decoder | ~1.9 s | FP16 |
-| **Total (warm)** | **~30.4 s** | |
-
-**Speedup history:** 273.6 s → 104.4 s → 75.6 s → **30.4 s** (current)
+SDXL is temporarily frozen as the main product branch while the repo shifts toward broader model-family support.
 
 ## Quick links
 
 - [English documentation](README_EN.md)
 - [Русская документация](README_RU.md)
-- [License and usage terms](LICENSE)
-- [Mandatory attribution notice](NOTICE)
 - [Android app notes](APK/README.md)
-- [WAN 2.1 1.3B exploration workspace](WAN%202.1%201.3B/README.md)
-- [Historical performance archive (EN)](HISTORY_EN.md)
-- [Historical performance archive (RU)](HISTORY_RU.md)
-- [Live phone-side layout example](examples/phone-sdxl-qnn-layout.md)
-- [SDXL script map (EN)](SDXL/SCRIPTS_OVERVIEW.md)
-- [SDXL script map (RU)](SDXL/SCRIPTS_OVERVIEW_RU.md)
-- [SDXL runbook used files+commands](SDXL/RUNBOOK_USED_FILES_AND_COMMANDS.md)
-- [Current lessons learned](SDXL/LESSONS_LEARNED.md)
-- [UNet quantization review (EN)](SDXL/UNET_QUANTIZATION_REVIEW.md)
-- [UNet quantization review (RU)](SDXL/UNET_QUANTIZATION_REVIEW_RU.md)
-- [UNet overhead review (EN)](SDXL/UNET_OVERHEAD_REVIEW.md)
-- [UNet overhead review (RU)](SDXL/UNET_OVERHEAD_REVIEW_RU.md)
+- [WAN 2.1 workspace](WAN%202.1%201.3B/README.md)
+- [Archive index (EN)](ARCHIVE_EN.md)
+- [Архивный индекс (RU)](ARCHIVE_RU.md)
+- [License](LICENSE)
+- [Notice / attribution](NOTICE)
 
-## License model
+## Performance in one paragraph
 
-This repository is now distributed under the
-**PolyForm Noncommercial License 1.0.0**.
-
-This is **source-available**, not OSI open source, because commercial use is
-prohibited.
-
-In short:
-
-- use, study, modify, and fork are allowed for **non-commercial** purposes;
-- redistributions must include the PolyForm terms (or their canonical URL) and
-  the `Required Notice:` lines from [`NOTICE`](NOTICE);
-- third-party components keep their own licenses and must be respected
-  separately.
-
-## Changelog
-
-- **0.4.8-beta3** — **generation speed fixes + release freeze note**: tuned `qnn-multi-context-server` HTP perf mode to a stronger burst-like profile (DCVS disabled, MAX corners, RPC latency/polling controls), which reduced decoder latency from the ~`820 ms` class to ~`725–776 ms` in local validation. A residual ~`50 ms` gap vs the historical `v0.4.7` ideal path is still present and not fully explained after direct code/path comparison; this release documents it explicitly instead of hiding it.
-- **0.4.8-beta2** — **APK runtime bug hotfix + error-copy UX**: fixed a generation runtime bug in the Android app line, added explicit error-state handling with a dedicated bottom “Copy error” action for long runtime failures, and hardened input validation in the APK flow (including safer seed parsing) to reduce crash-like failure paths.
-- **0.4.8-beta** — **APK bundled runtime + dual-path settings + TAESD off**: the Android app now ships a bundled `py_runtime` (Python 3.13 + numpy + Pillow) for Termux-free generation on supported devices, adds separate Settings paths for no-root (`/sdcard/Download/sdxl_qnn`) and root (`/data/local/tmp/sdxl_qnn`) with startup auto-switch to root when accessible, and intentionally disables TAESD live preview in this beta (`SDXL_QNN_TAESD_BACKEND=off`) because shared HTP TAESD added about +200 ms per UNet step while the GPU backend remains blocked by Android linker namespace restrictions in app process.
-- **0.4.7** — **APK CFG/TAESD UX hotfix**: the Android app now always forwards the exact user-selected CFG value including **`1.0`**, so `CFG=1.0` no longer silently falls back to the phone runtime default `3.5`; `--prog-cfg` still remains gated to real guidance-enabled runs only. TAESD/live-preview failures are now surfaced as explicit **non-critical warnings** in the APK status/timing UI while generation continues, and the local docs tree is synced with the currently published **34.6 s cold-start proof** image from GitHub. In this session, fresh local **debug** and **release** APK builds passed for `v0.4.7`.
-- **0.4.6** — **APK stability-first refresh + deterministic payload updates**: the Android app now keeps app-open background prewarm disabled in the public APK line, stops asking the phone runtime to aggressively prewarm all contexts / preview assets during foreground runs, and fingerprints the staged bundled runtime payload when writing `runtime_payload_version.txt`, so updated `generate.py` / bundled QNN assets reliably force a clean on-device re-extract instead of silently reusing stale extracted files. The refreshed line has now also been re-validated by a real on-device cold-start proof shot at **34.6 s total**; inside that run, the measured accelerator-visible stages add up to **~16.25 s** (`CLIP 0.134 s`, `UNet 14.248 s`, `VAE 1.872 s`), so the screenshot-visible total still includes cold start / app/runtime bring-up overhead.
-- **0.4.5** — **APK stability rollback for late-step freezes**: the Android app now explicitly disables shared prewarm/server reuse for foreground runs, kills any app-open prewarm helper before starting generation so only one heavy QNN owner remains alive, and reverts the APK-exported QNN perf profile from `sustained_high_performance` back to `burst`. In this session, a direct phone-side validation with the same runtime env (`prompt=cat`, `seed=777`, `8` steps, `CFG=3.5`, `--prog-cfg`) completed in **29.9 s total** with **UNet 14.891 s**; the formerly problematic late unguided step returned to the expected ~`1.2 s` class (`step 7 = 1218 ms`) and the run finished without a freeze.
-- **0.4.4** — **preset-only APK smoothing pass**: the Android app now hides manual `WxH` editing and snaps generation back to the validated preset list only, decodes preview/final images to screen-sized display bitmaps instead of always pushing full-resolution UI loads, and exports the gentler `sustained_high_performance` QNN profile from the APK to reduce whole-device lag / app-crash risk during generation. This session validated compilation of the updated APK, but did not yet record a fresh on-device timing run for the new line.
-- **0.4.3** — **shared prewarm reuse + self-contained runtime hotfix**: `qnn-multi-context-server` now supports shared FIFO IPC plus deterministic context IDs, so the app-open prewarm can be reused by later foreground generate runs instead of warming a private throwaway child process. APK prewarm and foreground generation now share the same app-cache work directory and opt into `SDXL_QNN_SHARED_SERVER=1`, which is the practical path toward one logical multi-resolution QNN runtime built from multiple fixed-shape contexts. Device-side validation also hardened bundled runtime delivery: APK now forces payload refresh when the packaged runtime version changes, and shared-server startup waits for FIFO IPC readiness after `READY`, fixing the race where the first `LOAD` could fail before request/response FIFOs became visible. The refreshed public `v0.4.3` asset also releases shared prewarm after 30 seconds of foreground/background inactivity (including after generation completes), stages TAESD preview assets more aggressively inside the bundled payload so preview stops depending on stale shared-storage leftovers, prefers the APK-bundled QNN runtime over stale `/data/local/tmp` leftovers when explicit bundled paths are exported, safely restages backend-extension configs with relative paths, packages the missing core QNN runtime pieces (`qnn-net-run` plus the required HTP/System libs), tightens preview/final bitmap cleanup, moves preview PNG decode off the UI thread with a stride-4 live-preview throttle, retries transient shared-FIFO `BlockingIOError` / `InterruptedError` races during warm reuse, and prevents duplicate prewarm helpers by queue-guarding app-open launches and tracking the real Python helper via `exec`.
-
-For the complete historical changelog including all intermediate versions and pre-reset experiments, see [HISTORY_EN.md](HISTORY_EN.md).
-
-## What this repo already demonstrates
-
-- SDXL can be pushed all the way to a **real Snapdragon phone NPU** at ~30 s/image;
-- the runtime is not just a benchmark stub — it includes prompt processing, scheduler logic, PNG output, and an APK UI;
-- a custom **persistent QNN server** written in C eliminates process spawn overhead and enables in-memory encoder→decoder piping;
-- the repository openly separates the public beta runtime path, the build/export path, and the experimental lab scripts.
+The validated warm SDXL path on OnePlus 13 / Snapdragon 8 Elite is still in the **~30 s total** class at `1024x1024`, `8` steps, with cached CLIP, split UNet, and VAE on-device. In `v0.4.8-beta3`, the custom QNN server got a stronger HTP perf configuration and the major decoder regression dropped from roughly **`~820 ms`** per decoder pass to about **`~725–776 ms`**. There is still a residual tail of around **`~50 ms`** versus the historical ideal marker, and it is documented honestly instead of being swept under the rug.
 
 ## Gallery
 
@@ -151,14 +101,48 @@ The best validated historical warm-path marker remains **30.4 s total**. The new
 
 Observed fast-path thermals in the current short-run proof cycle sat around **85–95°C** without visible throttling, so a few back-to-back generations remained practically safe/usable in the tested burst window.
 
-## Current repository layout
+## Important files, explained like a human
 
-- `SDXL/` — SDXL conversion, calibration, verification, QNN, and runtime experiments;
-- `NPU/` — persistent multi-context QNN server (C source + build scripts);
-- `WAN 2.1 1.3B/` — early Wan 2.1 T2V 1.3B research, candidate selection, download helpers, and phone probing;
-- `APK/` — Android app for on-device generation;
-- `scripts/` — deploy and helper scripts (including `build_qnn_multi_context_server.py`);
-- `tokenizer/` — shared tokenizer files;
-- `phone_generate.py` — standalone phone-side generator used by the public beta runtime path.
+- `phone_generate.py` — the **main phone runtime entrypoint**. SDXL really runs through this file; WAN support here is currently a runtime/probe path, not final generation.
+- `phone_runtime_accel.py` — optional **native math/layout helper** for scheduler and tensor operations, with a safe NumPy fallback if the native library is unavailable.
+- `NPU/qnn_multi_context_server.c` — the **persistent QNN server** that keeps contexts alive and runs split UNet faster than repeated `qnn-net-run` spawns.
+- `SDXL/run_end_to_end.ps1` — the most practical **host-side wrapper** for `checkpoint -> build -> deploy`.
+- `scripts/build_all.py` — reproducible early build stages for SDXL: checkpoint conversion, Lightning merge, ONNX export.
+- `scripts/deploy_to_phone.py` — pushes runtime files, QNN libs/bins, contexts, and optional TAESD pieces to the phone.
+- `WAN 2.1 1.3B/export_and_compile_wan_aihub.py` — AI Hub helper for WAN package prep, compile jobs, status, and downloads.
+- `WAN 2.1 1.3B/wan_tool.py` — WAN helper CLI for model selection, downloads, and phone checks.
 
-If more model families are added later, each of them should get its own top-level folder alongside `SDXL/`.
+## Repository map
+
+- `SDXL/` — SDXL build/export/verification scripts and experiments
+- `WAN 2.1 1.3B/` — WAN research workspace, AI Hub helpers, runtime probes
+- `NPU/` — custom native runtime pieces, including the QNN multi-context server
+- `APK/` — Android app
+- `scripts/` — deployment and utility scripts
+- `tokenizer/` — shared tokenizer assets
+
+## Recent changes
+
+- **0.5.0** — APK split into SDXL/WAN tabs with separate saved settings per tab; WAN host flow got hot manifest bucket selection by requested `WxH`; added `WAN 2.1 1.3B/run_end_to_end.ps1` beta wrapper.
+- **0.4.8-beta3** — stronger HTP perf mode in `qnn-multi-context-server`; major decoder regression mostly fixed; residual tail documented as known issue.
+- **0.4.8-beta2** — APK runtime hotfix plus a dedicated **Copy error** action.
+- **0.4.8-beta** — bundled Python runtime, dual root/no-root paths, TAESD preview intentionally disabled in APK because it hurt the fast path.
+- **0.4.7** — exact CFG forwarding including `1.0`, better TAESD failure reporting.
+- **0.4.6** — more deterministic packaged runtime refresh and safer public APK behavior.
+
+## About the archive
+
+The repo accumulated a lot of historical notes, one-off reviews, and working documents. They are still useful, but they no longer belong on the front page.
+
+- Use [ARCHIVE_EN.md](ARCHIVE_EN.md) for English archive links.
+- Use [ARCHIVE_RU.md](ARCHIVE_RU.md) for Russian archive links.
+
+## License
+
+This repo is distributed under **PolyForm Noncommercial License 1.0.0**.
+
+That means, in plain language:
+
+- non-commercial use/study/modification/forks are allowed;
+- redistributions must keep the required notice text;
+- third-party components keep their own licenses.
