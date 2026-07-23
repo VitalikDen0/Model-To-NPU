@@ -5,7 +5,7 @@ plugins {
 }
 
 def apkVersionCode = 37
-def apkVersionName = "0.5.0"
+def apkVersionName = "0.5.1"
 def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
 def resolveExistingDir = { candidate ->
     if (candidate == null) {

@@ -180,11 +180,21 @@ def _env_int(keys: tuple[str, ...], default: int = 0) -> int:
         return default
 
 
+def _normalize_lora_slot(value: str | None) -> str:
+    if value is None:
+        return ""
+    cleaned = re.sub(r"[^0-9A-Za-z_.-]+", "_", value.strip())
+    return cleaned.strip("._")
+
+
 DR = _resolve_base_dir()
+SDXL_QNN_LORA_SLOT = _normalize_lora_slot(os.environ.get("SDXL_QNN_LORA_SLOT", ""))
+_LAST_RESOLVED_LORA_SLOT: str = ""
+_LAST_RESOLVED_LORA_SLOT_DIR: str = ""
 
 # Default resolution — overridden by --width / --height CLI args
-_IMAGE_WIDTH = int(os.environ.get("SDXL_QNN_WIDTH", "1024"))
-_IMAGE_HEIGHT = int(os.environ.get("SDXL_QNN_HEIGHT", "1024"))
+_REQ_WIDTH = int(os.environ.get("SDXL_QNN_WIDTH", "1024"))
+_REQ_HEIGHT = int(os.environ.get("SDXL_QNN_HEIGHT", "1024"))
 
 # Standard SDXL aspect-ratio buckets (width × height, all divisible by 8)
 SDXL_RESOLUTIONS = [
@@ -273,12 +283,37 @@ def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
     For backward compatibility: if the resolution is 1024×1024 and the
     resolution-scoped directory doesn't exist, fall back to flat layout.
     """
+    global _LAST_RESOLVED_LORA_SLOT, _LAST_RESOLVED_LORA_SLOT_DIR
+    _LAST_RESOLVED_LORA_SLOT = ""
+    _LAST_RESOLVED_LORA_SLOT_DIR = ""
+
     ctx = {
         "clip_l": f"{DR}/context/clip_l.serialized.bin.bin",
         "clip_g": f"{DR}/context/clip_g.serialized.bin.bin",
     }
+
+    slot = SDXL_QNN_LORA_SLOT
     res_dir = f"{DR}/context/{width}x{height}"
-    if os.path.isdir(res_dir):
+    slot_res_candidates: list[str] = []
+    if slot:
+        slot_res_candidates = [
+            f"{DR}/context/{slot}/{width}x{height}",
+            f"{DR}/context/lora_slots/{slot}/{width}x{height}",
+            f"{DR}/context/{width}x{height}/{slot}",
+        ]
+
+    slot_res_dir = next((p for p in slot_res_candidates if os.path.isdir(p)), "")
+
+    if slot_res_dir:
+        ctx["encoder"] = f"{slot_res_dir}/unet_encoder_fp16.serialized.bin.bin"
+        ctx["decoder"] = f"{slot_res_dir}/unet_decoder_fp16.serialized.bin.bin"
+        _LAST_RESOLVED_LORA_SLOT = slot
+        _LAST_RESOLVED_LORA_SLOT_DIR = slot_res_dir
+        if os.path.isdir(res_dir):
+            ctx["vae"] = f"{res_dir}/vae_decoder.serialized.bin.bin"
+        else:
+            ctx["vae"] = f"{DR}/context/vae_decoder.serialized.bin.bin"
+    elif os.path.isdir(res_dir):
         ctx["encoder"] = f"{res_dir}/unet_encoder_fp16.serialized.bin.bin"
         ctx["decoder"] = f"{res_dir}/unet_decoder_fp16.serialized.bin.bin"
         ctx["vae"] = f"{res_dir}/vae_decoder.serialized.bin.bin"
@@ -289,7 +324,7 @@ def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
         ctx["vae"] = f"{DR}/context/vae_decoder.serialized.bin.bin"
     return ctx
 
-
+_IMAGE_WIDTH, _IMAGE_HEIGHT, _WAS_SNAPPED = _snap_to_nearest_resolution(_REQ_WIDTH, _REQ_HEIGHT)
 CONTEXTS = _resolve_contexts(_IMAGE_WIDTH, _IMAGE_HEIGHT)
 TOKENIZER_DIR = f"{DR}/phone_gen/tokenizer"
 OUTPUT_DIR = _env_first(("MODEL_TO_NPU_OUTPUT_DIR", "SDXL_QNN_OUTPUT_DIR"), f"{DR}/outputs")
@@ -331,6 +366,7 @@ QNN_PROFILE_VIEWER = os.environ.get("SDXL_QNN_PROFILE_VIEWER", f"{QNN_BIN_DIR}/q
 QNN_USE_MMAP = os.environ.get("SDXL_QNN_USE_MMAP", "1") == "1"
 QNN_STDOUT_ECHO = os.environ.get("SDXL_QNN_STDOUT_ECHO", "0") == "1"
 QNN_PERF_PROFILE = os.environ.get("SDXL_QNN_PERF_PROFILE", "burst").strip() or "burst"
+QNN_TRACE_ALL_STEPS = os.environ.get("SDXL_QNN_TRACE_ALL_STEPS", "0") == "1"
 QNN_CONFIG_FILE = os.environ.get("SDXL_QNN_CONFIG_FILE", _detect_default_qnn_config()).strip()
 QNN_USE_DAEMON = _env_bool(("SDXL_QNN_USE_DAEMON", "QNN_USE_DAEMON"), False)
 QNN_USE_SERVER = _env_bool(("SDXL_QNN_USE_SERVER", "QNN_USE_SERVER"), True)
@@ -657,7 +693,10 @@ def _resolve_runtime_artifact(path: str, category: str) -> str:
     dst = os.path.join(dst_dir, os.path.basename(path))
     if os.path.abspath(dst) == os.path.abspath(path):
         if category in ("bin", "lib"):
-            os.chmod(dst, 0o755)
+            try:
+                os.chmod(dst, 0o755)
+            except PermissionError as pe:
+                _log(f"  [QNN] _resolve_runtime_artifact chmod PermissionError on {dst}: {pe}")
         _RUNTIME_FILE_CACHE[path] = dst
         return dst
     try:
@@ -669,9 +708,21 @@ def _resolve_runtime_artifact(path: str, category: str) -> str:
     except Exception:
         needs_copy = True
     if needs_copy:
-        shutil.copy2(path, dst)
+        try:
+            try:
+                os.remove(dst)
+            except OSError:
+                pass
+            shutil.copy2(path, dst)
+        except PermissionError as pe:
+            _log(f"  [QNN] _resolve_runtime_artifact PermissionError on {dst}: {pe}. Reusing existing if possible.")
+            if not os.path.exists(dst):
+                raise
         if category in ("bin", "lib"):
-            os.chmod(dst, 0o755)
+            try:
+                os.chmod(dst, 0o755)
+            except PermissionError as pe:
+                _log(f"  [QNN] _resolve_runtime_artifact chmod PermissionError on {dst}: {pe}")
     _RUNTIME_FILE_CACHE[path] = dst
     return dst
 
@@ -766,8 +817,20 @@ def _resolve_exec_binary(path: str) -> str:
         except Exception:
             needs_copy = True
         if needs_copy:
-            shutil.copy2(path, dst)
-    os.chmod(dst, 0o755)
+            try:
+                try:
+                    os.remove(dst)
+                except OSError:
+                    pass
+                shutil.copy2(path, dst)
+            except PermissionError as pe:
+                _log(f"  [QNN] _resolve_exec_binary PermissionError on {dst}: {pe}. Reusing existing if possible.")
+                if not os.path.exists(dst):
+                    raise
+    try:
+        os.chmod(dst, 0o755)
+    except PermissionError as pe:
+        _log(f"  [QNN] _resolve_exec_binary chmod PermissionError on {dst}: {pe}")
     _EXEC_BIN_CACHE[path] = dst
     return dst
 
@@ -1672,6 +1735,9 @@ class _QnnMultiContextServer:
         finally:
             os.close(req_fd)
 
+        if cmd == "QUIT":
+            return "OK (QUIT sent)"
+
         rsp_fd = os.open(self._response_fifo, os.O_RDONLY | nonblock)
         try:
             deadline = time.time() + timeout
@@ -1751,7 +1817,7 @@ class _QnnMultiContextServer:
                 "--request_fifo", self._request_fifo,
                 "--response_fifo", self._response_fifo,
             ])
-        env = _get_qnn_env()
+        env = dict(_get_qnn_env())  # copy — do not mutate the cached _QNN_ENV
         # Keep vendor ADSP search paths while ensuring the staged runtime lib dir comes first.
         existing_adsp = env.get("ADSP_LIBRARY_PATH", "")
         env["ADSP_LIBRARY_PATH"] = ";".join(part for part in [lib_dir, existing_adsp] if part)
@@ -1861,19 +1927,28 @@ class _QnnMultiContextServer:
 
     def unload(self, ctx_path: str) -> None:
         """Unload a context to free memory."""
+        real_path = self._remap_ctx_path(ctx_path)
         with self._lock:
-            cid = self._loaded.get(ctx_path)
+            cid = self._loaded.get(ctx_path) or self._next_id(real_path)
             if cid is None:
                 return
-            resp = self._send(f"UNLOAD {cid}")
-            if resp.startswith("OK"):
-                del self._loaded[ctx_path]
-                _log(f"  [QNN server] unloaded {os.path.basename(ctx_path)} ({cid})")
-            else:
-                _log(f"  [QNN server] unload failed for {ctx_path}: {resp}")
+            try:
+                resp = self._send(f"UNLOAD {cid}")
+                if resp.startswith("OK"):
+                    if ctx_path in self._loaded:
+                        del self._loaded[ctx_path]
+                    _log(f"  [QNN server] unloaded {os.path.basename(ctx_path)} ({cid})")
+                else:
+                    _log(f"  [QNN server] unload failed for {ctx_path}: {resp}")
+            except Exception as e:
+                _log(f"  [QNN server] unload error for {ctx_path}: {e}")
 
     def stop(self) -> None:
         if self._shared and not self._owns_process:
+            try:
+                self._send("QUIT")
+            except Exception:
+                pass
             self._loaded.clear()
             return
         proc = self.proc
@@ -2558,6 +2633,17 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     latent_h, latent_w = height // 8, width // 8
     global CONTEXTS
     CONTEXTS = _resolve_contexts(width, height)
+    if SDXL_QNN_LORA_SLOT:
+        if _LAST_RESOLVED_LORA_SLOT:
+            _log(
+                f"[lora] hot-swap slot '{_LAST_RESOLVED_LORA_SLOT}' active "
+                f"({_LAST_RESOLVED_LORA_SLOT_DIR})"
+            )
+        else:
+            _log(
+                f"[lora] slot '{SDXL_QNN_LORA_SLOT}' not found for {width}x{height}; "
+                "using base UNet contexts"
+            )
 
     if seed is None:
         seed = random.SystemRandom().randrange(0, 2**31)
@@ -2629,7 +2715,7 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
         qnn_mode += ", async-prep=on"
     _log(qnn_mode)
     if QNN_CONFIG_FILE:
-        _log("  [QNN] historical ~62s runs depended on a pre-reset fast path; current rebuilt-phone validation is in the ~75–78s class")
+        _log("  [QNN] backend-extension config is requested; runtime uses server-side perf controls for active execution path")
     else:
         _log("  [QNN] backend-extension fast path is off; current rebuilt-phone full runs are expected in the ~75–78s class")
     if use_cfg:
@@ -2856,7 +2942,11 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     from PIL import Image
     tag = name or f"gen_s{seed}"
     out_path = f"{OUTPUT_DIR}/{tag}.png"
-    Image.fromarray(img_u8).save(
+    img_pil = Image.fromarray(img_u8)
+    if img_pil.width != _REQ_WIDTH or img_pil.height != _REQ_HEIGHT:
+        _log(f"[resolution] Resizing output image from {img_pil.width}x{img_pil.height} to requested {_REQ_WIDTH}x{_REQ_HEIGHT}...")
+        img_pil = img_pil.resize((_REQ_WIDTH, _REQ_HEIGHT), Image.Resampling.LANCZOS)
+    img_pil.save(
         out_path,
         format="PNG",
         compress_level=FINAL_PNG_COMPRESS_LEVEL,
@@ -2957,7 +3047,10 @@ def _save_preview_png(out_tensor: np.ndarray) -> None:
     from PIL import Image
 
     tmp_path = PREVIEW_PNG + ".tmp"
-    Image.fromarray(img_u8).save(
+    img_pil = Image.fromarray(img_u8)
+    if img_pil.width != _REQ_WIDTH or img_pil.height != _REQ_HEIGHT:
+        img_pil = img_pil.resize((_REQ_WIDTH, _REQ_HEIGHT), Image.Resampling.BILINEAR)
+    img_pil.save(
         tmp_path,
         format="PNG",
         compress_level=PREVIEW_PNG_COMPRESS_LEVEL,
@@ -3146,6 +3239,7 @@ def _read_noise_pred(out_dec_dir, result_idx=0, latent_h=128, latent_w=128):
 
 def _run_unet_split(latent_np, timestep, step_idx, tag, *, timestep_arr: np.ndarray | None = None, latent_h: int = 128, latent_w: int = 128):
     """Run split UNet (encoder + decoder) on NPU — single condition."""
+    _t_prof = time.time()
     # Reuse a fixed work dir (step_idx ignored — files overwritten each step)
     base = f"{WORK_DIR}/unet/{tag}"
     enc_out = f"{base}/out_enc"
@@ -3156,20 +3250,36 @@ def _run_unet_split(latent_np, timestep, step_idx, tag, *, timestep_arr: np.ndar
 
     _write_array_reuse(smp_path, latent_np, dtype=np.float32)
     _write_array_reuse(ts_path, timestep_arr if timestep_arr is not None else np.asarray([float(timestep)], dtype=np.float32), dtype=np.float32)
+    _t_write = time.time()
 
     enc_entries = _enc_dec_inputs(base, smp_path, ts_path)
     il_enc = f"{base}/il_enc.txt"
     _write_input_list_once(il_enc, enc_entries)
+    _t_prep = time.time()
 
     ms_enc = qnn_run(CONTEXTS["encoder"], il_enc, enc_out, profile_tag=f"unet_step{step_idx+1:02d}_{tag}_enc")
+    _t_enc = time.time()
 
     dec_entries = _dec_entries_from_enc_out(base, f"{enc_out}/Result_0")
     il_dec = f"{base}/il_dec.txt"
     _write_input_list_once(il_dec, dec_entries)
 
     ms_dec = qnn_run(CONTEXTS["decoder"], il_dec, dec_out, profile_tag=f"unet_step{step_idx+1:02d}_{tag}_dec")
+    _t_dec = time.time()
 
-    return _read_noise_pred(dec_out, 0, latent_h=latent_h, latent_w=latent_w), ms_enc + ms_dec
+    pred = _read_noise_pred(dec_out, 0, latent_h=latent_h, latent_w=latent_w)
+    _t_read = time.time()
+
+    if step_idx < 2 or QNN_TRACE_ALL_STEPS:
+        _log(
+            f"    [prof:{tag}] write={(_t_write-_t_prof)*1000:.0f}ms "
+            f"prep={(_t_prep-_t_write)*1000:.0f}ms "
+            f"enc={(_t_enc-_t_prep)*1000:.0f}ms(qnn={ms_enc:.0f}) "
+            f"dec={(_t_dec-_t_enc)*1000:.0f}ms(qnn={ms_dec:.0f}) "
+            f"read={(_t_read-_t_dec)*1000:.0f}ms"
+        )
+
+    return pred, ms_enc + ms_dec
 
 
 def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *, timestep_arr: np.ndarray | None = None, latent_h: int = 128, latent_w: int = 128):
@@ -3236,7 +3346,7 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
             np_cond = _read_noise_pred(dec_out_batch, 1, latent_h=latent_h, latent_w=latent_w)
             np_uncond = _read_noise_pred(dec_out_batch, 0, latent_h=latent_h, latent_w=latent_w)
             _t_read = time.time()
-            if step_idx < 2:
+            if step_idx < 2 or QNN_TRACE_ALL_STEPS:
                 _log(f"    [prof] write={(_t_write-_t_prof)*1000:.0f}ms prep={(_t_pre-_t_write)*1000:.0f}ms chain={(_t_chain-_t_pre)*1000:.0f}ms(server={ms_total:.0f}) read={(_t_read-_t_chain)*1000:.0f}ms")
             return np_cond, np_uncond, ms_total
         except Exception as e:
@@ -3255,7 +3365,9 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
     _write_multi_input_list_once(il_enc_batch, [enc_uncond, enc_cond])
 
     # Single shared output dir; Result_0 = uncond, Result_1 = cond
+    _t_fb = time.time()
     ms_enc = qnn_run(CONTEXTS["encoder"], il_enc_batch, enc_out_batch, profile_tag=f"unet_step{step_idx+1:02d}_cfg_batch_enc")
+    _t_enc = time.time()
 
     # ── Batched Decoder: 2 inferences in one qnn-net-run ──
     dec_uncond = _dec_entries_from_enc_out(uncond_base, f"{enc_out_batch}/Result_0")
@@ -3266,9 +3378,18 @@ def _run_unet_split_cfg(latent_np, timestep, cond_base, uncond_base, step_idx, *
 
     dec_out_batch = f"{WORK_DIR}/unet/dec_batch"
     ms_dec = qnn_run(CONTEXTS["decoder"], il_dec_batch, dec_out_batch, profile_tag=f"unet_step{step_idx+1:02d}_cfg_batch_dec")
+    _t_dec = time.time()
 
     np_cond = _read_noise_pred(dec_out_batch, 1, latent_h=latent_h, latent_w=latent_w)
     np_uncond = _read_noise_pred(dec_out_batch, 0, latent_h=latent_h, latent_w=latent_w)
+    _t_read = time.time()
+
+    if step_idx < 2 or QNN_TRACE_ALL_STEPS:
+        _log(
+            f"    [prof:cfg-fallback] enc={(_t_enc-_t_fb)*1000:.0f}ms(qnn={ms_enc:.0f}) "
+            f"dec={(_t_dec-_t_enc)*1000:.0f}ms(qnn={ms_dec:.0f}) "
+            f"read={(_t_read-_t_dec)*1000:.0f}ms"
+        )
 
     return np_cond, np_uncond, ms_enc + ms_dec
 
@@ -3295,6 +3416,9 @@ if __name__ == "__main__":
                     help="Output image width (must be multiple of 8, default 1024)")
     ap.add_argument("--height", type=int, default=1024,
                     help="Output image height (must be multiple of 8, default 1024)")
+    ap.add_argument("--lora-slot", type=str, default=SDXL_QNN_LORA_SLOT,
+                    help="Optional hot-swap LoRA slot name (e.g. slot1). "
+                         "Uses context/<slot>/<WxH>/ UNet contexts when available")
     ap.add_argument("--no-stretch", action="store_true",
                     help="Disable contrast stretching")
     ap.add_argument("--name", type=str, default=None,
@@ -3312,7 +3436,28 @@ if __name__ == "__main__":
                     help="Validate the selected phone runtime family and exit")
     ap.add_argument("--probe-perf", type=str, default="basic",
                     help="Perf profile for Wan runtime probes (qnn-net-run --perf_profile); use env SDXL_QNN_PROFILING_LEVEL=basic for instrumentation")
+    ap.add_argument("--trace-all-steps", action="store_true",
+                    help="Log detailed UNet stage timings for every denoise step (for overhead diagnosis)")
+    ap.add_argument("--stop-server", action="store_true",
+                    help="Stop the shared server cleanly")
     a = ap.parse_args()
+
+    if a.stop_server:
+        _log("[CLI] Stopping shared QNN server...")
+        try:
+            server = _get_qnn_server()
+            if server._shared:
+                resp = server._send_shared("QUIT", timeout=2.0)
+                _log(f"[CLI] Server response: {resp}")
+            else:
+                server.stop()
+        except Exception as e:
+            _log(f"[CLI] Error stopping server: {e}")
+        sys.exit(0)
+
+    SDXL_QNN_LORA_SLOT = _normalize_lora_slot(a.lora_slot)
+    if a.trace_all_steps:
+        QNN_TRACE_ALL_STEPS = True
 
     if a.list_resolutions:
         avail = _list_supported_resolutions(a.model_family)
@@ -3339,6 +3484,9 @@ if __name__ == "__main__":
 
     if not a.prompt:
         ap.error("prompt is required for generation")
+        
+    if _WAS_SNAPPED:
+        _log(f"[TEMP] Snapped resolution to {_IMAGE_WIDTH}x{_IMAGE_HEIGHT}")
 
     if a.model_family != MODEL_FAMILY_SDXL:
         _check_runtime(a.model_family, a.width, a.height, probe_perf=a.probe_perf)

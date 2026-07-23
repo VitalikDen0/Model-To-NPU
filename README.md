@@ -21,6 +21,7 @@ Right now the most complete path is:
 ## What is working today
 
 - **SDXL end-to-end exists**: `checkpoint -> build/export -> deploy -> phone PNG`;
+- **v0.5.1 APK includes Hot Preload, Hot-Swap LoRA UI, and Wan 2.1 UI fixes**;
 - **`v0.5.0` APK split SDXL/WAN into separate tabs** with independent per-tab generation settings;
 - **WAN remains beta**: end-to-end path and hot resolution switching are available for testing, but not validated for production;
 - **AI Hub helpers already exist** for heavyweight compile flows, especially useful for WAN and large UNet pieces.
@@ -123,6 +124,7 @@ Observed fast-path thermals in the current short-run proof cycle sat around **85
 
 ## Recent changes
 
+- **0.5.1** — Added Hot Preload button for SDXL (keep-alive server integration), Hot-Swap LoRA UI (slot dropdown + `build_lora_slot.py` script), Wan 2.1 UI fixes (Frames/FPS sliders, default steps=30), and fixes for dynamic resolution WxH text field snapping bugs.
 - **0.5.0** — APK split into SDXL/WAN tabs with separate saved settings per tab; WAN host flow got hot manifest bucket selection by requested `WxH`; added `WAN 2.1 1.3B/run_end_to_end.ps1` beta wrapper.
 - **0.4.8-beta3** — stronger HTP perf mode in `qnn-multi-context-server`; major decoder regression mostly fixed; residual tail documented as known issue.
 - **0.4.8-beta2** — APK runtime hotfix plus a dedicated **Copy error** action.

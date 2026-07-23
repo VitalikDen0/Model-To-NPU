@@ -56,15 +56,107 @@ In the current git history, the `0.3.x` line is represented by the single tag **
 
 ---
 
+## 0.4.x release archive
+
+The `0.4.x` line was the period where the repository shifted from a single fixed-shape SDXL path into a more practical phone product line with APK packaging, runtime delivery fixes, and later the decoder-regression investigation.
+
+### v0.4.0 — Variable resolution + self-contained APK foundations
+
+- `phone_generate.py` stopped assuming hardcoded `1024×1024` everywhere and gained width/height-aware paths;
+- resolution-scoped context directories were introduced via `context/{W}x{H}/`;
+- `export_split_unet.py` and `build_all.py` gained resolution-aware export/build support;
+- APK got width/height controls and exported `SDXL_QNN_WIDTH` / `SDXL_QNN_HEIGHT`;
+- standalone Termux/runtime packaging groundwork was added.
+
+### v0.4.1 — Bundled runtime payload and stale-script drift fix
+
+- APK started bundling the current phone runtime payload (`generate.py`, server binary, optional accel pieces);
+- app-side execution began preferring bundled runtime files over stale phone leftovers;
+- verify/runtime inspection paths were improved so stale argparse/runtime mismatches became easier to diagnose;
+- deploy flow started pushing `qnn-multi-context-server` and resolution-scoped contexts more consistently.
+
+### v0.4.2 — No clearly published standalone milestone
+
+- No clean public `v0.4.2` marker was found in the current git history as a stable documented release.
+- The line appears to have moved directly through iterative runtime/package work into the `v0.4.3` series.
+
+### v0.4.3 — Shared prewarm reuse and runtime hotfix series
+
+- app-open prewarm and foreground generation were reworked toward shared reuse instead of warming throwaway helpers;
+- bundled runtime delivery became more deterministic, including payload refresh behavior;
+- TAESD payload staging and preview/runtime path handling were tightened;
+- shared-server startup and FIFO readiness issues were addressed across several follow-up refresh commits;
+- this line represents multiple fixes (`010331d`, `a3e9376`, `e987a11`, `c5bac22`) rather than a single one-shot change.
+
+### v0.4.4 — Preset-only APK smoothing pass
+
+- APK hid arbitrary manual `WxH` editing in favor of validated presets;
+- preview/final image decode/display path was smoothed to reduce UI pressure;
+- APK-side exported QNN profile was softened to reduce device-lag / crash risk.
+
+### v0.4.5 — Stability rollback for problematic shared reuse
+
+- foreground generation stopped relying on the more aggressive shared prewarm/server reuse path;
+- the APK line rolled back toward safer behavior after late-step freeze risk;
+- QNN perf profile was returned to `burst` for the foreground path.
+
+### v0.4.6 — Stability-first APK refresh
+
+- public APK line kept background prewarm disabled;
+- deterministic runtime payload refresh behavior was retained;
+- runtime staging and packaging became more conservative and reproducible;
+- this line was documented around the now-familiar **34.6 s cold-start APK** proof framing.
+
+### v0.4.7 — CFG / TAESD UX hotfix
+
+- exact user CFG values, including `1.0`, were forwarded correctly instead of silently snapping back to the runtime default;
+- TAESD/live-preview failures were surfaced as non-fatal warnings instead of silently confusing the user;
+- docs and proof references were aligned to the current public state.
+
+### v0.4.8-beta — Bundled Python runtime, dual paths, TAESD off in APK
+
+- APK gained a bundled Python 3.13 runtime for less Termux dependency on supported flows;
+- root/no-root dual base-dir handling was introduced with auto-switch behavior;
+- TAESD preview was intentionally disabled in the APK line because shared HTP preview hurt the fast path and GPU backend loading in-app was still problematic.
+
+### v0.4.8-beta2 — Runtime bug fix and better error UX
+
+- APK runtime bug fixes landed in the Android line;
+- explicit error-state handling improved, including a dedicated copy-error action;
+- seed parsing and related input paths became safer.
+
+### v0.4.8-beta3 — Decoder speed fix and honest residual-tail note
+
+- `qnn-multi-context-server` HTP perf mode was strengthened (`DCVS` off, MAX corners, RPC latency/polling controls);
+- local validation moved decoder latency from the `~820 ms` class toward roughly `~725–776 ms`;
+- a residual ~`50 ms` tail versus the historical ideal marker remained and was documented explicitly instead of being hidden.
+
+### v0.5.0 — SDXL / WAN Tab Split and APK UI Refresh
+
+- Split SDXL and WAN 2.1 into independent UI tabs with separate settings storage;
+- Introduced dynamic directory scanning for `context/` and `context/lora_slots/` for automatic slot discovery;
+- LMK (Low Memory Killer) defense: added explicit NPU memory unload controls and cleanup handlers.
+
+### v0.5.1 — Dynamic NPU Graph Surgery Readiness Release
+
+- Android APK updated (`v0.5.1`) with LMK prevention and dynamic directory scanners;
+- QNN Windows converter fix (`sanitize_onnx_types.py`): casting INT64 to INT32 prevents StridedSlice memory alignment panics;
+- Published technical roadmap (`ROADMAP_DYNAMIC_NPU_SURGERY`): pivoting from static resolution buckets to dynamic weight injection & attention masking (`-10000.0` instead of $-\infty$ to preserve quantization scale);
+- Architectural review: designed true zero-copy via single cross-registered `rpcmem` memory handle.
+
+---
+
 ## Optimization experiments archive
 
-### Zero-copy pointer swap (FAILED)
+### Zero-copy pointer swap (QNN HTP Limit & Architecture Fix)
 
-Attempted to swap decoder input buffer pointers to point directly at encoder output buffers, eliminating memcpy in the RUN_CHAIN pipeline. **QNN error 6004** — QNN HTP uses registered shared memory (`rpcmem`). Tensor buffers have specific registered memory handles (`Qnn_MemHandle`). Swapping pointers to different addresses causes "Failed to find memHandle" because the new addresses aren't registered. **Conclusion:** memcpy is mandatory for piping between encoder output and decoder input in QNN HTP.
+- *Initial Attempt:* Pointer swapping between encoder output and decoder input triggered **QNN error 6004** due to unregistered `Qnn_MemHandle` buffers.
+- *Architecture Solution:* Instead of swapping pointers at runtime, `qnn-multi-context-server` allocates a single shared `rpcmem` memory block at startup. It is registered as Output Buffer during Encoder setup and as Input Buffer during Decoder setup. This completely eliminates `memcpy` without pointer swapping!
 
 ### Persistent daemon approach (REGRESSED)
 
 Using `qnn-context-runner` as a persistent daemon for context reuse initially seemed promising but consistently regressed on the rebuilt phone:
+
 - Daemon-all: ~111.3 s → optimized to ~63.3 s (still slower than stock ~60.1 s).
 - Dummy warmup pass during CLIP: ~110.5 s (too expensive to hide).
 - `QnnGraph_setConfig` for VTCM/HVX: ~120.2 s (further regression).
@@ -72,6 +164,7 @@ Using `qnn-context-runner` as a persistent daemon for context reuse initially se
 ### Monolithic INT8 UNet (CATASTROPHICALLY SLOW)
 
 True 8W8A quantized monolithic UNet from QAIRT 2.44 with anime-aligned calibration:
+
 - Parity: cosine ~0.99913 vs W8A16 control (good).
 - Speed: ~161-218 s/step vs ~2.55 s/step for W8A16 (**63× slower**).
 - Profiler confirmed the graph executes on HTP (not CPU fallback), but is compiled into a catastrophically expensive graph: ~1.35×10¹² accelerator cycles vs ~3.73×10⁹ for W8A16.
@@ -95,6 +188,7 @@ Experimental batched CLIP path improved CLIP time to ~1.83-2.03 s but worsened e
 Checkpoint used: `waiIllustriousSDXL_v160.safetensors` (WAI Illustrious SDXL v1.60 + SDXL-Lightning 8-step LoRA baked in).
 
 Host artifacts:
+
 - `build/sdxl_work_wai160_20260406/diffusers_pipeline/`
 - `build/sdxl_work_wai160_20260406/unet_lightning_merged/`
 - `build/sdxl_work_wai160_20260406/onnx_clip_vae/`
@@ -107,6 +201,7 @@ Validated output: `NPU/outputs/wai160_phone_native_cfg35_20260406.png`
 ## Thermal observations
 
 In warmed-up full runs, the practical thermal envelope:
+
 - **CPU:** ~59–70°C
 - **GPU:** ~50–52°C
 - **NPU:** ~57–72°C (short spikes up to ~78°C)

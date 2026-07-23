@@ -18,6 +18,14 @@ if not hasattr(onnx, "mapping"):
         }
     )
 
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    sdk_root = os.environ.get("QAIRT_SDK_ROOT") or os.environ.get("QNN_SDK_ROOT")
+    if sdk_root:
+        for sub in [["lib", "x86_64-windows-msvc"], ["bin", "x86_64-windows-msvc"]]:
+            d = os.path.join(sdk_root, *sub)
+            if os.path.isdir(d):
+                os.add_dll_directory(d)
+
 from qti.aisw.converters import onnx as onnx_frontend
 from qti.aisw.converters.backend.ir_to_qnn import QnnConverterBackend
 from qti.aisw.converters.backend.qnn_quantizer import QnnQuantizer

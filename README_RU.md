@@ -23,12 +23,11 @@
 
 Этот репозиторий задуман как общее место для нескольких **model-specific pipeline'ов**, нацеленных на Qualcomm Snapdragon NPU.
 
-- для каждой семьи моделей предполагается своя папка;
-- **текущая реализованная папка** — `SDXL/`;
-- ранний исследовательский workspace `WAN 2.1 1.3B/` выделен под Wan 2.1 T2V 1.3B;
-- начата работа над **SD3**, **Flux**, **Wan** и другими — по мере проработки методов оптимизации;
-- **текущее Android-приложение** лежит в `APK/`;
-- общие deploy-скрипты и файлы — в `scripts/`, `tokenizer/` и в корне.
+- **SDXL на Qualcomm Hexagon NPU** (`SDXL/`);
+- Новейший **роадмап динамической хирургии графов (Dynamic NPU Graph Surgery)**: [ROADMAP_DYNAMIC_NPU_SURGERY_RU.md](SDXL/ROADMAP_DYNAMIC_NPU_SURGERY_RU.md);
+- **v0.5.1 APK**: оптимизация памяти LMK, динамическое сканирование контекстов и слотов LoRA;
+- Ранний исследовательский workspace `WAN 2.1 1.3B/` под Wan 2.1 T2V 1.3B;
+- Android-приложение в `APK/`.
 
 Сейчас реально реализованный и задокументированный путь — это **Stable Diffusion XL**, работающий **нативно на NPU телефона** (Hexagon HTP). Текущий SDXL pipeline использует CLIP-L, CLIP-G, Split UNet (encoder + decoder) и VAE прямо на устройстве.
 

@@ -1,10 +1,17 @@
 param(
     [string]$Checkpoint,
 
-    [string]$DefaultCheckpoint = "J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v160.safetensors",
+    [string]$DefaultCheckpoint = "J:\ComfyUI\models\checkpoints\waiIllustriousSDXL_v170.safetensors",
 
     [string]$Python = "python",
     [string]$OutputRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) "build\sdxl_work"),
+    [string]$Resolution = "1024x1024",
+    [string]$HotSwapResolutions = "",
+    [string]$LightningLora = "",
+    [double]$LightningLoraScale = 1.0,
+    [string]$HotSwapLoras = "",
+    [string]$HotSwapLoraScales = "",
+    [switch]$VerifyMerge,
     [string]$ContextsDir,
     [string]$QnnLibDir,
     [string]$QnnBinDir,
@@ -79,6 +86,16 @@ $Checkpoint = $Checkpoint.Trim('"')
 
 Write-Host "Checkpoint: $Checkpoint"
 Write-Host "Output    : $OutputRoot"
+Write-Host "Resolution: $Resolution"
+if (-not [string]::IsNullOrWhiteSpace($HotSwapResolutions)) {
+    Write-Host "Hot-swap  : $HotSwapResolutions"
+}
+if (-not [string]::IsNullOrWhiteSpace($LightningLora)) {
+    Write-Host "LoRA base : $LightningLora (scale=$LightningLoraScale)"
+}
+if (-not [string]::IsNullOrWhiteSpace($HotSwapLoras)) {
+    Write-Host "LoRA slots: $HotSwapLoras"
+}
 Write-Host "Phone base: $PhoneBase"
 
 if (-not (Test-Path $Checkpoint)) {
@@ -86,12 +103,32 @@ if (-not (Test-Path $Checkpoint)) {
 }
 
 if (-not $SkipBuild) {
-    Invoke-Step -Title "Early reproducible SDXL build stages" -Command @(
+    $BuildArgs = @(
         $Python,
         $BuildHelper,
         "--checkpoint", $Checkpoint,
-        "--output-dir", $OutputRoot
+        "--output-dir", $OutputRoot,
+        "--resolution", $Resolution
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($HotSwapResolutions)) {
+        $BuildArgs += @("--hot-swap-resolutions", $HotSwapResolutions)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LightningLora)) {
+        $BuildArgs += @("--lightning-lora", $LightningLora)
+        $BuildArgs += @("--lightning-lora-scale", $LightningLoraScale.ToString([System.Globalization.CultureInfo]::InvariantCulture))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HotSwapLoras)) {
+        $BuildArgs += @("--hot-swap-loras", $HotSwapLoras)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HotSwapLoraScales)) {
+        $BuildArgs += @("--hot-swap-lora-scales", $HotSwapLoraScales)
+    }
+    if ($VerifyMerge) {
+        $BuildArgs += @("--verify-merge")
+    }
+
+    Invoke-Step -Title "Early reproducible SDXL build stages" -Command $BuildArgs
 }
 else {
     Write-Host "[skip] Build stage skipped."
@@ -148,6 +185,8 @@ Write-Host ""
 Write-Host "Notes:"
 Write-Host "- If -Checkpoint is omitted, the script asks interactively and defaults to $DefaultCheckpoint."
 Write-Host "- This script follows the current public beta path of the repo."
-Write-Host "- The build step covers checkpoint -> diffusers -> Lightning merge -> ONNX export."
+Write-Host "- The default build is 1024x1024; pass -Resolution and optional -HotSwapResolutions for extra buckets."
+Write-Host "- HotSwap LoRA supports up to 4 pre-baked slots via -HotSwapLoras (comma-separated)."
+Write-Host "- The build step covers checkpoint -> diffusers -> Lightning merge -> QNN-friendly UNet/CLIP/VAE ONNX export."
 Write-Host "- The deploy step assumes split context binaries already exist, because that remains the current documented runtime path."
 Write-Host "- The deeper Lightning/QNN lab scripts are documented in SDXL/SCRIPTS_OVERVIEW*.md and are still marked experimental."

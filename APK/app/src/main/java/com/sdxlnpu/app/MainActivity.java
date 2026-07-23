@@ -24,6 +24,9 @@ import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import java.util.List;
+import java.util.ArrayList;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.Spinner;
@@ -81,6 +84,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_PREFIX_CONTRAST = "last_contrast_stretch_";
     private static final String PREF_PREFIX_LIVE_PREVIEW = "last_live_preview_";
     private static final String PREF_PREFIX_PROGRESSIVE_CFG = "last_progressive_cfg_";
+    private static final String PREF_PREFIX_FRAMES = "last_frames_";
+    private static final String PREF_PREFIX_FPS = "last_fps_";
     private static final String LEGACY_BASE_DIR = SettingsActivity.LEGACY_BASE_DIR;
     private static final String[] TERMUX_PRIVATE_PREFIXES = new String[] {
         "/data/data/com.termux/",
@@ -107,9 +112,17 @@ public class MainActivity extends AppCompatActivity {
     private CheckBox contrastStretch;
     private CheckBox livePreview;
     private CheckBox progressiveCfg;
+    private LinearLayout wanSettingsContainer;
+    private SeekBar framesSeekBar;
+    private TextView framesLabel;
+    private SeekBar fpsSeekBar;
+    private TextView fpsLabel;
     private MaterialButton generateButton;
+    private MaterialButton preloadButton;
+    private MaterialButton unloadButton;
     private MaterialButton saveButton;
     private MaterialButton stopButton;
+    private Spinner loraSpinner;
     private MaterialButton copyErrorButton;
     private ProgressBar progressBar;
     private TextView statusText;
@@ -141,6 +154,10 @@ public class MainActivity extends AppCompatActivity {
     private static final long PREWARM_KILL_DELAY_MS = 30_000;
     private boolean updatingSizePresetUi = false;
     private String selectedModelFamily = MODEL_FAMILY_SDXL;
+
+    private int lastLoadedWidth = 0;
+    private int lastLoadedHeight = 0;
+    private String lastLoadedLora = "";
 
     private static final int[][] SDXL_SIZE_PRESET_DIMENSIONS = new int[][] {
         {1024, 1024},
@@ -206,9 +223,17 @@ public class MainActivity extends AppCompatActivity {
         contrastStretch = findViewById(R.id.contrastStretch);
         livePreview     = findViewById(R.id.livePreview);
         progressiveCfg  = findViewById(R.id.progressiveCfg);
+        wanSettingsContainer = findViewById(R.id.wanSettingsContainer);
+        framesSeekBar = findViewById(R.id.framesSeekBar);
+        framesLabel = findViewById(R.id.framesLabel);
+        fpsSeekBar = findViewById(R.id.fpsSeekBar);
+        fpsLabel = findViewById(R.id.fpsLabel);
         generateButton  = findViewById(R.id.generateButton);
+        preloadButton = findViewById(R.id.preloadButton);
+        unloadButton = findViewById(R.id.unloadButton);
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
+        loraSpinner = findViewById(R.id.loraSpinner);
         copyErrorButton = findViewById(R.id.copyErrorButton);
         progressBar = findViewById(R.id.progressBar);
         statusText = findViewById(R.id.statusText);
@@ -222,6 +247,7 @@ public class MainActivity extends AppCompatActivity {
         loadSettings();
         configureModelFamilyTabs();
         configureSizePresetSpinner();
+        configureLoraSpinner();
         widthInput.addTextChangedListener(sizeInputWatcher);
         heightInput.addTextChangedListener(sizeInputWatcher);
         selectSizePresetForCurrentInputs();
@@ -244,7 +270,38 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
 
-        generateButton.setOnClickListener(v -> startGeneration());
+        if (framesSeekBar != null) {
+            framesSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (framesLabel != null) framesLabel.setText(String.format(Locale.US, "Frames: %d", progress));
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        }
+
+        if (fpsSeekBar != null) {
+            fpsSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (fpsLabel != null) fpsLabel.setText(String.format(Locale.US, "FPS: %d", progress));
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        }
+
+        generateButton.setOnClickListener(v -> startGeneration(false));
+        if (preloadButton != null) {
+            preloadButton.setOnClickListener(v -> startGeneration(true));
+        }
+        if (unloadButton != null) {
+            unloadButton.setOnClickListener(v -> {
+                killServerAndDaemons(false);
+                updateStatus("Пул памяти очищен", 0);
+            });
+        }
         saveButton.setOnClickListener(v -> saveImage());
         stopButton.setOnClickListener(v -> stopGeneration());
         copyErrorButton.setOnClickListener(v -> copyLastErrorToClipboard());
@@ -309,21 +366,94 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void killServerAndDaemons(boolean synchronous) {
+        // Kill the prewarmProcess first
+        killPrewarmNow("killServerAndDaemons requested");
+
+        Runnable runKill = () -> {
+            try {
+                Log.i(TAG, "killServerAndDaemons: starting full clean NPU memory unload...");
+                String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
+                ExecutionPlan plan = resolveExecutionPlan(activeBaseDir);
+                
+                File bundledPayload = getBundledRuntimePayloadDirOrNull();
+                String generatorScript = resolveGeneratorScriptPath(bundledPayload);
+                
+                StringBuilder script = new StringBuilder();
+                appendShellEnvironment(script);
+                script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
+                script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
+                script.append("export PYTHONDONTWRITEBYTECODE=1\n");
+                script.append("export SDXL_QNN_SHARED_SERVER=1\n");
+                script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
+                appendBundledRuntimeEnvironment(script, bundledPayload);
+                
+                script.append(String.format(Locale.US,
+                    "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
+                    shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
+                script.append(String.format(Locale.US,
+                    "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
+                    shellEscape(activeBaseDir)));
+                
+                script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
+                // 1. Send --stop-server command cleanly to Python IPC
+                script.append("\"").append(shellEscape(plan.pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\" --stop-server\n");
+                // 2. Kill remaining processes forcibly in case they are orphaned/hung
+                script.append("pkill -f qnn-multi-context-server\n");
+                script.append("pkill -f qnn-context-runner\n");
+                script.append("pkill -f generate.py\n");
+                script.append("pkill -f phone_generate.py\n");
+
+                ProcessBuilder pb;
+                if (plan.useRootShell) {
+                    String su = findAvailableSuOrNull();
+                    if (su != null) {
+                        pb = new ProcessBuilder(su, "--mount-master");
+                    } else {
+                        pb = new ProcessBuilder("/system/bin/sh");
+                    }
+                } else {
+                    pb = new ProcessBuilder("/system/bin/sh");
+                }
+                pb.redirectErrorStream(true);
+                Process process = pb.start();
+                try (OutputStream os = process.getOutputStream()) {
+                    os.write(script.toString().getBytes("UTF-8"));
+                    os.flush();
+                }
+                
+                // Read output so process finishes
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        Log.d(TAG, "killServerAndDaemons> " + line);
+                    }
+                }
+                process.waitFor();
+                Log.i(TAG, "killServerAndDaemons: completed shutdown command.");
+            } catch (Exception e) {
+                Log.e(TAG, "Error in killServerAndDaemons", e);
+            }
+        };
+
+        if (synchronous) {
+            runKill.run();
+        } else {
+            executor.submit(runKill);
+        }
+    }
+
     private void schedulePrewarmKill(String reason) {
         cancelScheduledPrewarmKill();
         if (!MODEL_FAMILY_SDXL.equals(getSelectedModelFamily()) || isGenerating) {
             return;
         }
         Process process = prewarmProcess;
-        if (process == null || !process.isAlive()) {
-            prewarmProcess = null;
-            return;
-        }
+        // Even if process is null, the daemon server might still be running.
         prewarmKillRunnable = () -> {
-            Process current = prewarmProcess;
-            if (current != null && current.isAlive() && !isGenerating) {
+            if (!isGenerating) {
                 Log.i(TAG, "prewarm: idle timeout reached (" + reason + ")");
-                current.destroyForcibly();
+                killServerAndDaemons(false);
             }
             prewarmProcess = null;
             prewarmKillRunnable = null;
@@ -378,7 +508,7 @@ public class MainActivity extends AppCompatActivity {
                 script.append("export SDXL_QNN_USE_MMAP=1\n");
                 script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
                 script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
-                script.append("export SDXL_QNN_SHARED_SERVER=0\n");
+                script.append("export SDXL_QNN_SHARED_SERVER=1\n");
                 script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
                 boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledPayload);
                 if (!bundledQnnConfigReady) {
@@ -463,6 +593,8 @@ public class MainActivity extends AppCompatActivity {
         editor.putBoolean(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily), contrastStretch.isChecked());
         editor.putBoolean(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily), livePreview.isChecked());
         editor.putBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), progressiveCfg.isChecked());
+        if (framesSeekBar != null) editor.putInt(prefKeyForFamily(PREF_PREFIX_FRAMES, modelFamily), framesSeekBar.getProgress());
+        if (fpsSeekBar != null) editor.putInt(prefKeyForFamily(PREF_PREFIX_FPS, modelFamily), fpsSeekBar.getProgress());
     }
 
     private void restoreGenerationSettingsForFamily(
@@ -470,7 +602,7 @@ public class MainActivity extends AppCompatActivity {
             String modelFamily,
             boolean allowLegacyFallback) {
         final boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
-        final int defaultSteps = 8;
+        final int defaultSteps = wanMode ? 30 : 8;
         final int defaultCfgX10 = wanMode ? 10 : 35;
         final String defaultWidth = wanMode ? "832" : "1024";
         final String defaultHeight = wanMode ? "480" : "1024";
@@ -494,6 +626,12 @@ public class MainActivity extends AppCompatActivity {
             : null;
         Boolean progCfg = prefs.contains(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily))
             ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), false)
+            : null;
+        Integer frames = prefs.contains(prefKeyForFamily(PREF_PREFIX_FRAMES, modelFamily))
+            ? prefs.getInt(prefKeyForFamily(PREF_PREFIX_FRAMES, modelFamily), 81)
+            : null;
+        Integer fps = prefs.contains(prefKeyForFamily(PREF_PREFIX_FPS, modelFamily))
+            ? prefs.getInt(prefKeyForFamily(PREF_PREFIX_FPS, modelFamily), 16)
             : null;
 
         if (allowLegacyFallback && MODEL_FAMILY_SDXL.equals(modelFamily)) {
@@ -541,6 +679,14 @@ public class MainActivity extends AppCompatActivity {
         contrastStretch.setChecked(contrast != null ? contrast : true);
         livePreview.setChecked(preview != null ? preview : false);
         progressiveCfg.setChecked(progCfg != null ? progCfg : false);
+        if (framesSeekBar != null) {
+            framesSeekBar.setProgress(frames != null ? frames : 81);
+            if (framesLabel != null) framesLabel.setText(String.format(Locale.US, "Frames: %d", framesSeekBar.getProgress()));
+        }
+        if (fpsSeekBar != null) {
+            fpsSeekBar.setProgress(fps != null ? fps : 16);
+            if (fpsLabel != null) fpsLabel.setText(String.format(Locale.US, "FPS: %d", fpsSeekBar.getProgress()));
+        }
 
         applyModelFamilyDefaults(wanMode);
     }
@@ -645,23 +791,100 @@ public class MainActivity extends AppCompatActivity {
         sizePresetSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (updatingSizePresetUi || position < 0) {
-                    return;
+                if (updatingSizePresetUi) return;
+                String selected = (String) parent.getItemAtPosition(position);
+                String[] parts = selected.split("x");
+                if (parts.length == 2) {
+                    updatingSizePresetUi = true;
+                    widthInput.setText(parts[0].trim());
+                    heightInput.setText(parts[1].trim());
+                    updatingSizePresetUi = false;
                 }
-                int[][] presets = getActiveSizePresetDimensions();
-                if (position >= presets.length) {
-                    return;
-                }
-                int[] preset = presets[position];
-                updatingSizePresetUi = true;
-                widthInput.setText(String.valueOf(preset[0]));
-                heightInput.setText(String.valueOf(preset[1]));
-                updatingSizePresetUi = false;
             }
 
             @Override
             public void onNothingSelected(AdapterView<?> parent) {}
         });
+    }
+
+    private void configureLoraSpinner() {
+        if (loraSpinner == null) return;
+        
+        // Remember previous selection if possible
+        String selectedLora = null;
+        if (loraSpinner.getSelectedItem() != null) {
+            selectedLora = loraSpinner.getSelectedItem().toString();
+        }
+
+        List<String> items = new ArrayList<>();
+        items.add("None");
+
+        try {
+            String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
+            if (activeBaseDir != null && !activeBaseDir.isEmpty()) {
+                // 1. Scan context/
+                File contextDir = new File(activeBaseDir, "context");
+                if (contextDir.exists() && contextDir.isDirectory()) {
+                    File[] subDirs = contextDir.listFiles(File::isDirectory);
+                    if (subDirs != null) {
+                        for (File subDir : subDirs) {
+                            String name = subDir.getName();
+                            // Skip system directories and resolutions
+                            if (isValidLoraDirName(name)) {
+                                if (!items.contains(name)) {
+                                    items.add(name);
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Scan context/lora_slots/
+                    File loraSlotsDir = new File(contextDir, "lora_slots");
+                    if (loraSlotsDir.exists() && loraSlotsDir.isDirectory()) {
+                        File[] loraDirs = loraSlotsDir.listFiles(File::isDirectory);
+                        if (loraDirs != null) {
+                            for (File loraDir : loraDirs) {
+                                String name = loraDir.getName();
+                                if (isValidLoraDirName(name)) {
+                                    if (!items.contains(name)) {
+                                        items.add(name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error scanning LoRA directories", e);
+        }
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, items);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        loraSpinner.setAdapter(adapter);
+
+        // Restore previous selection if it's still in the items list
+        if (selectedLora != null) {
+            int pos = items.indexOf(selectedLora);
+            if (pos >= 0) {
+                loraSpinner.setSelection(pos);
+            }
+        }
+    }
+
+    private boolean isValidLoraDirName(String name) {
+        if (name == null || name.isEmpty()) return false;
+        // Exclude system directories
+        if (name.equalsIgnoreCase("bin") || name.equalsIgnoreCase("lib") || 
+            name.equalsIgnoreCase("model") || name.equalsIgnoreCase("lora_slots") ||
+            name.equalsIgnoreCase("wan_slots")) {
+            return false;
+        }
+        // Exclude resolutions (e.g. 1024x1024, 832x1216)
+        if (name.matches("^\\d+x\\d+$")) {
+            return false;
+        }
+        return true;
     }
 
     private static int parsePositiveInt(EditText input) {
@@ -730,14 +953,13 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int[] preset = presets[selection];
-        if (preset[0] != width || preset[1] != height) {
-            applySizePresetByIndex(selection);
-            return;
-        }
-        if (sizePresetSpinner.getSelectedItemPosition() != selection) {
-            updatingSizePresetUi = true;
-            sizePresetSpinner.setSelection(selection, false);
-            updatingSizePresetUi = false;
+        // Only update spinner if there is an EXACT match. Do NOT override user text.
+        if (preset[0] == width && preset[1] == height) {
+            if (sizePresetSpinner.getSelectedItemPosition() != selection) {
+                updatingSizePresetUi = true;
+                sizePresetSpinner.setSelection(selection, false);
+                updatingSizePresetUi = false;
+            }
         }
     }
 
@@ -779,16 +1001,20 @@ public class MainActivity extends AppCompatActivity {
         String widthText = widthInput.getText() != null ? widthInput.getText().toString().trim() : "";
         String heightText = heightInput.getText() != null ? heightInput.getText().toString().trim() : "";
         if (wanMode) {
+            if (wanSettingsContainer != null) wanSettingsContainer.setVisibility(View.VISIBLE);
             if (widthText.isEmpty() || heightText.isEmpty()
                 || ("1024".equals(widthText) && "1024".equals(heightText))) {
                 widthInput.setText("832");
                 heightInput.setText("480");
             }
             livePreview.setChecked(false);
-        } else if (("832".equals(widthText) && "480".equals(heightText))
+        } else {
+            if (wanSettingsContainer != null) wanSettingsContainer.setVisibility(View.GONE);
+            if (("832".equals(widthText) && "480".equals(heightText))
                 || (widthText.isEmpty() && heightText.isEmpty())) {
-            widthInput.setText("1024");
-            heightInput.setText("1024");
+                widthInput.setText("1024");
+                heightInput.setText("1024");
+            }
         }
     }
 
@@ -1182,7 +1408,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void startGeneration() {
+    private void startGeneration(boolean isPreloadOnly) {
         String modelFamily = getSelectedModelFamily();
         String activeBaseDir = resolveActiveBaseDir(modelFamily);
         String configuredBaseDir = resolveConfiguredBaseDir(modelFamily);
@@ -1192,7 +1418,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String prompt = promptInput.getText().toString().trim();
-        if (MODEL_FAMILY_SDXL.equals(modelFamily) && prompt.isEmpty()) {
+        if (MODEL_FAMILY_SDXL.equals(modelFamily) && prompt.isEmpty() && !isPreloadOnly) {
             Toast.makeText(this, "Введите промпт", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1207,6 +1433,17 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Seed должен быть числом", Toast.LENGTH_SHORT).show();
             return;
         }
+        int frames = (framesSeekBar != null) ? framesSeekBar.getProgress() : 81;
+        int fps = (fpsSeekBar != null) ? fpsSeekBar.getProgress() : 16;
+        String loraSlot = "";
+        if (loraSpinner != null && loraSpinner.getSelectedItem() != null) {
+            loraSlot = loraSpinner.getSelectedItem().toString();
+            if (loraSlot.equals("None") || loraSlot.isEmpty()) {
+                loraSlot = "";
+            }
+        }
+        final String finalLoraSlot = loraSlot;
+        
         int steps = stepsSeekBar.getProgress();
         float cfg = cfgSeekBar.getProgress() / 10f;
         String neg = negPromptInput.getText().toString().trim();
@@ -1215,9 +1452,7 @@ public class MainActivity extends AppCompatActivity {
         boolean progCfg = progressiveCfg.isChecked();
         isGenerating = true;
         cancelScheduledPrewarmKill();
-        if (MODEL_FAMILY_SDXL.equals(modelFamily)) {
-            killPrewarmNow("handoff to foreground generation");
-        }
+        // Do NOT kill prewarm process here! We want to reuse the shared server.
 
         // Build output name
         String outName = "apk_s" + seed;
@@ -1237,8 +1472,21 @@ public class MainActivity extends AppCompatActivity {
         final int finalWidth = imgWidth;
         final int finalHeight = imgHeight;
 
+        if (MODEL_FAMILY_SDXL.equals(modelFamily)) {
+            if (lastLoadedWidth > 0 && lastLoadedHeight > 0) {
+                if (lastLoadedWidth != finalWidth || lastLoadedHeight != finalHeight || !lastLoadedLora.equals(finalLoraSlot)) {
+                    Log.i(TAG, "Dimension or LoRA slot changed! Freeing old NPU server allocation...");
+                    killServerAndDaemons(true);
+                }
+            }
+            lastLoadedWidth = finalWidth;
+            lastLoadedHeight = finalHeight;
+            lastLoadedLora = finalLoraSlot;
+        }
+
         clearDisplayedImage(true);
         generateButton.setEnabled(false);
+        if (preloadButton != null) preloadButton.setEnabled(false);
         stopButton.setVisibility(View.VISIBLE);
         progressBar.setVisibility(View.VISIBLE);
         progressBar.setProgress(0);
@@ -1247,15 +1495,15 @@ public class MainActivity extends AppCompatActivity {
         clearErrorState();
         latestTempStatus = "";
         latestWarningStatus = baseRedirectWarning != null ? "⚠ ROUTE: " + baseRedirectWarning : "";
-        latestStageStatus = MODEL_FAMILY_WAN21.equals(modelFamily)
+        latestStageStatus = isPreloadOnly ? "Загрузка модели (Preload)..." : (MODEL_FAMILY_WAN21.equals(modelFamily)
             ? "WAN 2.1 runtime probe..."
-            : "Запуск...";
+            : "Запуск...");
         latestProgress = 0;
         renderStatus();
 
         executor.execute(() -> {
             try {
-                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight);
+                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight, isPreloadOnly, frames, fps, finalLoraSlot);
             } catch (Exception e) {
                 isGenerating = false;
                 mainHandler.post(() -> {
@@ -1263,6 +1511,7 @@ public class MainActivity extends AppCompatActivity {
                     showErrorState(getString(R.string.status_error_short), "Ошибка: " + (e.getMessage() != null ? e.getMessage() : "unknown"));
                     renderStatus();
                     generateButton.setEnabled(true);
+                    if (preloadButton != null) preloadButton.setEnabled(true);
                     stopButton.setVisibility(View.GONE);
                     progressBar.setVisibility(View.GONE);
                     restoreOrSchedulePrewarm("idle after failed generation start");
@@ -1285,6 +1534,7 @@ public class MainActivity extends AppCompatActivity {
             latestStageStatus = "Остановлено";
             renderStatus();
             generateButton.setEnabled(true);
+            if (preloadButton != null) preloadButton.setEnabled(true);
             stopButton.setVisibility(View.GONE);
             progressBar.setVisibility(View.GONE);
             restoreOrSchedulePrewarm("idle after cancelled generation");
@@ -1369,7 +1619,7 @@ public class MainActivity extends AppCompatActivity {
     private void runPipeline(String prompt, long seed, int steps,
                              float cfg, String neg, boolean stretch,
                              boolean preview, boolean progCfg, String outName,
-                             int imgWidth, int imgHeight)
+                             int imgWidth, int imgHeight, boolean isPreloadOnly, int frames, int fps, String loraSlot)
             throws IOException, InterruptedException {
         String modelFamily = getSelectedModelFamily();
         boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
@@ -1419,7 +1669,7 @@ public class MainActivity extends AppCompatActivity {
         script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
         script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
         script.append("export SDXL_QNN_USE_DAEMON=0\n");
-        script.append("export SDXL_QNN_SHARED_SERVER=0\n");
+        script.append("export SDXL_QNN_SHARED_SERVER=1\n");
         script.append("export SDXL_QNN_ASYNC_PREP=1\n");
         script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
         script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=")
@@ -1436,6 +1686,8 @@ public class MainActivity extends AppCompatActivity {
         }
         if (wanMode) {
             script.append("export SDXL_QNN_PROFILING_LEVEL=basic\n");
+            script.append("export WAN_FRAMES=").append(frames).append("\n");
+            script.append("export WAN_FPS=").append(fps).append("\n");
         }
         File accelLib = bundledRuntimePayloadDir != null
             ? new File(bundledRuntimePayloadDir, "phone_gen/lib/libsdxl_runtime_accel.so")
@@ -1493,7 +1745,14 @@ public class MainActivity extends AppCompatActivity {
         script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
 
         script.append("exec \"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
-        if (wanMode) {
+        if (isPreloadOnly) {
+            script.append(" --prewarm");
+            script.append(" --width ").append(imgWidth);
+            script.append(" --height ").append(imgHeight);
+            if (!loraSlot.isEmpty()) {
+                script.append(" --lora-slot ").append(shellEscape(loraSlot));
+            }
+        } else if (wanMode) {
             script.append(" --model-family wan21 --check-runtime");
             script.append(" --width ").append(imgWidth);
             script.append(" --height ").append(imgHeight);
@@ -1506,6 +1765,9 @@ public class MainActivity extends AppCompatActivity {
             script.append(" --width ").append(imgWidth);
             script.append(" --height ").append(imgHeight);
             script.append(" --name ").append(outName);
+            if (!loraSlot.isEmpty()) {
+                script.append(" --lora-slot ").append(shellEscape(loraSlot));
+            }
             if (cfg > 1.0f) {
                 if (!neg.isEmpty()) {
                     script.append(" --neg \"").append(shellEscape(neg)).append("\"");
@@ -1587,11 +1849,10 @@ public class MainActivity extends AppCompatActivity {
 
         int exitCode = -1;
         boolean waitedForProcess = false;
+        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
         try {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
+            String line;
+            while ((line = reader.readLine()) != null) {
                     if (currentProcess == null) break; // stopped
                     if (rawLog.length() < 16000) rawLog.append(line).append("\n");
 
@@ -1722,11 +1983,40 @@ public class MainActivity extends AppCompatActivity {
                     if (line.contains("UNet total:")) {
                         timingLog.append(line.trim()).append("\n");
                     }
+                    
+                    if (isPreloadOnly && line.contains("PREWARM_READY")) {
+                        prewarmProcess = process;
+                        waitedForProcess = true;
+                        mainHandler.post(() -> {
+                            latestStageStatus = "Модель загружена (Preload)";
+                            renderStatus();
+                            generateButton.setEnabled(true);
+                            if (preloadButton != null) preloadButton.setEnabled(true);
+                            stopButton.setVisibility(View.GONE);
+                            progressBar.setVisibility(View.GONE);
+                            // Keep alive timer is managed by phone_generate.py, but we can also schedule a kill in app just in case:
+                            restoreOrSchedulePrewarm("idle after preload");
+                        });
+                        
+                        // Keep consuming the stream in the background so Python doesn't SIGPIPE
+                        new Thread(() -> {
+                            try {
+                                String dummy;
+                                while ((dummy = reader.readLine()) != null) {
+                                    Log.i(TAG, "prewarm-bg> " + dummy);
+                                }
+                            } catch (Exception e) {}
+                        }).start();
+                        
+                        return;
+                    }
                 }
-            }
             exitCode = process.waitFor();
             waitedForProcess = true;
         } finally {
+            if (!waitedForProcess || !isPreloadOnly) {
+                try { reader.close(); } catch (Exception e) {}
+            }
             if (!waitedForProcess && process.isAlive()) {
                 process.destroyForcibly();
             }
@@ -2266,10 +2556,16 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        configureLoraSpinner();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
-        // Cancel pending prewarm kill timer
-        killPrewarmNow("activity destroy");
+        // Cancel pending prewarm kill timer and do full cleanup
+        killServerAndDaemons(true);
         cancelPreviewPolling();
         clearDisplayedImage(true);
         // Kill generation process

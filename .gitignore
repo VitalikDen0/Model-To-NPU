@@ -38,6 +38,10 @@ onnx_*/
 groupnorm_probe/
 subgraph_probes/
 
+# Local Environment & Lock Files
+.env
+.*.LCK*
+
 # IDE
 .vscode/
 .idea/
@@ -54,6 +58,9 @@ Thumbs.db
 build/
 output/
 WAN 2.1 1.3B/downloads_meta/
+Flux.2/
+SD3.5/
+SD15/
 
 # Local benchmark tooling / outputs (never commit)
 local_tools/

@@ -1,17 +1,21 @@
-# Model-To-NPU Mandatory Attribution Notice
+# Model-To-NPU Notices
 
-Required attribution for copies, forks, derivative works, demos, public
-deployments, and user-facing documentation:
+Required Notice: Copyright (c) 2026 Model-To-NPU Contributors
+Required Notice: Original idea and original project concept: VitalikDen0, creator of Model-To-NPU.
+Required Notice: Project URL:
+Required Notice: Licensor / contact:
 
-English:
-"Original idea and original project concept: VitalikDen0, creator of
-Model-To-NPU."
+This repository is distributed under PolyForm Noncommercial License 1.0.0:
+https://polyformproject.org/licenses/noncommercial/1.0.0
 
-Russian:
-"Исходная идея и исходная концепция проекта: VitalikDen0, создатель
-Model-To-NPU."
+If you redistribute any part of this repository, include these `Required Notice:`
+lines together with the PolyForm terms or the canonical URL above.
 
-When redistributing or publicly deploying the project or a derivative/fork,
-keep this NOTICE file and reproduce the attribution in a reasonably visible
-place such as a README, project page, About/Credits screen, package metadata,
-or user-facing documentation.
+Third-party components remain under their own licenses. Notable examples:
+
+- Qualcomm AI Engine Direct SDK (QAIRT) — proprietary Qualcomm license
+- SDXL-Lightning LoRA by ByteDance — Apache 2.0
+- Stable Diffusion XL — CreativeML Open RAIL-M
+- Hugging Face Diffusers / Transformers — Apache 2.0
+- ONNX Runtime — MIT
+- PyTorch — BSD-3-Clause

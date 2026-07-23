@@ -318,9 +318,10 @@ def export_unet(
     opset: int = 17,
     timestep_input_mode: str = "rank1",
     onnx_exporter: str = "torch_export",
+    resnet_temb_mode: str = "internal",
 ):
     """Export SDXL UNet to ONNX."""
-    from diffusers import UNet2DConditionModel
+    from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
     from safetensors.torch import load_file
 
     print(f"[unet] Loading weights from {safetensors_path}...")
@@ -380,6 +381,7 @@ def export_unet(
         opset=opset,
         timestep_input_mode=timestep_input_mode,
         onnx_exporter=onnx_exporter,
+        resnet_temb_mode=resnet_temb_mode,
     )
 
     del model, state_dict
@@ -650,16 +652,37 @@ def export_unet_module(
         )
         input_names = ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids", *external_resnet_bias_names]
 
-    torch.onnx.export(
-        wrapper,
-        export_inputs,
-        out_path,
-        opset_version=opset,
-        dynamo=(onnx_exporter != "legacy"),
-        input_names=input_names,
-        output_names=["noise_pred"],
-        dynamic_axes=None,  # Fixed shape for NPU
-    )
+    export_kwargs = {
+        "opset_version": opset,
+        "dynamo": (onnx_exporter != "legacy"),
+        "input_names": input_names,
+        "output_names": ["noise_pred"],
+        "dynamic_axes": None,
+    }
+
+    try:
+        torch.onnx.export(
+            wrapper,
+            export_inputs,
+            out_path,
+            **export_kwargs,
+        )
+    except Exception as exc:
+        if onnx_exporter != "legacy":
+            print(
+                f"[unet] torch_export path failed ({exc.__class__.__name__}: {exc}); "
+                "retrying once with legacy exporter for compatibility"
+            )
+            export_kwargs["dynamo"] = False
+            torch.onnx.export(
+                wrapper,
+                export_inputs,
+                out_path,
+                **export_kwargs,
+            )
+        else:
+            raise
+
     size_mb = os.path.getsize(out_path) / 1e6
     print(f"[unet] Done: {out_path} ({size_mb:.1f} MB)")
     del wrapper
@@ -674,7 +697,7 @@ def export_vae_decoder(
     opset: int = 17,
 ):
     """Export SDXL VAE decoder to ONNX."""
-    from diffusers import AutoencoderKL
+    from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
     from safetensors.torch import load_file
 
     print(f"[vae] Loading weights from {safetensors_path}...")
@@ -758,13 +781,28 @@ def validate_onnx(path: str):
     """Basic ONNX validation."""
     import onnx
     print(f"[validate] Checking {path}...")
-    model = onnx.load(path)
-    onnx.checker.check_model(model, full_check=False)
-    print(f"[validate] {path} — OK (opset={model.opset_import[0].version}, "
-          f"inputs={[i.name for i in model.graph.input]}, "
-          f"outputs={[o.name for o in model.graph.output]})")
-    del model
-    gc.collect()
+
+    size_mb = os.path.getsize(path) / 1e6
+
+    # Path-based validation is the safe route for giant ONNX files (>2 GiB),
+    # where protobuf object loading can fail even though the file itself is valid.
+    onnx.checker.check_model(path, full_check=False)
+
+    metadata_suffix = ""
+    try:
+        model = onnx.load(path, load_external_data=False)
+    except Exception as exc:
+        metadata_suffix = f", metadata skipped: {exc.__class__.__name__}: {exc}"
+    else:
+        metadata_suffix = (
+            f" (opset={model.opset_import[0].version}, "
+            f"inputs={[i.name for i in model.graph.input]}, "
+            f"outputs={[o.name for o in model.graph.output]})"
+        )
+        del model
+        gc.collect()
+
+    print(f"[validate] {path} — OK ({size_mb:.1f} MB{metadata_suffix})")
 
 
 def main():
@@ -853,7 +891,7 @@ def main():
         if components in ("all", "unet"):
             unet_out = str(out_dir / f"unet{suffix}.onnx")
             if diffusers_dir is not None:
-                from diffusers import UNet2DConditionModel
+                from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
 
                 unet = UNet2DConditionModel.from_pretrained(str(diffusers_dir), subfolder="unet", local_files_only=True)
                 export_unet_module(
@@ -885,7 +923,7 @@ def main():
         if components in ("all", "vae"):
             vae_out = str(out_dir / f"vae_decoder{suffix}.onnx")
             if diffusers_dir is not None:
-                from diffusers import AutoencoderKL
+                from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
                 vae = AutoencoderKL.from_pretrained(str(diffusers_dir), subfolder="vae", local_files_only=True)
                 export_vae_decoder_module(vae, vae_out, height=h, width=w, opset=args.opset, onnx_exporter=args.onnx_exporter)
