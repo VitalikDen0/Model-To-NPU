@@ -13,7 +13,13 @@ This APK is used to generate images directly on the phone through the Qualcomm N
 The currently implemented target is **SDXL Lightning**.  
 After the model files are deployed, the workflow is intended to be **fully standalone** — no PC is needed for normal generation.
 
-Current documented APK version: **`0.5.0`**.
+Current documented APK version: **`0.5.1`**.
+
+### v0.5.1 — Hot Preload, LoRA UI, Wan UI Fixes
+
+- Added dynamic scanning for `context/` and `context/lora_slots/` directories;
+- Added explicit NPU memory unload controls and LMK (Low Memory Killer) defense handlers;
+- Fixed dynamic LoRA spinner loading and focus refresh.
 
 ### v0.5.0 — SDXL/WAN split tabs + beta guardrails
 
