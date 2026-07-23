@@ -50,6 +50,20 @@
                 android:text="lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry" />
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- LoRA Slot -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="LoRA Slot (optional)">
+
+            <Spinner
+                android:id="@+id/loraSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp" />
+        </com.google.android.material.textfield.TextInputLayout>
+
         <!-- Seed -->
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
@@ -85,7 +99,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:min="1"
-                android:max="20"
+                android:max="50"
                 android:progress="8" />
         </LinearLayout>
 
@@ -112,6 +126,63 @@
                 android:min="10"
                 android:max="70"
                 android:progress="35" />
+        </LinearLayout>
+
+        <!-- Wan 2.1 Settings -->
+        <LinearLayout
+            android:id="@+id/wanSettingsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="4dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/framesLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Frames: 81"
+                    android:minWidth="90dp" />
+
+                <SeekBar
+                    android:id="@+id/framesSeekBar"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:min="1"
+                    android:max="129"
+                    android:progress="81" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="4dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/fpsLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="FPS: 16"
+                    android:minWidth="90dp" />
+
+                <SeekBar
+                    android:id="@+id/fpsSeekBar"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:min="8"
+                    android:max="30"
+                    android:progress="16" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- Contrast stretch + Live preview row -->
@@ -226,6 +297,22 @@
                 android:layout_weight="1"
                 android:text="@string/generate"
                 android:textSize="18sp" />
+                
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/preloadButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Preload"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/unloadButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Unload"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/stopButton"

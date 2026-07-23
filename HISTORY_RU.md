@@ -56,11 +56,102 @@
 
 ---
 
+## Архив релизной линии 0.4.x
+
+Линия `0.4.x` — это период, когда репозиторий ушёл от одного фиксированного SDXL-пути к более практичной phone-side продуктовой линии с APK-упаковкой, доставкой runtime, экспериментами с shared reuse и последующим расследованием decoder-regression.
+
+### v0.4.0 — Переменное разрешение + foundations для self-contained APK
+
+- `phone_generate.py` перестал считать, что всё всегда равно `1024×1024`;
+- появились resolution-scoped каталоги контекстов через `context/{W}x{H}/`;
+- `export_split_unet.py` и `build_all.py` получили resolution-aware export/build path;
+- APK получил управление шириной/высотой и начал экспортировать `SDXL_QNN_WIDTH` / `SDXL_QNN_HEIGHT`;
+- был заложен фундамент для более автономного runtime/package пути.
+
+### v0.4.1 — Bundled runtime payload и фикс stale-script drift
+
+- APK начал включать в себя актуальный phone runtime payload (`generate.py`, server binary, optional accel);
+- app-side execution стал предпочитать bundled runtime вместо устаревших файлов на телефоне;
+- runtime verify/inspect path стал лучше диагностировать рассинхрон аргументов/argparse;
+- deploy flow стал надёжнее пушить `qnn-multi-context-server` и resolution-scoped contexts.
+
+### v0.4.2 — Нет чисто оформленного публичного milestone
+
+- В текущей git-истории не найден чёткий публичный `v0.4.2` как отдельно оформленный стабильный релизный этап.
+- По факту линия быстро перетекла в серию фиксов и доработок, которые уже оформлялись как `v0.4.3`.
+
+### v0.4.3 — Серия фиксов shared prewarm reuse и runtime hotfixes
+
+- app-open prewarm и foreground generation переделывались в сторону shared reuse вместо одноразовых helper-процессов;
+- bundled runtime delivery стала более детерминированной, включая refresh логики payload;
+- staging TAESD payload и preview/runtime path были подтянуты;
+- отдельно лечились shared-server startup и FIFO readiness проблемы;
+- по сути это не одна правка, а серия коммитов (`010331d`, `a3e9376`, `e987a11`, `c5bac22`).
+
+### v0.4.4 — Preset-only smoothing для APK
+
+- APK убрал произвольное ручное `WxH` редактирование в пользу проверенных preset-ов;
+- preview/final decode-display path был сглажен, чтобы меньше давить на UI;
+- APK-side QNN profile стал мягче, чтобы уменьшить whole-device lag / crash risk.
+
+### v0.4.5 — Stability rollback после проблемного shared reuse
+
+- foreground generation ушёл от более агрессивного shared prewarm/server reuse пути;
+- линия APK откатилась к более безопасному поведению после риска late-step freeze;
+- foreground path вернулся к `burst` профилю.
+
+### v0.4.6 — Stability-first refresh для APK
+
+- в публичной линии background prewarm остался отключённым;
+- детерминированный runtime payload refresh был сохранён;
+- runtime staging и packaging стали более консервативными и воспроизводимыми;
+- эта линия уже документировалась вокруг знакомого маркера **34.6 с cold-start APK**.
+
+### v0.4.7 — Hotfix по CFG / TAESD UX
+
+- точные пользовательские CFG значения, включая `1.0`, начали прокидываться корректно;
+- TAESD/live-preview failures стали показываться как нефатальные предупреждения вместо молчаливой путаницы;
+- docs и proof references были приведены к актуальному публичному состоянию.
+
+### v0.4.8-beta — Bundled Python runtime, dual paths, TAESD off в APK
+
+- APK получил bundled Python 3.13 runtime, чтобы меньше зависеть от внешнего Termux-пути;
+- появился dual base-dir handling для root/no-root сценариев;
+- TAESD preview был намеренно отключён в APK, потому что shared HTP-preview вредил fast path, а GPU backend loading внутри app-process ещё был проблемным.
+
+### v0.4.8-beta2 — Runtime bug fix и улучшение error UX
+
+- в Android-линии были исправлены runtime bug'и;
+- улучшен explicit error-state handling, включая отдельную кнопку копирования ошибки;
+- safer стали seed parsing и соседние input-path сценарии.
+
+### v0.4.8-beta3 — Фикс скорости decoder и честная фиксация остаточного хвоста
+
+- для `qnn-multi-context-server` был усилен HTP perf mode (`DCVS` off, MAX corners, RPC latency/polling controls);
+- локально decoder latency ушёл из класса `~820 мс` в диапазон примерно `~725–776 мс`;
+- остаточный хвост порядка ~`50 мс` относительно исторического ideal marker остался и был зафиксирован явно, а не спрятан.
+
+### v0.5.0 — Разделение SDXL / WAN и обновление интерфейса APK
+
+- Разделение визуальных вкладок SDXL и WAN 2.1 с независимым управлением параметрами;
+- Внедрение динамического сканирования папок `context/` и `context/lora_slots/` для автоматической подгрузки слотов на лету;
+- Оптимизация LMK (Low Memory Killer): добавлены кнопки принудительной выгрузки памяти NPU и автоматическая очистка при выходе/смене моделей.
+
+### v0.5.1 — Релиз подготовки к динамической хирургии графов NPU
+
+- Обновление Android APK (`v0.5.1`), полная защита от LMK и интеграция dynamic directory scanners;
+- Фикс конвертера QNN на Windows (`sanitize_onnx_types.py`): приведение типов INT64 к INT32 предотвращает выравнивающие сбои и панику StridedSlice;
+- Публикация нового технического роадмапа (`ROADMAP_DYNAMIC_NPU_SURGERY`): пересмотр парадигмы статических бакетов разрешений и смены LoRA в пользу динамической инъекции весов и маскирования внимания (`-10000.0` вместо $-\infty$ во избежание сжатия диапазона квантования);
+- Ревизия архитектурных экспериментов: сформулировано решение для истинного Zero-Copy через единый зарегистрированный блок `rpcmem`.
+
+---
+
 ## Архив экспериментов по оптимизации
 
-### Zero-copy pointer swap (НЕУДАЧА)
+### Zero-copy pointer swap (Ограничение QNN HTP & Решение)
 
-Попытка переставить указатели буферов decoder input на encoder output, чтобы убрать memcpy в пайплайне RUN_CHAIN. **QNN error 6004** — QNN HTP использует зарегистрированную shared memory (`rpcmem`). У тензорных буферов есть конкретные memory handles (`Qnn_MemHandle`). Подмена указателей на другие адреса вызывает "Failed to find memHandle", потому что новые адреса не зарегистрированы. **Вывод:** memcpy обязателен для передачи данных между encoder output и decoder input через QNN HTP.
+- *Первоначальная попытка:* Перестановка указателей буферов decoder input на encoder output для устранения `memcpy` в `RUN_CHAIN` вызывала **QNN error 6004** из-за незарегистрированных `Qnn_MemHandle`.
+- *Архитектурное решение:* Вместо подмены указателей на лету при старте `qnn-multi-context-server` выделяется единый общий блок `rpcmem`. При инициализации NPU Encoder этот блок регистрируется как Output Buffer, а при инициализации NPU Decoder — как Input Buffer. Это исключает вызов `memcpy` и экономит ~80 МБ передачи данных на каждом шаге.
 
 ### Persistent daemon подход (РЕГРЕССИЯ)
 

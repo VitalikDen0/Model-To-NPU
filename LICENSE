@@ -1,158 +1,131 @@
-# Model-To-NPU Source-Available Non-Commercial Reciprocity License 1.0
+# PolyForm Noncommercial License 1.0.0
 
-Copyright (c) 2026 Model-To-NPU Contributors
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
 
-This is a source-available license for the Model-To-NPU project.
-It allows use, study, modification, and forks for non-commercial purposes,
-while requiring preserved attribution of the original project idea/concept,
-full source availability for derivatives, and the same license for forks and
-derivative works.
+## Acceptance
 
-This is not an OSI Open Source license because commercial use is prohibited.
+In order to get any license under these terms, you must agree
+to them as both strict obligations and conditions to all
+your licenses.
 
-## 1. Definitions
+## Copyright License
 
-"Software" means the code, scripts, configuration, documentation, and other
-copyrightable material in this repository that is made available under this
-License, excluding third-party components that are provided under their own
-licenses.
+The licensor grants you a copyright license for the
+software to do everything you might do with the software
+that would otherwise infringe the licensor's copyright
+in it for any permitted purpose.  However, you may
+only distribute the software according to [Distribution
+License](#distribution-license) and make changes or new works
+based on the software according to [Changes and New Works
+License](#changes-and-new-works-license).
 
-"Contributor" means any copyright holder or authorized party that makes the
-Software available under this License or intentionally submits a contribution
-under this License.
+## Distribution License
 
-"You" means an individual or legal entity exercising permissions granted by
-this License.
+The licensor grants you an additional copyright license
+to distribute copies of the software.  Your license
+to distribute covers distributing the software with
+changes and new works permitted by [Changes and New Works
+License](#changes-and-new-works-license).
 
-"Derivative Work" means a modified version of the Software or any work based
-upon the Software to the extent protected by applicable copyright law.
+## Notices
 
-"Corresponding Source" means the preferred form of the Software or Derivative
-Work for making modifications, including source code, scripts, interface
-definitions, build files, configuration needed to build or run it, and copies
-of this License and the NOTICE file.
+You must ensure that anyone who gets a copy of any part of
+the software from you also gets a copy of these terms or the
+URL for them above, as well as copies of any plain-text lines
+beginning with `Required Notice:` that the licensor provided
+with the software.  For example:
 
-"Public Deployment" means making the Software or a Derivative Work available
-to third parties over a network, through an API or service, inside a product,
-or in any other form where third parties can use or benefit from it without
-receiving a private copy first.
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
 
-"Non-Commercial Use" means use that is not primarily intended for, directed
-toward, or connected with commercial advantage or monetary compensation.
+## Changes and New Works License
 
-"Monetization" includes, without limitation, selling, licensing for a fee,
-subscriptions, paid hosted services, paid APIs, paid support where the
-Software or a Derivative Work is a material part of the offering, bundling
-into paid products, consulting or customer deliverables for compensation where
-the Software or a Derivative Work is a material component, paywalled access,
-and any other revenue-generating or commercial exploitation of the Software or
-Derivative Work.
+The licensor grants you an additional copyright license to
+make changes and new works based on the software for any
+permitted purpose.
 
-## 2. Grant of Rights
+## Patent License
 
-Subject to the terms and conditions of this License, each Contributor grants
-You a worldwide, non-exclusive, royalty-free, revocable license to use, copy,
-study, modify, build, run, reproduce, and distribute the Software and
-Derivative Works, in source or object form, solely for Non-Commercial Use.
+The licensor grants you a patent license for the software that
+covers patent claims the licensor can license, or becomes able
+to license, that you would infringe by using the software.
 
-To the extent a Contributor has the right to grant it, each Contributor also
-grants You a limited patent license necessary to exercise the rights above,
-solely for Non-Commercial Use and subject to the same restrictions.
+## Noncommercial Purposes
 
-## 3. Conditions
+Any noncommercial purpose is a permitted purpose.
 
-You may exercise the rights granted by this License only if all of the
-following conditions are met:
+## Personal Uses
 
-(a) License and notice preservation.
-    You must keep this License and the project's NOTICE file with every copy,
-    fork, and Derivative Work.
+Personal use for research, experiment, and testing for
+the benefit of public knowledge, personal study, private
+entertainment, hobby projects, amateur pursuits, or religious
+observance, without any anticipated commercial application,
+is use for a permitted purpose.
 
-(b) Change notices.
-    You must prominently state that You changed the Software in modified files,
-    release notes, commit history, or equivalent documentation.
+## Noncommercial Organizations
 
-(c) Mandatory attribution of project origin and original idea.
-    You must preserve and reproduce the attribution notice contained in NOTICE.
-    In every distributed copy, fork, Derivative Work, or Public Deployment,
-    You must clearly credit the original project origin and original idea/
-    concept to the original author identified in NOTICE. If Your distribution
-    or deployment has a README, website, project page, About/Credits screen,
-    package metadata, or user-facing documentation, the attribution must appear
-    in at least one reasonably visible place.
+Use by any charitable organization, educational institution,
+public research organization, public safety or health
+organization, environmental protection organization,
+or government institution is use for a permitted purpose
+regardless of the source of funding or obligations resulting
+from the funding.
 
-(d) Reciprocal source availability.
-    If You distribute or Publicly Deploy the Software or any Derivative Work,
-    You must make the complete Corresponding Source available at no charge,
-    under this same License, in a form that a reasonable developer can obtain,
-    study, modify, build, and run.
+## Fair Use
 
-(e) Same-license forks and derivatives only.
-    You may create forks and Derivative Works, but You may distribute or
-    Publicly Deploy them only under this same License and without adding
-    further restrictions.
+You may have "fair use" rights for the software under the
+law. These terms do not limit them.
 
-(f) No closed or proprietary derivatives.
-    You may not distribute or Publicly Deploy the Software or any Derivative
-    Work under a proprietary, source-unavailable, access-restricted, or
-    monetized licensing model.
+## No Other Rights
 
-(g) No commercial use or monetization.
-    You may not use the Software or any Derivative Work for Monetization or
-    any other Commercial Use.
+These terms do not allow you to sublicense or transfer any of
+your licenses to anyone else, or prevent the licensor from
+granting licenses to anyone else.  These terms do not imply
+any other licenses.
 
-(h) No removal or falsification of attribution.
-    You may not remove, hide, or misrepresent the required attribution to the
-    original project origin and original idea/concept.
+## Patent Defense
 
-## 4. Contributions
+If you make any written claim that the software infringes or
+contributes to infringement of any patent, your patent license
+for the software granted under these terms ends immediately. If
+your company makes such a claim, your patent license ends
+immediately for work on behalf of your company.
 
-Unless explicitly stated otherwise in writing by the Contributor at the time
-of submission, any contribution intentionally submitted for inclusion in this
-repository is licensed under this License.
+## Violations
 
-## 5. Third-Party Components
+The first time you are notified in writing that you have
+violated any of these terms, or done anything with the software
+not covered by your licenses, your licenses can nonetheless
+continue if you come into full compliance with these terms,
+and take practical steps to correct past violations, within
+32 days of receiving notice.  Otherwise, all your licenses
+end immediately.
 
-This License applies only to the Software covered by this repository's own
-copyright. Third-party models, SDKs, weights, libraries, datasets, and other
-components remain under their respective licenses and terms. You are solely
-responsible for complying with those third-party terms.
+## No Liability
 
-## 6. Trademarks
+***As far as the law allows, the software comes as is, without
+any warranty or condition, and the licensor will not be liable
+to you for any damages arising out of these terms or the use
+or nature of the software, under any kind of legal claim.***
 
-This License does not grant permission to use any trade names, trademarks,
-service marks, or product names of the Contributors, except as reasonably
-necessary to provide required attribution and factual origin notices.
+## Definitions
 
-## 7. Termination
+The **licensor** is the individual or entity offering these
+terms, and the **software** is the software the licensor makes
+available under these terms.
 
-Your rights under this License terminate automatically if You violate this
-License. If the violation is cured within 30 days after You become aware of it,
-or after receiving written notice from a Contributor, Your rights are
-reinstated automatically unless a Contributor expressly terminates them in
-writing for a repeated or uncured violation.
+**You** refers to the individual or entity agreeing to these
+terms.
 
-## 8. Disclaimer of Warranty
+**Your company** is any legal entity, sole proprietorship,
+or other kind of organization that you work for, plus all
+organizations that have control over, are under the control of,
+or are under common control with that organization.  **Control**
+means ownership of substantially all the assets of an entity,
+or the power to direct its management and policies by vote,
+contract, or otherwise.  Control can be direct or indirect.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. YOU BEAR THE ENTIRE
-RISK AS TO THE SOFTWARE'S QUALITY AND PERFORMANCE.
+**Your licenses** are all the licenses granted to you for the
+software under these terms.
 
-## 9. Limitation of Liability
-
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, NO CONTRIBUTOR SHALL BE
-LIABLE TO YOU FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN CONTRACT,
-TORT, OR OTHERWISE, ARISING FROM OR IN CONNECTION WITH THE SOFTWARE OR THIS
-LICENSE.
-
-## Third-Party Notices
-
-This project depends on:
-
-- Qualcomm AI Engine Direct SDK (QAIRT) — proprietary Qualcomm license
-- SDXL-Lightning LoRA by ByteDance — Apache 2.0
-- Stable Diffusion XL — CreativeML Open RAIL-M
-- Hugging Face Diffusers/Transformers — Apache 2.0
-- ONNX Runtime — MIT
-- PyTorch — BSD-3-Clause
+**Use** means anything you do with the software requiring one
+of your licenses.

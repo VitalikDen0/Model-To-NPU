@@ -13,6 +13,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 final class RuntimeBootstrap {
 
@@ -330,4 +332,138 @@ final class RuntimeBootstrap {
             writer.write(content);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // py_runtime: pre-built Python 3.13 + numpy + PIL bundled in py_runtime.zip
+    // -------------------------------------------------------------------------
+
+    private static final String PY_RUNTIME_ZIP_ASSET = "py_runtime.zip";
+    static final String PY_RUNTIME_VERSION = "py3.13-aarch64-v1";
+    private static final String PY_RUNTIME_VERSION_FILE = "py_runtime_version.txt";
+
+    static File getPyRuntimeDir(Context context) {
+        return new File(context.getFilesDir(), "py_runtime");
+    }
+
+    static String getPyRuntimeHome(Context context) {
+        return new File(getPyRuntimeDir(context), "usr").getAbsolutePath();
+    }
+
+    static String getPyRuntimeLibDir(Context context) {
+        return new File(getPyRuntimeDir(context), "usr/lib").getAbsolutePath();
+    }
+
+    /** Returns absolute path to py_runtime Python binary, or null if not yet extracted. */
+    static String findBundledPyRuntimePython(Context context) {
+        File py = new File(getPyRuntimeDir(context), "usr/bin/python3");
+        return (py.isFile() && py.canExecute()) ? py.getAbsolutePath() : null;
+    }
+
+    /**
+     * Ensures py_runtime.zip is extracted to files/py_runtime/.
+     * Returns the directory path, or null if the asset is not bundled in this APK.
+     */
+    static String ensurePyRuntimeExtracted(Context context) throws IOException {
+        // Check if asset exists in APK
+        InputStream probe = null;
+        try {
+            probe = context.getAssets().open(PY_RUNTIME_ZIP_ASSET);
+        } catch (IOException e) {
+            return null; // not bundled
+        } finally {
+            if (probe != null) probe.close();
+        }
+
+        File pyRuntimeDir = getPyRuntimeDir(context);
+        File versionFile = new File(pyRuntimeDir, PY_RUNTIME_VERSION_FILE);
+
+        // Check if already extracted with matching version
+        if (versionFile.isFile()) {
+            try {
+                String current = readTextFile(versionFile).trim();
+                if (PY_RUNTIME_VERSION.equals(current)) {
+                    String python = findBundledPyRuntimePython(context);
+                    if (python != null) {
+                        Log.i(TAG, "py_runtime already extracted: " + current);
+                        return pyRuntimeDir.getAbsolutePath();
+                    }
+                }
+            } catch (IOException ignored) {
+            }
+        }
+
+        Log.i(TAG, "Extracting py_runtime.zip to " + pyRuntimeDir.getAbsolutePath());
+
+        // Clean up old extraction
+        deleteRecursively(pyRuntimeDir);
+        if (!pyRuntimeDir.mkdirs() && !pyRuntimeDir.isDirectory()) {
+            throw new IOException("Cannot create py_runtime dir: " + pyRuntimeDir);
+        }
+
+        // Extract zip
+        byte[] buf = new byte[COPY_BUFFER_SIZE];
+        try (InputStream assetIn = context.getAssets().open(PY_RUNTIME_ZIP_ASSET);
+             ZipInputStream zis = new ZipInputStream(assetIn)) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    new File(pyRuntimeDir, entry.getName()).mkdirs();
+                } else {
+                    File dest = new File(pyRuntimeDir, entry.getName());
+                    File parent = dest.getParentFile();
+                    if (parent != null && !parent.isDirectory()) parent.mkdirs();
+                    try (FileOutputStream fos = new FileOutputStream(dest)) {
+                        int n;
+                        while ((n = zis.read(buf)) != -1) {
+                            fos.write(buf, 0, n);
+                        }
+                    }
+                }
+                zis.closeEntry();
+            }
+        }
+
+        // Set execute permissions on binaries and .so files
+        setPyRuntimeExecutablePermissions(pyRuntimeDir);
+
+        // Write version marker
+        writeTextFile(versionFile, PY_RUNTIME_VERSION);
+
+        Log.i(TAG, "py_runtime extracted successfully");
+        return pyRuntimeDir.getAbsolutePath();
+    }
+
+    private static void setPyRuntimeExecutablePermissions(File pyRuntimeDir) {
+        // Executables in usr/bin
+        File binDir = new File(pyRuntimeDir, "usr/bin");
+        if (binDir.isDirectory()) {
+            File[] files = binDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile()) f.setExecutable(true, false);
+                }
+            }
+        }
+        // Shared libraries in usr/lib
+        File libDir = new File(pyRuntimeDir, "usr/lib");
+        if (libDir.isDirectory()) {
+            File[] files = libDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().contains(".so")) f.setExecutable(true, false);
+                }
+            }
+        }
+        // Extension modules in usr/lib/python3.13/lib-dynload
+        File dynloadDir = new File(pyRuntimeDir, "usr/lib/python3.13/lib-dynload");
+        if (dynloadDir.isDirectory()) {
+            File[] files = dynloadDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().endsWith(".so")) f.setExecutable(true, false);
+                }
+            }
+        }
+    }
 }
+

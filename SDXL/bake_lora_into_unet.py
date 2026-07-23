@@ -5,7 +5,20 @@ Bake SDXL-Lightning 8-step LoRA into the base waiIllustrious UNet.
 Saves the merged UNet weights as a new diffusers-compatible directory
 that can be directly used for ONNX export via the existing extmaps pipeline.
 """
-import argparse, os, sys, torch, gc
+import argparse
+import gc
+import os
+import torch
+
+
+def _load_lora(pipe, lora_path: str | None, lora_repo: str, lora_file: str) -> None:
+    if lora_path:
+        print(f"[2/4] Loading LoRA from local/remote reference: {lora_path}...")
+        pipe.load_lora_weights(lora_path)
+        return
+
+    print(f"[2/4] Loading Lightning LoRA: {lora_repo}/{lora_file}...")
+    pipe.load_lora_weights(lora_repo, weight_name=lora_file)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -15,10 +28,16 @@ def main():
                         help="HuggingFace repo for Lightning LoRA")
     parser.add_argument("--lora-file", default="sdxl_lightning_8step_lora.safetensors",
                         help="LoRA weights filename")
+    parser.add_argument("--lora-path", default=None,
+                        help="Optional local LoRA path/reference. If provided, --lora-repo/--lora-file are ignored")
+    parser.add_argument("--lora-scale", type=float, default=1.0,
+                        help="LoRA fuse scale (default: 1.0)")
     parser.add_argument("--output-dir", default=r"D:\platform-tools\sdxl_npu\unet_lightning8step_merged",
                         help="Output directory for merged UNet")
-    parser.add_argument("--verify", action="store_true", default=True,
-                        help="Run quick verification after merge")
+    parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False,
+                        help="Run quick forward verification after merge (default: off)")
+    parser.add_argument("--verify-image", action=argparse.BooleanOptionalAction, default=False,
+                        help="Run image generation verification (slow, default: off)")
     args = parser.parse_args()
 
     from diffusers import StableDiffusionXLPipeline, EulerDiscreteScheduler
@@ -31,13 +50,12 @@ def main():
         local_files_only=True,
     )
 
-    # 2. Download and apply LoRA
-    print(f"[2/4] Loading Lightning LoRA: {args.lora_repo}/{args.lora_file}...")
-    pipe.load_lora_weights(args.lora_repo, weight_name=args.lora_file)
+    # 2. Load and apply LoRA
+    _load_lora(pipe, args.lora_path, args.lora_repo, args.lora_file)
 
     # 3. Fuse LoRA into base weights permanently
-    print("[3/4] Fusing LoRA into base weights...")
-    pipe.fuse_lora()
+    print(f"[3/4] Fusing LoRA into base weights (scale={args.lora_scale:.4f})...")
+    pipe.fuse_lora(lora_scale=float(args.lora_scale))
     pipe.unload_lora_weights()
 
     # 4. Save merged UNet
@@ -45,7 +63,7 @@ def main():
     print(f"[4/4] Saving merged UNet to {args.output_dir}...")
     pipe.unet.save_pretrained(args.output_dir)
 
-    # Verify
+    # Verify (forward pass)
     if args.verify:
         print("\n=== Verification ===")
         from diffusers import UNet2DConditionModel
@@ -67,8 +85,8 @@ def main():
         del unet_check, out
         gc.collect()
 
-    # Also generate a quick image to visually verify
-    if args.verify:
+    # Optional image verification (slow)
+    if args.verify_image:
         print("\n=== Quick generation test (8 steps, CFG=0) ===")
         pipe.scheduler = EulerDiscreteScheduler.from_config(
             pipe.scheduler.config, timestep_spacing="trailing"
