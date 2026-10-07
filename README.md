@@ -5,6 +5,7 @@
 > **WAN end-to-end beta is NOT VERIFIED (`НЕ ПРОВЕРЕН`) and may not work at all.**
 > Hot-swap `WxH` buckets and HotSwap LoRA are still test-stage features and can break.
 > Stabilization/polish target after `v0.5.0`: about **2 weeks**.
+> P.s. Я совершенствовал навыки над работой с NPU, в ближайшем будущем появится еще один репо, посвященный NPU, после его публикации я вернусь сюда, чтобы доделать то, что я начал. Думаю я придумал нечто такое, что либо перевернет время генерации и что можно генерировать, либо это останутся просто влажные мечты случайного человека, делающего этот репозиторий. -_-
 
 **Docs:** [English](README_EN.md) · [Русский](README_RU.md) · [Android APK](APK/README.md)
 
