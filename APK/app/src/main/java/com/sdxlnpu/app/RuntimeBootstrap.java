@@ -23,7 +23,7 @@ final class RuntimeBootstrap {
     private static final String RUNTIME_PAYLOAD_DIR = "runtime_payload";
     private static final String VERSION_MARKER = ".bundle_version";
     private static final String RUNTIME_PAYLOAD_VERSION_MARKER = "runtime_payload_version.txt";
-    private static final String BUNDLE_LAYOUT_VERSION = "native-bundle-v0.6.0";
+    private static final String BUNDLE_LAYOUT_VERSION = "native-bundle-v0.6.1";
     private static final int COPY_BUFFER_SIZE = 1024 * 1024;
 
     private RuntimeBootstrap() {

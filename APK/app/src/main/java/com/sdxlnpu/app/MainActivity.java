@@ -1723,7 +1723,10 @@ public class MainActivity extends AppCompatActivity {
                 + ", root=" + useRootShell
                 + ", python=" + pythonCommand);
         } else {
-            Log.i(TAG, "runtimePlan: using Native C-Engine (Zero-Root): " + nativeServerBin.getAbsolutePath());
+            Log.i(TAG, "runtimePlan: using Native C-Engine: " + nativeServerBin.getAbsolutePath());
+            String su = findAvailableSuOrNull();
+            useRootShell = (su != null);
+            Log.i(TAG, "runtimePlan: native engine root detected = " + useRootShell + " (su: " + su + ")");
         }
 
         if (baseRedirectWarning != null) {
@@ -1751,7 +1754,13 @@ public class MainActivity extends AppCompatActivity {
                 ? bundledLibDir.getAbsolutePath()
                 : extLibDir.getAbsolutePath();
             File backendLib = new File(libDirPath, "libQnnHtp.so");
+            if (!backendLib.isFile() && new File(extLibDir, "libQnnHtp.so").isFile()) {
+                backendLib = new File(extLibDir, "libQnnHtp.so");
+            }
             File systemLib = new File(libDirPath, "libQnnSystem.so");
+            if (!systemLib.isFile() && new File(extLibDir, "libQnnSystem.so").isFile()) {
+                systemLib = new File(extLibDir, "libQnnSystem.so");
+            }
 
             File bundledTokDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "tokenizer") : null;
             if (bundledTokDir == null || !bundledTokDir.isDirectory()) {
@@ -1775,10 +1784,25 @@ public class MainActivity extends AppCompatActivity {
             String outPngPath = outPngFile.getAbsolutePath();
 
             script.append("#!/system/bin/sh\n");
+            if (useRootShell) {
+                script.append("# Ensure FastRPC and DSP device access\n");
+                script.append("chmod 666 /dev/fastrpc-cdsp 2>/dev/null || true\n");
+                script.append("chmod 666 /dev/ion 2>/dev/null || true\n");
+                script.append("chmod 666 /dev/dma_heap/* 2>/dev/null || true\n");
+                if (bundledRuntimePayloadDir != null) {
+                    script.append("chmod -R 755 \"").append(shellEscape(bundledRuntimePayloadDir.getAbsolutePath())).append("\" 2>/dev/null || true\n");
+                }
+            }
             script.append("export LD_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
+                .append(":")
+                .append(shellEscape(activeBaseDir)).append("/lib")
+                .append(":/data/local/tmp/sdxl_test/lib")
                 .append(":$LD_LIBRARY_PATH:/vendor/lib64:/system/lib64\"\n");
             script.append("export ADSP_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
-                .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp\"\n");
+                .append(";")
+                .append(shellEscape(activeBaseDir)).append("/lib")
+                .append(";/data/local/tmp/sdxl_test/lib")
+                .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp\"\n");
             script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
             script.append("exec \"").append(shellEscape(nativeServerBin.getAbsolutePath())).append("\"")
                 .append(" --backend \"").append(shellEscape(backendLib.getAbsolutePath())).append("\"")
@@ -2581,14 +2605,24 @@ public class MainActivity extends AppCompatActivity {
 
     private static String findAvailableSuOrNull() {
         for (String path : new String[]{
+            "/data/adb/magisk/su",
+            "/data/adb/ksu/bin/su",
+            "/data/adb/ap/bin/su",
             "/product/bin/su",
             "/sbin/su", "/system/xbin/su", "/system/bin/su",
-            "/su/bin/su", "/data/adb/magisk/su"
+            "/su/bin/su"
         }) {
             if (new File(path).exists()) {
                 return path;
             }
         }
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "id"});
+            int exit = p.waitFor();
+            if (exit == 0) {
+                return "su";
+            }
+        } catch (Exception ignored) {}
         return null;
     }
 
@@ -2621,6 +2655,7 @@ public class MainActivity extends AppCompatActivity {
         for (String candidate : new String[] {
             activeBaseDir + "/bin/qnn-multi-context-server",
             activeBaseDir + "/qnn-multi-context-server",
+            "/data/local/tmp/sdxl_test/qnn-multi-context-server",
             "/data/local/tmp/sdxl_qnn/bin/qnn-multi-context-server"
         }) {
             File f = new File(candidate);
@@ -2663,11 +2698,15 @@ public class MainActivity extends AppCompatActivity {
                 safeRawLog.contains("Device Creation failure")
                     || safeRawLog.contains("contextCreateFromBinary_failed")
                     || safeRawLog.contains("Failed to load skel")
+                    || safeRawLog.contains("loadRemoteSymbols failed")
+                    || safeRawLog.contains("Failed to create transport")
                     || safeRawLog.contains("QnnDsp <E>")
                     || safeRawLog.contains("qnn-net-run failed: exit 11")
         ) {
-            hint = "QNN/HTP runtime не смог поднять backend на телефоне.\n"
-                + "Проверьте staged runtime paths, HTP skel/runtime libs и доступность DSP backend.";
+            hint = "QNN/HTP runtime не смог поднять backend на NPU.\n"
+                + (useRootShell
+                    ? "Проверьте пути к библиотекам (libQnnHtpV79Skel.so) и права доступа к FastRPC cDSP."
+                    : "Аппаратный доступ к Qualcomm Hexagon NPU (/dev/fastrpc-cdsp) заблокирован Android SELinux.\nПредоставьте root-доступ (Magisk/KernelSU) для прямого взаимодействия с NPU.");
         } else if (exitCode == 127) {
             hint = "Команда не найдена (код 127).\nПроверьте путь/команду Python в Настройках или извлеките bundled runtime через Проверку в Настройках.";
         } else if (exitCode == 2 && safeRawLog.contains("unrecognized arguments")) {
