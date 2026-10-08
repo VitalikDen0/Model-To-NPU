@@ -99,7 +99,7 @@ static void setup_dsp_environment(const char* backend_path, const char* base_dir
 
     /* ADSP_LIBRARY_PATH: semicolon-separated paths used by FastRPC / cDSP loader */
     snprintf(adsp_buf, sizeof(adsp_buf),
-        "%s;%s/lib;/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib;/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib;/data/local/tmp/sdxl_test/lib;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp",
+        "%s;%s/lib;/data/local/tmp/sdxl_app_engine/lib;/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib;/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib;/data/local/tmp/sdxl_test/lib;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp",
         backend_dir[0] ? backend_dir : "/sdcard/Download/sdxl_qnn/lib",
         base_dir ? base_dir : "/sdcard/Download/sdxl_qnn");
 
@@ -113,7 +113,7 @@ static void setup_dsp_environment(const char* backend_path, const char* base_dir
 
     /* LD_LIBRARY_PATH: colon-separated paths used by bionic dynamic linker */
     snprintf(ld_buf, sizeof(ld_buf),
-        "%s:%s/lib:/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib:/vendor/lib64:/system/lib64",
+        "%s:%s/lib:/data/local/tmp/sdxl_app_engine/lib:/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib:/vendor/lib64:/system/lib64",
         backend_dir[0] ? backend_dir : "/sdcard/Download/sdxl_qnn/lib",
         base_dir ? base_dir : "/sdcard/Download/sdxl_qnn");
     const char* prev_ld = getenv("LD_LIBRARY_PATH");
@@ -166,6 +166,7 @@ static void init_rpcmem(const char* backend_path, const char* base_dir) {
     /* 4. Candidate application internal payload paths */
     if (!g_rpcmem_lib) {
         const char* app_paths[] = {
+            "/data/local/tmp/sdxl_app_engine/lib/libcdsprpc.so",
             "/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib/libcdsprpc.so",
             "/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib/libcdsprpc.so",
             "/data/local/tmp/sdxl_test/lib/libcdsprpc.so",

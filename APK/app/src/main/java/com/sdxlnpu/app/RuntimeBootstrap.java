@@ -23,7 +23,8 @@ final class RuntimeBootstrap {
     private static final String RUNTIME_PAYLOAD_DIR = "runtime_payload";
     private static final String VERSION_MARKER = ".bundle_version";
     private static final String RUNTIME_PAYLOAD_VERSION_MARKER = "runtime_payload_version.txt";
-    private static final String BUNDLE_LAYOUT_VERSION = "native-bundle-v0.6.3";
+    static final String BUNDLE_LAYOUT_VERSION = "native-bundle-v0.6.4";
+    public static final String LOCAL_TMP_ENGINE_DIR = "/data/local/tmp/sdxl_app_engine";
     private static final int COPY_BUFFER_SIZE = 1024 * 1024;
 
     private RuntimeBootstrap() {
@@ -122,6 +123,85 @@ final class RuntimeBootstrap {
         Log.i(TAG, "Bundled assets extracted successfully");
 
         return bundleDir.getAbsolutePath();
+    }
+
+    static File ensureStagedLocalTmpEngine(Context context) {
+        try {
+            ensureBundledAssetsExtracted(context);
+            File payloadDir = getBundledRuntimePayloadDir(context);
+            if (!payloadDir.isDirectory()) {
+                return null;
+            }
+            File srcBin = new File(payloadDir, "bin/qnn-multi-context-server");
+            if (!srcBin.isFile()) {
+                return null;
+            }
+
+            File stagedDir = new File(LOCAL_TMP_ENGINE_DIR);
+            File stagedBin = new File(stagedDir, "bin/qnn-multi-context-server");
+            File stagedLib = new File(stagedDir, "lib");
+            File marker = new File(stagedDir, ".staged_version");
+
+            boolean needsSync = !stagedBin.isFile() || stagedBin.length() != srcBin.length()
+                || !marker.isFile()
+                || !BUNDLE_LAYOUT_VERSION.equals(readTextFile(marker).trim());
+
+            if (needsSync) {
+                Log.i(TAG, "Staging native engine to " + stagedDir.getAbsolutePath() + " for unrestricted linker namespace");
+                if (!stagedDir.exists()) {
+                    stagedDir.mkdirs();
+                }
+                new File(stagedDir, "bin").mkdirs();
+                stagedLib.mkdirs();
+
+                copySingleFile(srcBin, stagedBin);
+                stagedBin.setExecutable(true, false);
+                try {
+                    Runtime.getRuntime().exec(new String[]{"chmod", "755", stagedBin.getAbsolutePath()}).waitFor();
+                } catch (Exception ignored) {}
+
+                File srcLib = new File(payloadDir, "lib");
+                if (srcLib.isDirectory()) {
+                    File[] libs = srcLib.listFiles();
+                    if (libs != null) {
+                        for (File l : libs) {
+                            if (l.isFile()) {
+                                File target = new File(stagedLib, l.getName());
+                                if (!target.isFile() || target.length() != l.length()) {
+                                    copySingleFile(l, target);
+                                    target.setReadable(true, false);
+                                    target.setExecutable(true, false);
+                                    try {
+                                        Runtime.getRuntime().exec(new String[]{"chmod", "755", target.getAbsolutePath()}).waitFor();
+                                    } catch (Exception ignored) {}
+                                }
+                            }
+                        }
+                    }
+                }
+                writeTextFile(marker, BUNDLE_LAYOUT_VERSION);
+                Log.i(TAG, "Native engine staged successfully to " + stagedDir.getAbsolutePath());
+            }
+
+            if (stagedBin.isFile()) {
+                stagedBin.setExecutable(true, false);
+                return stagedDir;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed staging native engine to /data/local/tmp/sdxl_app_engine, falling back to internal storage", e);
+        }
+        return null;
+    }
+
+    private static void copySingleFile(File src, File dst) throws IOException {
+        try (InputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[64 * 1024];
+            int len;
+            while ((len = in.read(buf)) > 0) {
+                out.write(buf, 0, len);
+            }
+        }
     }
 
     private static void setExecutablePermissions(File bundleDir) {
@@ -294,7 +374,7 @@ final class RuntimeBootstrap {
         return value.replace("'", "'\\''");
     }
 
-    private static String readTextFile(File file) throws IOException {
+    static String readTextFile(File file) throws IOException {
         StringBuilder sb = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
@@ -321,7 +401,7 @@ final class RuntimeBootstrap {
         }
     }
 
-    private static void writeTextFile(File file, String content) throws IOException {
+    static void writeTextFile(File file, String content) throws IOException {
         try (OutputStreamWriter writer = new OutputStreamWriter(
                 new FileOutputStream(file), StandardCharsets.UTF_8)) {
             writer.write(content);

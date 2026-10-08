@@ -4,8 +4,8 @@ plugins {
     id 'com.android.application'
 }
 
-def apkVersionCode = 41
-def apkVersionName = "0.6.3"
+def apkVersionCode = 42
+def apkVersionName = "0.6.4"
 def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
 def resolveExistingDir = { candidate ->
     if (candidate == null) {
