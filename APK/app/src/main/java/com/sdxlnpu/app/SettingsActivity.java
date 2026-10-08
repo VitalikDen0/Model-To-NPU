@@ -126,44 +126,33 @@ public class SettingsActivity extends AppCompatActivity {
 
         File base = new File(baseDir);
         File contextDir = new File(base, "context");
-        File generator = new File(base, "phone_gen/generate.py");
+        File qnnServer = new File(base, "bin/qnn-multi-context-server");
         File tokenizerDir = new File(base, "phone_gen/tokenizer");
         File qnnLib = new File(base, "lib/libQnnHtp.so");
-        File qnnRunner = new File(base, "bin/qnn-net-run");
 
         StringBuilder report = new StringBuilder();
         report.append("Base dir: ").append(baseDir).append("\n\n");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             report.append("All files access: ")
-                .append(Environment.isExternalStorageManager() ? "granted" : "missing")
+                .append(Environment.isExternalStorageManager() ? "GRANTED" : "MISSING")
                 .append("\n\n");
         }
 
         appendCheck(report, "context/", contextDir.isDirectory(), contextDir.getAbsolutePath());
-        appendCheck(report, "phone_gen/generate.py", generator.isFile(), generator.getAbsolutePath());
-        appendCheck(report, "phone_gen/tokenizer/", tokenizerDir.isDirectory(), tokenizerDir.getAbsolutePath());
         appendCheck(report, "lib/libQnnHtp.so", qnnLib.isFile(), qnnLib.getAbsolutePath());
-        appendCheck(report, "bin/qnn-net-run", qnnRunner.isFile(), qnnRunner.getAbsolutePath());
 
         report.append("Bundle: ").append(RuntimeBootstrap.describeBundledAssets(this)).append("\n");
         try {
             String extractedBundle = RuntimeBootstrap.ensureBundledAssetsExtracted(this);
             if (extractedBundle != null) {
-                File bundleDir = new File(extractedBundle);
-                File debsDir = new File(bundleDir, "debs");
-                File scriptsDir = new File(bundleDir, "scripts");
                 File runtimePayloadDir = RuntimeBootstrap.getBundledRuntimePayloadDir(this);
-                report.append("Extracted bundle: ").append(extractedBundle).append("\n");
-                appendCheck(report, "bundle/debs/", debsDir.isDirectory(), debsDir.getAbsolutePath());
-                appendCheck(report, "bundle/scripts/", scriptsDir.isDirectory(), scriptsDir.getAbsolutePath());
-                appendCheck(report, "bundle/runtime_payload/", runtimePayloadDir.isDirectory(), runtimePayloadDir.getAbsolutePath());
-                appendCheck(report, "bundle/runtime_payload/phone_gen/generate.py",
-                    new File(runtimePayloadDir, "phone_gen/generate.py").isFile(),
-                    new File(runtimePayloadDir, "phone_gen/generate.py").getAbsolutePath());
-                String bundledPython = RuntimeBootstrap.findBundledPython(this);
-                if (bundledPython != null) {
-                    appendCheck(report, "bundle/prefix/bin/python3", true, bundledPython);
-                }
+                File bundledServer = new File(runtimePayloadDir, "bin/qnn-multi-context-server");
+                File bundledHtp = new File(runtimePayloadDir, "lib/libQnnHtp.so");
+                File bundledTok = new File(runtimePayloadDir, "phone_gen/tokenizer/vocab.json");
+                appendCheck(report, "Native C-Engine (Zero-Root)", bundledServer.isFile() || qnnServer.isFile(),
+                    bundledServer.isFile() ? bundledServer.getAbsolutePath() : qnnServer.getAbsolutePath());
+                appendCheck(report, "Bundled QNN HTP Backend", bundledHtp.isFile(), bundledHtp.getAbsolutePath());
+                appendCheck(report, "Bundled Tokenizer", bundledTok.isFile(), bundledTok.getAbsolutePath());
             }
         } catch (Exception e) {
             report.append("Extracted bundle: FAILED\n    ")

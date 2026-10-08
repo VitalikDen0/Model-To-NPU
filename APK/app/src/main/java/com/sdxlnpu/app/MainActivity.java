@@ -189,16 +189,16 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    // Patterns for parsing generate.py stdout
-    private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=(\\d+)ms G=(\\d+)ms\\s*$");
-    private static final Pattern PAT_UNET  = Pattern.compile("^\\s*\\[UNet (\\d+)/(\\d+)\\][^\\n]*?\\s(\\d+)ms(?:\\s|$)");
-    private static final Pattern PAT_PREV  = Pattern.compile("^\\s*\\[PREVIEW step (\\d+)/(\\d+)\\]\\s+(?:[A-Z]+(?:\\s+[A-Z]+)?\\s+)?(\\d+)ms\\s*$");
+    // Patterns for parsing stdout
+    private static final Pattern PAT_CLIP  = Pattern.compile("^\\[CLIP (cond|uncond)\\]\\s+L=([\\d.]+)ms\\s+G=([\\d.]+)ms");
+    private static final Pattern PAT_UNET  = Pattern.compile("^\\s*\\[UNet (\\d+)/(\\d+)\\][^\\n]*?\\s([\\d.]+)ms(?:\\s|$)");
+    private static final Pattern PAT_PREV  = Pattern.compile("^\\s*\\[PREVIEW step (\\d+)/(\\d+)\\]\\s+(?:[A-Z]+(?:\\s+[A-Z]+)?\\s+)?([\\d.]+)ms\\s*$");
     private static final Pattern PAT_TAESD_WARNING = Pattern.compile("^TAESD_WARNING:\\s*(.+?)\\s*$");
     private static final Pattern PAT_TEMP_LINE = Pattern.compile("^\\s*\\[TEMP\\]\\s+(.+)$");
     private static final Pattern PAT_TEMP_ITEM = Pattern.compile("(CPU|GPU|NPU)=([\\d.]+)°C");
-    private static final Pattern PAT_VAE   = Pattern.compile("^\\[VAE\\]\\s+(\\d+)ms\\s*$");
-    private static final Pattern PAT_SAVED = Pattern.compile("Saved:\\s+(.+\\.png)");
-    private static final Pattern PAT_TOTAL = Pattern.compile("Total:\\s+([\\d.]+)s");
+    private static final Pattern PAT_VAE   = Pattern.compile("^\\[VAE\\]\\s+([\\d.]+)ms");
+    private static final Pattern PAT_SAVED = Pattern.compile("Saved:\\s+([^(\\s]+\\.png)");
+    private static final Pattern PAT_TOTAL = Pattern.compile("(?:Total Wall Time|Total):\\s+([\\d.]+)s");
     private volatile String latestStageStatus = "";
     private volatile String latestWarningStatus = "";
     private volatile String latestTempStatus = "";
@@ -316,12 +316,12 @@ public class MainActivity extends AppCompatActivity {
             startPrewarm();
         }
 
-        // Pre-extract py_runtime in background so it's ready when generation starts
+        // Pre-extract native runtime bundle in background so it's ready when generation starts
         executor.submit(() -> {
             try {
-                RuntimeBootstrap.ensurePyRuntimeExtracted(this);
+                RuntimeBootstrap.ensureBundledAssetsExtracted(this);
             } catch (Exception e) {
-                Log.w(TAG, "Background py_runtime extraction failed: " + e.getMessage());
+                Log.w(TAG, "Background runtime extraction failed: " + e.getMessage());
             }
         });
     }
@@ -1440,14 +1440,22 @@ public class MainActivity extends AppCompatActivity {
         File ctx = new File(activeBaseDir, "context");
         if (!ctx.exists()) {
             String modeLabel = MODEL_FAMILY_WAN21.equals(modelFamily) ? "WAN 2.1" : "SDXL";
-            statusText.setText(modeLabel + " assets не найдены в " + activeBaseDir +
-                "\nДеплойте runtime/contexts на телефон" +
-                "\nили измените путь в Настройках (⚙)");
+            statusText.setText(modeLabel + " context не найден в " + activeBaseDir +
+                "\nПоместите скомпилированные контексты в context/" +
+                "\nили укажите путь в Настройках (⚙)");
             return;
         }
-        statusText.setText(MODEL_FAMILY_WAN21.equals(modelFamily)
-            ? "Готово к WAN 2.1 runtime probe"
-            : getString(R.string.status_idle));
+        File nativeServer = null;
+        try {
+            nativeServer = findNativeServerBinary(getBundledRuntimePayloadDirOrNull(), activeBaseDir);
+        } catch (Exception ignored) {}
+        if (nativeServer != null && nativeServer.isFile() && MODEL_FAMILY_SDXL.equals(modelFamily)) {
+            statusText.setText("Готов к генерации (NPU C-Engine, Zero-Root)");
+        } else {
+            statusText.setText(MODEL_FAMILY_WAN21.equals(modelFamily)
+                ? "Готово к WAN 2.1 runtime probe"
+                : getString(R.string.status_idle));
+        }
     }
 
     @Override
@@ -1698,18 +1706,29 @@ public class MainActivity extends AppCompatActivity {
         String configuredBaseDir = resolveConfiguredBaseDir(modelFamily);
         String activeBaseDir = resolveActiveBaseDir(modelFamily);
         String baseRedirectWarning = buildBaseRedirectWarning(modelFamily, configuredBaseDir, activeBaseDir);
-        ExecutionPlan executionPlan = resolveExecutionPlan(activeBaseDir);
-        boolean useRootShell = executionPlan.useRootShell;
-        String pythonCommand = executionPlan.pythonCommand;
-        Log.i(TAG, "runtimePlan: model=" + modelFamily
-            + ", configuredBase=" + configuredBaseDir
-            + ", activeBase=" + activeBaseDir
-            + ", root=" + useRootShell
-            + ", python=" + pythonCommand);
+        ExecutionPlan executionPlan = null;
+        boolean useRootShell = false;
+        String pythonCommand = null;
+        File bundledRuntimePayloadDir = getBundledRuntimePayloadDirOrNull();
+        File nativeServerBin = findNativeServerBinary(bundledRuntimePayloadDir, activeBaseDir);
+        boolean useNativeEngine = !wanMode && nativeServerBin != null && nativeServerBin.isFile();
+
+        if (!useNativeEngine) {
+            executionPlan = resolveExecutionPlan(activeBaseDir);
+            useRootShell = executionPlan.useRootShell;
+            pythonCommand = executionPlan.pythonCommand;
+            Log.i(TAG, "runtimePlan (legacy Python): model=" + modelFamily
+                + ", configuredBase=" + configuredBaseDir
+                + ", activeBase=" + activeBaseDir
+                + ", root=" + useRootShell
+                + ", python=" + pythonCommand);
+        } else {
+            Log.i(TAG, "runtimePlan: using Native C-Engine (Zero-Root): " + nativeServerBin.getAbsolutePath());
+        }
+
         if (baseRedirectWarning != null) {
             Log.w(TAG, "BASE_REDIRECT: " + baseRedirectWarning);
         }
-        File bundledRuntimePayloadDir = getBundledRuntimePayloadDirOrNull();
         String generatorScript = resolveGeneratorScriptPath(bundledRuntimePayloadDir);
         if (!useRootShell && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             mainHandler.post(() -> ensureExternalStorageAccess(activeBaseDir));
@@ -1725,137 +1744,194 @@ public class MainActivity extends AppCompatActivity {
 
         // Build shell script (multi-line — no nested-quote issues)
         StringBuilder script = new StringBuilder();
-        appendShellEnvironment(script, pythonCommand, activeBaseDir);
-        script.append("export MODEL_TO_NPU_MODEL_FAMILY=\"").append(shellEscape(modelFamily)).append("\"\n");
-        script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
-        script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
-        script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
-        script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
-        script.append("export SDXL_QNN_PREVIEW_PNG=\"").append(shellEscape(previewPath)).append("\"\n");
-        script.append("export PYTHONDONTWRITEBYTECODE=1\n");
-        script.append("export SDXL_QNN_WIDTH=").append(imgWidth).append("\n");
-        script.append("export SDXL_QNN_HEIGHT=").append(imgHeight).append("\n");
-        script.append("export SDXL_QNN_USE_MMAP=1\n");
-        script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
-        script.append("export SDXL_SHOW_TEMP=1\n");
-        script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
-        script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
-        script.append("export SDXL_QNN_USE_DAEMON=0\n");
-        script.append("export SDXL_QNN_SHARED_SERVER=1\n");
-        script.append("export SDXL_QNN_ASYNC_PREP=1\n");
-        script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
-        script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=")
-            .append(APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED ? "1" : "0")
-            .append("\n");
-        script.append("export SDXL_QNN_PREWARM_PREVIEW=")
-            .append(APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED && preview && !wanMode ? "1" : "0")
-            .append("\n");
-        script.append("export SDXL_QNN_CLIP_CACHE=1\n");
-        script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
-        script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
-        if (preview && !wanMode) {
-            script.append("export SDXL_QNN_PREVIEW_STRIDE=4\n");
-        }
-        if (wanMode) {
-            script.append("export SDXL_QNN_PROFILING_LEVEL=basic\n");
-            script.append("export WAN_FRAMES=").append(frames).append("\n");
-            script.append("export WAN_FPS=").append(fps).append("\n");
-        }
-        File accelLib = bundledRuntimePayloadDir != null
-            ? new File(bundledRuntimePayloadDir, "phone_gen/lib/libsdxl_runtime_accel.so")
-            : new File(activeBaseDir, "phone_gen/lib/libsdxl_runtime_accel.so");
-        if (accelLib.isFile()) {
-            script.append("export SDXL_QNN_USE_NATIVE_ACCEL=1\n");
-            script.append("export SDXL_QNN_ACCEL_LIB=\"")
-                .append(shellEscape(accelLib.getAbsolutePath()))
-                .append("\"\n");
-        }
-        boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledRuntimePayloadDir);
-        if (bundledRuntimePayloadDir != null) {
-            File bundledTaesdOnnx = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.onnx");
-            if (bundledTaesdOnnx.isFile()) {
-                script.append("export SDXL_QNN_TAESD_ONNX=\"")
-                    .append(shellEscape(bundledTaesdOnnx.getAbsolutePath()))
-                    .append("\"\n");
-            }
+        if (useNativeEngine) {
+            File bundledLibDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "lib") : null;
+            File extLibDir = new File(activeBaseDir, "lib");
+            String libDirPath = (bundledLibDir != null && new File(bundledLibDir, "libQnnHtp.so").isFile())
+                ? bundledLibDir.getAbsolutePath()
+                : extLibDir.getAbsolutePath();
+            File backendLib = new File(libDirPath, "libQnnHtp.so");
+            File systemLib = new File(libDirPath, "libQnnSystem.so");
 
-            // Prefer HTP context (NPU) over GPU context for TAESD preview
-            File bundledTaesdHtpContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_htp.bin");
-            File bundledTaesdGpuContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.serialized.bin.bin");
-            File taesdContextToUse = bundledTaesdHtpContext.isFile() ? bundledTaesdHtpContext : bundledTaesdGpuContext;
-            if (taesdContextToUse.isFile()) {
-                script.append("export SDXL_QNN_TAESD_CONTEXT=\"")
-                    .append(shellEscape(taesdContextToUse.getAbsolutePath()))
-                    .append("\"\n");
+            File bundledTokDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "tokenizer") : null;
+            if (bundledTokDir == null || !bundledTokDir.isDirectory()) {
+                bundledTokDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "phone_gen/tokenizer") : null;
             }
-
-            File bundledTaesdModel = new File(bundledRuntimePayloadDir, "phone_gen/lib/libTAESDDecoder.so");
-            if (bundledTaesdModel.isFile()) {
-                script.append("export SDXL_QNN_TAESD_MODEL=\"")
-                    .append(shellEscape(bundledTaesdModel.getAbsolutePath()))
-                    .append("\"\n");
+            File extTokDir = new File(activeBaseDir, "tokenizer");
+            if (!extTokDir.isDirectory()) {
+                extTokDir = new File(activeBaseDir, "phone_gen/tokenizer");
             }
+            File tokenizerDir = (bundledTokDir != null && new File(bundledTokDir, "vocab.json").isFile())
+                ? bundledTokDir
+                : extTokDir;
 
-            // TAESD preview disabled in v0.4.8-beta:
-            // HTP shares server with UNet → +200ms/step overhead; GPU backend (libQnnGpu.so)
-            // fails with dlerror(): null in app process (Android linker namespace restriction).
-            // Re-enable when dedicated GPU backend is resolved.
-            script.append("export SDXL_QNN_TAESD_BACKEND=off\n");
-        }
-        if (!bundledQnnConfigReady) {
-            script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
-                .append(shellEscape(activeBaseDir)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
-            script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(activeBaseDir))
-                .append("/htp_backend_extensions_lightning.json\"\n");
-            script.append("fi\n");
-        }
-        script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
-
-        script.append("exec \"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
-        if (isPreloadOnly) {
-            script.append(" --prewarm");
-            script.append(" --width ").append(imgWidth);
-            script.append(" --height ").append(imgHeight);
-            if (!loraSlot.isEmpty()) {
-                script.append(" --lora-slot ").append(shellEscape(loraSlot));
+            File publicOutputDir = new File(activeBaseDir, "outputs");
+            if (!publicOutputDir.exists()) {
+                publicOutputDir.mkdirs();
             }
-        } else if (wanMode) {
-            script.append(" --model-family wan21 --check-runtime");
-            script.append(" --width ").append(imgWidth);
-            script.append(" --height ").append(imgHeight);
-            script.append(" --probe-perf burst");
+            File outPngFile = (publicOutputDir.exists() && publicOutputDir.canWrite())
+                ? new File(publicOutputDir, outName + ".png")
+                : new File(runtimeOutputDir, outName + ".png");
+            String outPngPath = outPngFile.getAbsolutePath();
+
+            script.append("#!/system/bin/sh\n");
+            script.append("export LD_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
+                .append(":$LD_LIBRARY_PATH:/vendor/lib64:/system/lib64\"\n");
+            script.append("export ADSP_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
+                .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp\"\n");
+            script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
+            script.append("exec \"").append(shellEscape(nativeServerBin.getAbsolutePath())).append("\"")
+                .append(" --backend \"").append(shellEscape(backendLib.getAbsolutePath())).append("\"")
+                .append(" --system_lib \"").append(shellEscape(systemLib.getAbsolutePath())).append("\"")
+                .append(" --base_dir \"").append(shellEscape(activeBaseDir)).append("\"");
+            if (tokenizerDir != null && tokenizerDir.exists()) {
+                script.append(" --tokenizer_dir \"").append(shellEscape(tokenizerDir.getAbsolutePath())).append("\"");
+            }
+            script.append(" --prompt \"").append(shellEscape(prompt)).append("\"")
+                .append(" --seed ").append(seed)
+                .append(" --steps ").append(steps)
+                .append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg))
+                .append(" --res ").append(imgWidth).append("x").append(imgHeight)
+                .append(" --out \"").append(shellEscape(outPngPath)).append("\"");
+            if (progCfg && cfg > 1.0f) {
+                script.append(" --prog_cfg");
+            }
+            if (cfg > 1.0f && !neg.isEmpty()) {
+                script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+            }
+            script.append(" 2>&1\n");
         } else {
-            script.append(" \"").append(shellEscape(prompt)).append("\"");
-            script.append(" --seed ").append(seed);
-            script.append(" --steps ").append(steps);
-            script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));
-            script.append(" --width ").append(imgWidth);
-            script.append(" --height ").append(imgHeight);
-            script.append(" --name ").append(outName);
-            if (!loraSlot.isEmpty()) {
-                script.append(" --lora-slot ").append(shellEscape(loraSlot));
+            appendShellEnvironment(script, pythonCommand, activeBaseDir);
+            script.append("export MODEL_TO_NPU_MODEL_FAMILY=\"").append(shellEscape(modelFamily)).append("\"\n");
+            script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
+            script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
+            script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
+            script.append("export SDXL_QNN_OUTPUT_DIR=\"").append(shellEscape(runtimeOutputDirPath)).append("\"\n");
+            script.append("export SDXL_QNN_PREVIEW_PNG=\"").append(shellEscape(previewPath)).append("\"\n");
+            script.append("export PYTHONDONTWRITEBYTECODE=1\n");
+            script.append("export SDXL_QNN_WIDTH=").append(imgWidth).append("\n");
+            script.append("export SDXL_QNN_HEIGHT=").append(imgHeight).append("\n");
+            script.append("export SDXL_QNN_USE_MMAP=1\n");
+            script.append("export SDXL_QNN_LOG_LEVEL=warn\n");
+            script.append("export SDXL_SHOW_TEMP=1\n");
+            script.append("export SDXL_TEMP_INTERVAL_SEC=1.0\n");
+            script.append("export SDXL_QNN_PERF_PROFILE=").append(APK_QNN_PERF_PROFILE).append("\n");
+            script.append("export SDXL_QNN_USE_DAEMON=0\n");
+            script.append("export SDXL_QNN_SHARED_SERVER=1\n");
+            script.append("export SDXL_QNN_ASYNC_PREP=1\n");
+            script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
+            script.append("export SDXL_QNN_PREWARM_ALL_CONTEXTS=")
+                .append(APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED ? "1" : "0")
+                .append("\n");
+            script.append("export SDXL_QNN_PREWARM_PREVIEW=")
+                .append(APK_AGGRESSIVE_CONTEXT_PRIMING_ENABLED && preview && !wanMode ? "1" : "0")
+                .append("\n");
+            script.append("export SDXL_QNN_CLIP_CACHE=1\n");
+            script.append("export SDXL_QNN_PREVIEW_PNG_COMPRESS=0\n");
+            script.append("export SDXL_QNN_FINAL_PNG_COMPRESS=0\n");
+            if (preview && !wanMode) {
+                script.append("export SDXL_QNN_PREVIEW_STRIDE=4\n");
             }
-            if (cfg > 1.0f) {
-                if (!neg.isEmpty()) {
-                    script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+            if (wanMode) {
+                script.append("export SDXL_QNN_PROFILING_LEVEL=basic\n");
+                script.append("export WAN_FRAMES=").append(frames).append("\n");
+                script.append("export WAN_FPS=").append(fps).append("\n");
+            }
+            File accelLib = bundledRuntimePayloadDir != null
+                ? new File(bundledRuntimePayloadDir, "phone_gen/lib/libsdxl_runtime_accel.so")
+                : new File(activeBaseDir, "phone_gen/lib/libsdxl_runtime_accel.so");
+            if (accelLib.isFile()) {
+                script.append("export SDXL_QNN_USE_NATIVE_ACCEL=1\n");
+                script.append("export SDXL_QNN_ACCEL_LIB=\"")
+                    .append(shellEscape(accelLib.getAbsolutePath()))
+                    .append("\"\n");
+            }
+            boolean bundledQnnConfigReady = appendBundledRuntimeEnvironment(script, bundledRuntimePayloadDir);
+            if (bundledRuntimePayloadDir != null) {
+                File bundledTaesdOnnx = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.onnx");
+                if (bundledTaesdOnnx.isFile()) {
+                    script.append("export SDXL_QNN_TAESD_ONNX=\"")
+                        .append(shellEscape(bundledTaesdOnnx.getAbsolutePath()))
+                        .append("\"\n");
+                }
+
+                // Prefer HTP context (NPU) over GPU context for TAESD preview
+                File bundledTaesdHtpContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_htp.bin");
+                File bundledTaesdGpuContext = new File(bundledRuntimePayloadDir, "phone_gen/taesd_decoder.serialized.bin.bin");
+                File taesdContextToUse = bundledTaesdHtpContext.isFile() ? bundledTaesdHtpContext : bundledTaesdGpuContext;
+                if (taesdContextToUse.isFile()) {
+                    script.append("export SDXL_QNN_TAESD_CONTEXT=\"")
+                        .append(shellEscape(taesdContextToUse.getAbsolutePath()))
+                        .append("\"\n");
+                }
+
+                File bundledTaesdModel = new File(bundledRuntimePayloadDir, "phone_gen/lib/libTAESDDecoder.so");
+                if (bundledTaesdModel.isFile()) {
+                    script.append("export SDXL_QNN_TAESD_MODEL=\"")
+                        .append(shellEscape(bundledTaesdModel.getAbsolutePath()))
+                        .append("\"\n");
+                }
+
+                // TAESD preview disabled in v0.4.8-beta
+                script.append("export SDXL_QNN_TAESD_BACKEND=off\n");
+            }
+            if (!bundledQnnConfigReady) {
+                script.append("if [ -f \"").append(shellEscape(activeBaseDir)).append("/htp_backend_extensions_lightning.json\" ] && [ -f \"")
+                    .append(shellEscape(activeBaseDir)).append("/lib/libQnnHtpNetRunExtensions.so\" ]; then\n");
+                script.append("  export SDXL_QNN_CONFIG_FILE=\"").append(shellEscape(activeBaseDir))
+                    .append("/htp_backend_extensions_lightning.json\"\n");
+                script.append("fi\n");
+            }
+            script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
+
+            script.append("exec \"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
+            if (isPreloadOnly) {
+                script.append(" --prewarm");
+                script.append(" --width ").append(imgWidth);
+                script.append(" --height ").append(imgHeight);
+                if (!loraSlot.isEmpty()) {
+                    script.append(" --lora-slot ").append(shellEscape(loraSlot));
+                }
+            } else if (wanMode) {
+                script.append(" --model-family wan21 --check-runtime");
+                script.append(" --width ").append(imgWidth);
+                script.append(" --height ").append(imgHeight);
+                script.append(" --probe-perf burst");
+            } else {
+                script.append(" \"").append(shellEscape(prompt)).append("\"");
+                script.append(" --seed ").append(seed);
+                script.append(" --steps ").append(steps);
+                script.append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg));
+                script.append(" --width ").append(imgWidth);
+                script.append(" --height ").append(imgHeight);
+                script.append(" --name ").append(outName);
+                if (!loraSlot.isEmpty()) {
+                    script.append(" --lora-slot ").append(shellEscape(loraSlot));
+                }
+                if (cfg > 1.0f) {
+                    if (!neg.isEmpty()) {
+                        script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+                    }
+                }
+                if (!stretch) {
+                    script.append(" --no-stretch");
+                }
+                if (preview) {
+                    script.append(" --preview");
+                }
+                if (progCfg && cfg > 1.0f) {
+                    script.append(" --prog-cfg");
                 }
             }
-            if (!stretch) {
-                script.append(" --no-stretch");
-            }
-            if (preview) {
-                script.append(" --preview");
-            }
-            if (progCfg && cfg > 1.0f) {
-                script.append(" --prog-cfg");
-            }
+            script.append(" 2>&1\n");
         }
-        script.append(" 2>&1\n");
 
         updateStatus(
-            wanMode
-                ? (useRootShell ? "WAN runtime probe (root shell)..." : "WAN runtime probe...")
-                : (useRootShell ? "Запуск (root shell)..." : "Запуск..."),
+            useNativeEngine
+                ? "Запуск NPU C-Engine (Zero-Root)..."
+                : (wanMode
+                    ? (useRootShell ? "WAN runtime probe (root shell)..." : "WAN runtime probe...")
+                    : (useRootShell ? "Запуск (root shell)..." : "Запуск...")),
             2
         );
 
@@ -1948,12 +2024,12 @@ public class MainActivity extends AppCompatActivity {
                     if (m.find()) {
                         clipDone++;
                         String kind = m.group(1);
-                        int msL = Integer.parseInt(m.group(2));
-                        int msG = Integer.parseInt(m.group(3));
+                        int msL = (int) Math.round(Double.parseDouble(m.group(2)));
+                        int msG = (int) Math.round(Double.parseDouble(m.group(3)));
                         timingLog.append(String.format(Locale.US,
                             "CLIP %s: L=%dms G=%dms\n", kind, msL, msG));
                         updateStatus("CLIP " + kind + "... " + (msL + msG) + "ms",
-                            5 + clipDone * 3);
+                            5 + clipDone * 4);
                         continue;
                     }
 
@@ -1962,10 +2038,10 @@ public class MainActivity extends AppCompatActivity {
                     if (m.find()) {
                         int step = Integer.parseInt(m.group(1));
                         int total = Integer.parseInt(m.group(2));
-                        int ms = Integer.parseInt(m.group(3));
+                        int ms = (int) Math.round(Double.parseDouble(m.group(3)));
                         timingLog.append(String.format(Locale.US,
                             "  UNet %d/%d: %dms\n", step, total, ms));
-                        int pct = 10 + step * 75 / total;
+                        int pct = 15 + step * 70 / total;
                         updateStatus(String.format(Locale.US,
                             "UNet %d/%d — %dms", step, total, ms), pct);
                         continue;
@@ -2019,7 +2095,7 @@ public class MainActivity extends AppCompatActivity {
                     if (m.find()) {
                         int step = Integer.parseInt(m.group(1));
                         int total = Integer.parseInt(m.group(2));
-                        int ms = Integer.parseInt(m.group(3));
+                        int ms = (int) Math.round(Double.parseDouble(m.group(3)));
                         timingLog.append(String.format(Locale.US,
                             "  Preview %d/%d: %dms\n", step, total, ms));
                         continue;
@@ -2028,9 +2104,15 @@ public class MainActivity extends AppCompatActivity {
                     // Parse VAE
                     m = PAT_VAE.matcher(line);
                     if (m.find()) {
-                        int ms = Integer.parseInt(m.group(1));
+                        int ms = (int) Math.round(Double.parseDouble(m.group(1)));
                         timingLog.append(String.format(Locale.US, "VAE: %dms\n", ms));
-                        updateStatus("VAE... " + ms + "ms", 90);
+                        updateStatus("VAE... " + ms + "ms", 88);
+                        continue;
+                    }
+
+                    if (line.contains("[CatmullRom+CAS]")) {
+                        timingLog.append(line.trim()).append("\n");
+                        updateStatus("Ресемплинг Catmull-Rom + CAS...", 94);
                         continue;
                     }
 
@@ -2045,6 +2127,11 @@ public class MainActivity extends AppCompatActivity {
                     m = PAT_TOTAL.matcher(line);
                     if (m.find()) {
                         timingLog.append("Total: ").append(m.group(1)).append("s\n");
+                        continue;
+                    }
+
+                    if (line.contains("CLIP:") && line.contains("UNet") && line.contains("VAE:")) {
+                        timingLog.append(line.trim()).append("\n");
                         continue;
                     }
 
@@ -2518,6 +2605,34 @@ public class MainActivity extends AppCompatActivity {
     private static String findSu() {
         String available = findAvailableSuOrNull();
         return available != null ? available : "su";
+    }
+
+    private File findNativeServerBinary(File bundledRuntimePayloadDir, String activeBaseDir) {
+        if (bundledRuntimePayloadDir != null) {
+            File bundledServer = new File(bundledRuntimePayloadDir, "bin/qnn-multi-context-server");
+            if (bundledServer.isFile()) {
+                bundledServer.setExecutable(true, false);
+                try {
+                    Runtime.getRuntime().exec(new String[]{"chmod", "755", bundledServer.getAbsolutePath()}).waitFor();
+                } catch (Exception ignored) {}
+                return bundledServer;
+            }
+        }
+        for (String candidate : new String[] {
+            activeBaseDir + "/bin/qnn-multi-context-server",
+            activeBaseDir + "/qnn-multi-context-server",
+            "/data/local/tmp/sdxl_qnn/bin/qnn-multi-context-server"
+        }) {
+            File f = new File(candidate);
+            if (f.isFile()) {
+                f.setExecutable(true, false);
+                try {
+                    Runtime.getRuntime().exec(new String[]{"chmod", "755", f.getAbsolutePath()}).waitFor();
+                } catch (Exception ignored) {}
+                return f;
+            }
+        }
+        return null;
     }
 
     private File getBundledRuntimePayloadDirOrNull() throws IOException {

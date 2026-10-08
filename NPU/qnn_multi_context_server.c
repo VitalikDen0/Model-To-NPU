@@ -3765,7 +3765,8 @@ static void print_npu_utilization_report(int graph_W, int graph_H, int act_W, in
     fprintf(stderr, "======================================================================\n");
 }
 
-static int run_standalone_generate(const char* base_dir, const char* prompt, const char* neg_prompt,
+static int run_standalone_generate(const char* base_dir, const char* tokenizer_dir,
+                                   const char* prompt, const char* neg_prompt,
                                    uint32_t seed, int steps, float cfg_scale, int cfg_cutoff_arg,
                                    int cfg_cache_mode, int req_width, int req_height, int pad_mode,
                                    const char* unet_mode, const char* out_png_path) {
@@ -3824,11 +3825,33 @@ static int run_standalone_generate(const char* base_dir, const char* prompt, con
     fprintf(stderr, "================================================\n");
 
     /* 1. Initialize CLIP BPE Tokenizer */
-    char vocab_path[MAX_PATH_LEN], merges_path[MAX_PATH_LEN];
-    snprintf(vocab_path, sizeof(vocab_path), "%s/phone_gen/tokenizer/vocab.json", base_dir);
-    snprintf(merges_path, sizeof(merges_path), "%s/phone_gen/tokenizer/merges.txt", base_dir);
+    char vocab_path[MAX_PATH_LEN] = {0}, merges_path[MAX_PATH_LEN] = {0};
+    int tok_ok = 0;
+    if (tokenizer_dir && tokenizer_dir[0]) {
+        snprintf(vocab_path, sizeof(vocab_path), "%s/vocab.json", tokenizer_dir);
+        snprintf(merges_path, sizeof(merges_path), "%s/merges.txt", tokenizer_dir);
+        if (access(vocab_path, R_OK) == 0 && access(merges_path, R_OK) == 0) tok_ok = 1;
+    }
+    if (!tok_ok) {
+        snprintf(vocab_path, sizeof(vocab_path), "%s/phone_gen/tokenizer/vocab.json", base_dir);
+        snprintf(merges_path, sizeof(merges_path), "%s/phone_gen/tokenizer/merges.txt", base_dir);
+        if (access(vocab_path, R_OK) == 0 && access(merges_path, R_OK) == 0) tok_ok = 1;
+    }
+    if (!tok_ok) {
+        snprintf(vocab_path, sizeof(vocab_path), "%s/tokenizer/vocab.json", base_dir);
+        snprintf(merges_path, sizeof(merges_path), "%s/tokenizer/merges.txt", base_dir);
+        if (access(vocab_path, R_OK) == 0 && access(merges_path, R_OK) == 0) tok_ok = 1;
+    }
+    if (!tok_ok) {
+        snprintf(vocab_path, sizeof(vocab_path), "%s/vocab.json", base_dir);
+        snprintf(merges_path, sizeof(merges_path), "%s/merges.txt", base_dir);
+        if (access(vocab_path, R_OK) == 0 && access(merges_path, R_OK) == 0) tok_ok = 1;
+    }
     ClipBpeTokenizer tok;
-    if (clip_tok_init(&tok, vocab_path, merges_path) != 0) return 1;
+    if (clip_tok_init(&tok, vocab_path, merges_path) != 0) {
+        fprintf(stderr, "ERR: failed to load CLIP tokenizer from %s / %s\n", vocab_path, merges_path);
+        return 1;
+    }
 
     /* 2. Load & Run CLIP-L and CLIP-G */
     char clip_l_path[MAX_PATH_LEN], clip_g_path[MAX_PATH_LEN];
@@ -3846,10 +3869,10 @@ static int run_standalone_generate(const char* base_dir, const char* prompt, con
 
     double ms_cl1 = 0, ms_cg1 = 0, ms_cl2 = 0, ms_cg2 = 0;
     if (run_clip_pair_in_memory(s_cl, s_cg, &tok, prompt, pe_cond, te_cond, &ms_cl1, &ms_cg1) != 0) return 1;
-    fprintf(stderr, "[CLIP cond]   L=%.1fms G=%.1fms\n", ms_cl1, ms_cg1);
+    fprintf(stderr, "[CLIP cond]   L=%.0fms G=%.0fms\n", ms_cl1, ms_cg1);
     if (use_cfg) {
         if (run_clip_pair_in_memory(s_cl, s_cg, &tok, neg_prompt, pe_uncond, te_uncond, &ms_cl2, &ms_cg2) != 0) return 1;
-        fprintf(stderr, "[CLIP uncond] L=%.1fms G=%.1fms\n", ms_cl2, ms_cg2);
+        fprintf(stderr, "[CLIP uncond] L=%.0fms G=%.0fms\n", ms_cl2, ms_cg2);
     }
     double total_clip_ms = ms_cl1 + ms_cg1 + ms_cl2 + ms_cg2;
 
@@ -4230,6 +4253,7 @@ static int run_standalone_generate(const char* base_dir, const char* prompt, con
     fprintf(stderr, "CLIP: %.0fms | UNet (%s): %.0fms (%.0fms/step) | VAE: %.0fms\n",
             total_clip_ms, unet_mode, total_unet_ms, total_unet_ms / steps, total_vae_ms);
     fprintf(stderr, "Total Wall Time: %.2fs\n", total_wall_s);
+    fprintf(stderr, "Total: %.2fs\n", total_wall_s);
     fprintf(stderr, "========================================\n");
 
     if (g_profHandle && g_qnn.profileFree) {
@@ -4289,6 +4313,7 @@ int main(int argc, char** argv) {
     const char* response_fifo = NULL;
     const char* prompt = NULL;
     const char* neg_prompt = NULL;
+    const char* tokenizer_dir = NULL;
     const char* unet_mode = "mono";
     const char* base_dir = "/sdcard/Download/sdxl_qnn";
     const char* out_png = "/sdcard/Download/sdxl_qnn/outputs/standalone_out.png";
@@ -4358,6 +4383,8 @@ int main(int argc, char** argv) {
             g_use_legacy_temb = 1;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             unet_mode = argv[++i];
+        } else if (strcmp(argv[i], "--tokenizer_dir") == 0 && i + 1 < argc) {
+            tokenizer_dir = argv[++i];
         } else if (strcmp(argv[i], "--base_dir") == 0 && i + 1 < argc) {
             base_dir = argv[++i];
         } else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
@@ -4398,7 +4425,7 @@ int main(int argc, char** argv) {
 
     /* Standalone CLI Generation Mode */
     if (prompt != NULL) {
-        int rc = run_standalone_generate(base_dir, prompt, neg_prompt, seed, steps, cfg_scale,
+        int rc = run_standalone_generate(base_dir, tokenizer_dir, prompt, neg_prompt, seed, steps, cfg_scale,
                                          cfg_cutoff, cfg_cache_mode, req_width, req_height,
                                          pad_mode, unet_mode, out_png);
         cleanup_all();
