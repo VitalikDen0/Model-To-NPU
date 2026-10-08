@@ -28,7 +28,7 @@ The world's first fully functional on-device **Stable Diffusion XL (SDXL)** pipe
 
 ### 3. 📐 Dynamic Arbitrary Resolution Engine (0.26 MP to 2.36 MP)
 - **Arbitrary aspect ratios and resolutions** from 512×512 up to 1536×1536 / 1344×1728 on the fly without recompiling models or switching contexts.
-- **Centered Spatial-CFG Sub-Canvas Framing**: The active image window is placed at the optical center $(512, 512)$ with spatial CFG masking ($w_{\text{CFG}} = 3.5$ active, transitioning to $1.0$ uncond at borders).
+- **Centered Spatial-CFG Sub-Canvas Framing**: The active image window is placed at the optical center (512, 512) with spatial CFG masking (w_CFG = 3.5 active, transitioning to 1.0 uncond at borders).
 - **0% extra NPU latency overhead** compared to standard square.
 - Continuous noise variance preserves 100% GroupNorm numerical stability (zero NaNs).
 - Completely eliminates edge reflection artifacts and bilateral symmetry (Rorschach mirror seams).
