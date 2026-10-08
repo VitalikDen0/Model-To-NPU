@@ -56,11 +56,16 @@ Thumbs.db
 # Local drafts / scratch (never commit)
 1/
 build/
+build_old/
 output/
+Model-To-NPU/
+WAN 2.1 1.3B/downloads/
 WAN 2.1 1.3B/downloads_meta/
 Flux.2/
 SD3.5/
 SD15/
+*.log
+*.tmp
 
 # Local benchmark tooling / outputs (never commit)
 local_tools/
@@ -68,6 +73,7 @@ local_tools/
 # Persistent QNN runner build artifacts
 NPU/build/
 NPU/out/
+NPU/qnn-multi-context-server
 
 # Backups
 phone_generate.before_v024beta_20260418.py

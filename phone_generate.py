@@ -211,14 +211,33 @@ SDXL_RESOLUTIONS = [
 
 
 def _discover_available_resolutions() -> list[tuple[int, int]]:
-    """Scan context/ for WxH subdirectories that contain a full set of UNet+VAE contexts."""
+    """Scan context/ for manifest.json and WxH subdirectories containing UNet+VAE contexts."""
     ctx_root = f"{DR}/context"
     available: list[tuple[int, int]] = []
     if not os.path.isdir(ctx_root):
         return available
-    needed = {"unet_encoder_fp16.serialized.bin.bin",
-              "unet_decoder_fp16.serialized.bin.bin",
-              "vae_decoder.serialized.bin.bin"}
+
+    # 1. Check manifest.json first
+    manifest_path = os.path.join(ctx_root, "manifest.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                mdata = json.load(mf)
+            res_list = mdata.get("resolutions") or mdata.get("available_resolutions") or []
+            for item in res_list:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    available.append((int(item[0]), int(item[1])))
+                elif isinstance(item, str) and "x" in item:
+                    p = item.split("x")
+                    if len(p) == 2:
+                        available.append((int(p[0]), int(p[1])))
+            if available:
+                available = sorted(list(set(available)), key=lambda r: r[0] * r[1])
+                return available
+        except Exception as e:
+            _log(f"[resolution] manifest.json parse error: {e}")
+
+    # 2. Scan WxH subdirectories
     for entry in os.listdir(ctx_root):
         if "x" not in entry:
             continue
@@ -230,13 +249,28 @@ def _discover_available_resolutions() -> list[tuple[int, int]]:
         except ValueError:
             continue
         sub = os.path.join(ctx_root, entry)
-        if os.path.isdir(sub) and needed.issubset(set(os.listdir(sub))):
+        if not os.path.isdir(sub):
+            continue
+        files = set(os.listdir(sub))
+        has_vae = "vae_decoder.serialized.bin.bin" in files or "vae.serialized.bin.bin" in files
+        has_mono_unet = ("unet_lightning8step.serialized.bin.bin" in files or
+                         "unet.serialized.bin.bin" in files)
+        has_split_unet = ("unet_encoder_fp16.serialized.bin.bin" in files and
+                          "unet_decoder_fp16.serialized.bin.bin" in files)
+        if has_vae and (has_mono_unet or has_split_unet):
             available.append((w, h))
-    # Also check flat layout (legacy 1024×1024)
-    if all(os.path.isfile(os.path.join(ctx_root, n)) for n in needed):
+
+    # 3. Also check flat layout (legacy 1024x1024)
+    flat_files = set(os.listdir(ctx_root))
+    has_flat_vae = "vae_decoder.serialized.bin.bin" in flat_files
+    has_flat_mono = "unet_lightning8step.serialized.bin.bin" in flat_files or "unet.serialized.bin.bin" in flat_files
+    has_flat_split = ("unet_encoder_fp16.serialized.bin.bin" in flat_files and
+                      "unet_decoder_fp16.serialized.bin.bin" in flat_files)
+    if has_flat_vae and (has_flat_mono or has_flat_split):
         if (1024, 1024) not in available:
             available.append((1024, 1024))
-    available.sort(key=lambda r: r[0] * r[1])
+
+    available = sorted(list(set(available)), key=lambda r: r[0] * r[1])
     return available
 
 
@@ -271,17 +305,7 @@ def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
     """Build context paths for a given resolution.
 
     CLIP contexts are resolution-independent (always shared).
-    UNet encoder/decoder and VAE have per-resolution contexts.
-
-    Directory layout (multi-resolution):
-        context/clip_l.serialized.bin.bin
-        context/clip_g.serialized.bin.bin
-        context/1024x1024/unet_encoder_fp16.serialized.bin.bin
-        context/1024x1024/unet_decoder_fp16.serialized.bin.bin
-        context/1024x1024/vae_decoder.serialized.bin.bin
-
-    For backward compatibility: if the resolution is 1024×1024 and the
-    resolution-scoped directory doesn't exist, fall back to flat layout.
+    UNet (monolithic or split) and VAE have per-resolution contexts.
     """
     global _LAST_RESOLVED_LORA_SLOT, _LAST_RESOLVED_LORA_SLOT_DIR
     _LAST_RESOLVED_LORA_SLOT = ""
@@ -303,25 +327,56 @@ def _resolve_contexts(width: int = 1024, height: int = 1024) -> dict[str, str]:
         ]
 
     slot_res_dir = next((p for p in slot_res_candidates if os.path.isdir(p)), "")
+    active_dir = slot_res_dir if slot_res_dir else (res_dir if os.path.isdir(res_dir) else f"{DR}/context")
+
+    # Check for monolithic unet first (preferred unless SDXL_FORCE_SPLIT=1)
+    force_split = os.environ.get("SDXL_FORCE_SPLIT", "0") == "1"
+    if not force_split:
+        mono_candidates = [
+            f"{active_dir}/unet_lightning8step.serialized.bin.bin",
+            f"{active_dir}/unet.serialized.bin.bin",
+            f"{DR}/context/unet_lightning8step.serialized.bin.bin",
+        ]
+        for mc in mono_candidates:
+            if os.path.isfile(mc):
+                ctx["unet"] = mc
+                break
+
+    # Also resolve split unet (fallback or primary if mono not present)
+    enc_candidates = [
+        f"{active_dir}/unet_encoder_fp16.serialized.bin.bin",
+        f"{DR}/context/unet_encoder_fp16.serialized.bin.bin",
+    ]
+    dec_candidates = [
+        f"{active_dir}/unet_decoder_fp16.serialized.bin.bin",
+        f"{DR}/context/unet_decoder_fp16.serialized.bin.bin",
+    ]
+    enc_path = next((p for p in enc_candidates if os.path.isfile(p)), enc_candidates[-1])
+    dec_path = next((p for p in dec_candidates if os.path.isfile(p)), dec_candidates[-1])
+    if os.path.isfile(enc_path) and os.path.isfile(dec_path):
+        ctx["encoder"] = enc_path
+        ctx["decoder"] = dec_path
+    elif "unet" not in ctx:
+        ctx["encoder"] = enc_path
+        ctx["decoder"] = dec_path
+
+    # Resolve VAE
+    vae_candidates = [
+        f"{active_dir}/vae_decoder.serialized.bin.bin",
+        f"{DR}/context/{width}x{height}/vae_decoder.serialized.bin.bin",
+        f"{DR}/context/vae_decoder.serialized.bin.bin",
+    ]
+    for vc in vae_candidates:
+        if os.path.isfile(vc):
+            ctx["vae"] = vc
+            break
+    if "vae" not in ctx:
+        ctx["vae"] = f"{DR}/context/vae_decoder.serialized.bin.bin"
 
     if slot_res_dir:
-        ctx["encoder"] = f"{slot_res_dir}/unet_encoder_fp16.serialized.bin.bin"
-        ctx["decoder"] = f"{slot_res_dir}/unet_decoder_fp16.serialized.bin.bin"
         _LAST_RESOLVED_LORA_SLOT = slot
         _LAST_RESOLVED_LORA_SLOT_DIR = slot_res_dir
-        if os.path.isdir(res_dir):
-            ctx["vae"] = f"{res_dir}/vae_decoder.serialized.bin.bin"
-        else:
-            ctx["vae"] = f"{DR}/context/vae_decoder.serialized.bin.bin"
-    elif os.path.isdir(res_dir):
-        ctx["encoder"] = f"{res_dir}/unet_encoder_fp16.serialized.bin.bin"
-        ctx["decoder"] = f"{res_dir}/unet_decoder_fp16.serialized.bin.bin"
-        ctx["vae"] = f"{res_dir}/vae_decoder.serialized.bin.bin"
-    else:
-        # Legacy flat layout (default 1024×1024)
-        ctx["encoder"] = f"{DR}/context/unet_encoder_fp16.serialized.bin.bin"
-        ctx["decoder"] = f"{DR}/context/unet_decoder_fp16.serialized.bin.bin"
-        ctx["vae"] = f"{DR}/context/vae_decoder.serialized.bin.bin"
+
     return ctx
 
 _IMAGE_WIDTH, _IMAGE_HEIGHT, _WAS_SNAPPED = _snap_to_nearest_resolution(_REQ_WIDTH, _REQ_HEIGHT)
@@ -1051,11 +1106,14 @@ def _prime_paths_bg(paths: list[str]) -> list[threading.Thread]:
 
 
 def _collect_runtime_prime_paths(preview: bool) -> list[str]:
+    unet_paths = [CONTEXTS["unet"]] if "unet" in CONTEXTS else [
+        CONTEXTS.get("encoder", ""),
+        CONTEXTS.get("decoder", ""),
+    ]
     paths = [
         CONTEXTS["clip_l"],
         CONTEXTS["clip_g"],
-        CONTEXTS["encoder"],
-        CONTEXTS["decoder"],
+        *unet_paths,
         CONTEXTS["vae"],
         QNN_NET_RUN,
         f"{QNN_LIB}/libQnnHtp.so",
@@ -1120,9 +1178,12 @@ def _start_async_runtime_prep(preview: bool) -> list[threading.Thread]:
 
     prime_targets = _collect_runtime_prime_paths(preview)
     if not QNN_PREWARM_ALL_CONTEXTS:
+        unet_paths = [CONTEXTS["unet"]] if "unet" in CONTEXTS else [
+            CONTEXTS.get("encoder", ""),
+            CONTEXTS.get("decoder", ""),
+        ]
         prime_targets = [
-            CONTEXTS["encoder"],
-            CONTEXTS["decoder"],
+            *unet_paths,
             CONTEXTS["vae"],
             QNN_NET_RUN,
             f"{QNN_LIB}/libQnnHtp.so",
@@ -1847,10 +1908,10 @@ class _QnnMultiContextServer:
         self._owns_process = True
         _log("[QNN server] started")
 
-    def _send(self, cmd: str) -> str:
+    def _send(self, cmd: str, timeout: float = 60.0) -> str:
         """Send a command and read one response line."""
         if self._shared:
-            return self._send_shared(cmd)
+            return self._send_shared(cmd, timeout=timeout)
         assert self.proc is not None and self.proc.poll() is None
         self.proc.stdin.write(cmd + "\n")  # type: ignore[union-attr]
         self.proc.stdin.flush()  # type: ignore[union-attr]
@@ -1875,7 +1936,7 @@ class _QnnMultiContextServer:
             cid = self._next_id(real_path)
             _log(f"  [QNN server] loading {ctx_path} -> {real_path}")
             t0 = time.time()
-            resp = self._send(f"LOAD {cid} {real_path}")
+            resp = self._send(f"LOAD {cid} {real_path}", timeout=120.0)
             elapsed = (time.time() - t0) * 1000
             if not (resp.startswith("OK") or resp.startswith("ERR already_loaded")):
                 raise RuntimeError(f"Server LOAD failed for {ctx_path}: {resp}")
@@ -1917,6 +1978,23 @@ class _QnnMultiContextServer:
             elapsed = (time.time() - t0) * 1000
         if not resp.startswith("OK"):
             raise RuntimeError(f"Server RUN_CHAIN failed: {resp}")
+        parts = resp.split()
+        if len(parts) >= 2:
+            try:
+                return float(parts[1])
+            except ValueError:
+                pass
+        return elapsed
+
+    def run_denoise(self, cfg_file_path: str, timeout: float = 300.0) -> float:
+        """Run autonomous 8-step denoise loop in server memory (zero-copy). Returns total ms."""
+        self.start()
+        with self._lock:
+            t0 = time.time()
+            resp = self._send(f"DENOISE {cfg_file_path}", timeout=timeout)
+            elapsed = (time.time() - t0) * 1000
+        if not resp.startswith("OK"):
+            raise RuntimeError(f"Server DENOISE failed: {resp}")
         parts = resp.split()
         if len(parts) >= 2:
             try:
@@ -2583,10 +2661,11 @@ def _prewarm_and_wait(width: int = 1024, height: int = 1024):
     if not _can_use_qnn_server():
         _log("[prewarm] QNN server binary not available, falling back to daemon prewarm")
         if _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
-            threads = _prewarm_qnn_daemons([
-                CONTEXTS["encoder"],
-                CONTEXTS["decoder"],
-            ])
+            unet_paths = [CONTEXTS["unet"]] if "unet" in CONTEXTS else [
+                CONTEXTS.get("encoder", ""),
+                CONTEXTS.get("decoder", ""),
+            ]
+            threads = _prewarm_qnn_daemons(unet_paths)
             for t in threads:
                 t.join(timeout=30.0)
         print("PREWARM_READY", flush=True)
@@ -2597,14 +2676,18 @@ def _prewarm_and_wait(width: int = 1024, height: int = 1024):
     server = _get_qnn_server()
     server.start()
 
-    # Load all reusable contexts into the server
-    for ctx_name in ("encoder", "decoder", "clip_l", "clip_g"):
-        ctx_path = CONTEXTS.get(ctx_name)
-        if ctx_path and os.path.exists(ctx_path):
-            _log(f"[prewarm] loading {ctx_name}...")
-            server.load(ctx_path)
+    # Prewarm UNet context into the server (staying safely within the 3.5GB FastRPC budget)
+    if "unet" in CONTEXTS and os.path.exists(CONTEXTS["unet"]):
+        _log(f"[prewarm] loading monolithic UNet {os.path.basename(CONTEXTS['unet'])}...")
+        server.load(CONTEXTS["unet"])
+    else:
+        for ctx_name in ("encoder", "decoder"):
+            ctx_path = CONTEXTS.get(ctx_name)
+            if ctx_path and os.path.exists(ctx_path):
+                _log(f"[prewarm] loading {ctx_name}...")
+                server.load(ctx_path)
 
-    # VAE loaded but optional (only used at end of generation)
+    # VAE is small (~151MB) and can safely coexist with monolithic UNet
     vae_path = CONTEXTS.get("vae")
     if vae_path and os.path.exists(vae_path):
         _log(f"[prewarm] loading vae...")
@@ -2660,31 +2743,20 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     daemon_prewarm_threads: list[threading.Thread] = []
 
     # Prewarm: prefer multi-context server, fallback to per-context daemon
-    unet_preload_thread: threading.Thread | None = None
     if _can_use_qnn_server():
         try:
             server = _get_qnn_server()
             server.start()
-            # Eagerly preload UNet encoder+decoder in background thread
-            # while CLIP runs in separate qnn-net-run processes.
-            # This overlaps ~10s context load with CLIP + Python setup.
-            def _eager_preload_unet():
-                try:
-                    server.load(CONTEXTS["encoder"])
-                    server.load(CONTEXTS["decoder"])
-                except Exception as e:
-                    _log(f"  [QNN server] eager preload failed: {e}")
-            unet_preload_thread = threading.Thread(target=_eager_preload_unet, daemon=True)
-            unet_preload_thread.start()
-            _log(f"[QNN server] started (eager-load mode)")
+            _log(f"[QNN server] started")
         except Exception as e:
             _log(f"[QNN server] prewarm failed: {e}")
             _shutdown_qnn_server()
     elif _can_use_qnn_daemon() and QNN_DAEMON_PREWARM:
-        daemon_prewarm_threads = _prewarm_qnn_daemons([
-            CONTEXTS["encoder"],
-            CONTEXTS["decoder"],
-        ])
+        unet_paths = [CONTEXTS["unet"]] if "unet" in CONTEXTS else [
+            CONTEXTS.get("encoder", ""),
+            CONTEXTS.get("decoder", ""),
+        ]
+        daemon_prewarm_threads = _prewarm_qnn_daemons(unet_paths)
 
     _log(f"Prompt: {prompt}")
     _log(f"Base:   {DR}")
@@ -2845,57 +2917,126 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     if progressive_cfg and use_cfg:
         _log(f"  [Progressive CFG] CFG on steps 1..{cfg_cutoff}, uncond-only after")
 
-    for si in range(steps):
-        t = sched.timesteps[si]
-        sigma = float(sched.sigmas[si])
-        sigma_next = float(sched.sigmas[si + 1])
-        lat_in = tensor_arena.scale_model_input(latents, sigma) if tensor_arena is not None else sched.scale_model_input(latents, si)
-        timestep_arr = tensor_arena.timestep_tensor(t) if tensor_arena is not None else None
+    use_autonomous_denoise = _can_use_qnn_server()
+    if use_autonomous_denoise:
+        try:
+            server = _get_qnn_server()
+            is_mono = "unet" in CONTEXTS and os.path.exists(CONTEXTS["unet"])
+            if is_mono:
+                unet_id = server.load(CONTEXTS["unet"])
+                enc_id = unet_id
+                dec_id = ""
+                mode_str = "mono"
+            else:
+                enc_id = server.load(CONTEXTS["encoder"])
+                dec_id = server.load(CONTEXTS["decoder"])
+                mode_str = "chain"
 
-        step_uses_cfg = use_cfg and (si < cfg_cutoff)
+            unet_work = f"{WORK_DIR}/unet"
+            os.makedirs(unet_work, exist_ok=True)
+            init_latent_path = f"{unet_work}/init_latent.raw"
+            out_latent_path = f"{unet_work}/final_latent.raw"
+            sched_path = f"{unet_work}/schedule.txt"
+            cfg_path = f"{unet_work}/denoise_cfg.txt"
 
-        if step_uses_cfg:
-            # Batched CFG: encoder runs cond+uncond in ONE subprocess call,
-            # decoder does the same — saves 2 subprocess launches per step.
-            np_cond, np_uncond, ms = _run_unet_split_cfg(
-                lat_in, t,
-                f"{WORK_DIR}/unet/cond",
-                f"{WORK_DIR}/unet/uncond",
-                si,
-                timestep_arr=timestep_arr,
-                latent_h=latent_h, latent_w=latent_w,
-            )
-            latents_next = tensor_arena.step_cfg(np_cond, np_uncond, latents, cfg_scale, sigma, sigma_next) if tensor_arena is not None else sched.step(np_uncond + cfg_scale * (np_cond - np_uncond), si, latents)
-        else:
-            noise_pred, ms = _run_unet_split(lat_in, t, si, "cond", timestep_arr=timestep_arr, latent_h=latent_h, latent_w=latent_w)
-            latents_next = tensor_arena.step(noise_pred, latents, sigma, sigma_next) if tensor_arena is not None else sched.step(noise_pred, si, latents)
+            latents.tofile(init_latent_path)
 
-        total_unet_ms += ms
+            with open(sched_path, "w", encoding="utf-8") as sf:
+                for si in range(steps):
+                    t = float(sched.timesteps[si])
+                    s1 = float(sched.sigmas[si])
+                    s2 = float(sched.sigmas[si + 1])
+                    sf.write(f"{si} {t:.4f} {s1:.6f} {s2:.6f}\n")
 
-        temp_str = ""
-        if SHOW_TEMP:
-            temp_summary = _phone_temp_summary()
-            if temp_summary:
-                temp_str = f" [{temp_summary}]"
-
-        cfg_str = " CFG" if step_uses_cfg else ""
-        _log(
-            f"  [UNet {si+1}/{steps}]{cfg_str}{temp_str} "
-            f"{ms:.0f}ms"
-        )
-
-        latents = latents_next
-
-        if preview:
-            stride = _preview_stride(steps)
-            is_last = (si == steps - 1)
-            if is_last or (si % stride == stride - 1):
-                if is_last:
-                    # Last step: run synchronously to guarantee preview is visible
-                    _join_preview_thread()
-                    _preview_step(latents.copy(), si, steps)
+            with open(cfg_path, "w", encoding="utf-8") as cf:
+                cf.write(f"mode={mode_str}\n")
+                cf.write(f"enc_id={enc_id}\n")
+                if not is_mono:
+                    cf.write(f"dec_id={dec_id}\n")
+                cf.write(f"init_latent={init_latent_path}\n")
+                cf.write(f"out_latent={out_latent_path}\n")
+                cf.write(f"schedule_file={sched_path}\n")
+                cf.write(f"cond_dir={unet_work}/cond\n")
+                if use_cfg:
+                    cf.write(f"uncond_dir={unet_work}/uncond\n")
                 else:
-                    _start_bg_preview(latents.copy(), si, steps)
+                    cf.write("uncond_dir=-\n")
+                cf.write(f"cfg_scale={cfg_scale if use_cfg else 1.0}\n")
+                cf.write(f"progressive_cfg={cfg_cutoff if use_cfg else steps}\n")
+                cf.write(f"latent_h={latent_h}\n")
+                cf.write(f"latent_w={latent_w}\n")
+                if preview:
+                    stride = _preview_stride(steps)
+                    cf.write(f"preview_stride={stride}\n")
+                    cf.write(f"preview_dir={unet_work}/preview\n")
+                    os.makedirs(f"{unet_work}/preview", exist_ok=True)
+                else:
+                    cf.write("preview_stride=0\n")
+                if not is_mono:
+                    cf.write("pipes=output_0:mid_out output_1:skip_0 output_2:skip_1 output_3:skip_2 output_4:skip_3 output_5:skip_4 output_6:skip_5 output_7:skip_6 output_8:skip_7 output_9:skip_8 output_10:temb\n")
+
+            _log(f"  [Zero-Copy Denoise] running autonomous {steps}-step {mode_str} in server memory...")
+            total_unet_ms = server.run_denoise(cfg_path)
+            raw_out = np.fromfile(out_latent_path, dtype=np.float32)
+            expected_sz = 1 * 4 * latent_h * latent_w
+            if raw_out.size != expected_sz:
+                raise ValueError(f"Autonomous denoise output size mismatch: expected {expected_sz}, got {raw_out.size}")
+            latents = raw_out.reshape(1, 4, latent_h, latent_w)
+            _log(f"  [Zero-Copy Denoise] finished: {total_unet_ms:.0f}ms ({total_unet_ms/steps:.0f}ms/step)")
+            use_autonomous_denoise = True
+        except Exception as e:
+            _log(f"  [Zero-Copy Denoise] fallback to step loop: {e}")
+            use_autonomous_denoise = False
+
+    if not use_autonomous_denoise:
+        for si in range(steps):
+            t = sched.timesteps[si]
+            sigma = float(sched.sigmas[si])
+            sigma_next = float(sched.sigmas[si + 1])
+            lat_in = tensor_arena.scale_model_input(latents, sigma) if tensor_arena is not None else sched.scale_model_input(latents, si)
+            timestep_arr = tensor_arena.timestep_tensor(t) if tensor_arena is not None else None
+
+            step_uses_cfg = use_cfg and (si < cfg_cutoff)
+
+            if step_uses_cfg:
+                np_cond, np_uncond, ms = _run_unet_split_cfg(
+                    lat_in, t,
+                    f"{WORK_DIR}/unet/cond",
+                    f"{WORK_DIR}/unet/uncond",
+                    si,
+                    timestep_arr=timestep_arr,
+                    latent_h=latent_h, latent_w=latent_w,
+                )
+                latents_next = tensor_arena.step_cfg(np_cond, np_uncond, latents, cfg_scale, sigma, sigma_next) if tensor_arena is not None else sched.step(np_uncond + cfg_scale * (np_cond - np_uncond), si, latents)
+            else:
+                noise_pred, ms = _run_unet_split(lat_in, t, si, "cond", timestep_arr=timestep_arr, latent_h=latent_h, latent_w=latent_w)
+                latents_next = tensor_arena.step(noise_pred, latents, sigma, sigma_next) if tensor_arena is not None else sched.step(noise_pred, si, latents)
+
+            total_unet_ms += ms
+
+            temp_str = ""
+            if SHOW_TEMP:
+                temp_summary = _phone_temp_summary()
+                if temp_summary:
+                    temp_str = f" [{temp_summary}]"
+
+            cfg_str = " CFG" if step_uses_cfg else ""
+            _log(
+                f"  [UNet {si+1}/{steps}]{cfg_str}{temp_str} "
+                f"{ms:.0f}ms"
+            )
+
+            latents = latents_next
+
+            if preview:
+                stride = _preview_stride(steps)
+                is_last = (si == steps - 1)
+                if is_last or (si % stride == stride - 1):
+                    if is_last:
+                        _join_preview_thread()
+                        _preview_step(latents.copy(), si, steps)
+                    else:
+                        _start_bg_preview(latents.copy(), si, steps)
 
     if preview:
         _join_preview_thread()
@@ -2903,12 +3044,15 @@ def generate(prompt, seed=None, steps=8, cfg_scale=3.5, neg_prompt=None,
     _log(f"  UNet total: {total_unet_ms:.0f}ms ({total_unet_ms/steps:.0f}ms/step)")
 
     # ── 4. VAE decode ──
-    # Free UNet contexts before VAE to avoid OOM (UNet ~5GB, VAE ~hundreds MB)
+    # Free UNet contexts before VAE only if using heavy split unet (> 3.5GB).
+    # For monolithic W8A16 UNet (~2.44GB), UNet + VAE (~2.59GB) fits easily under 3.5GB,
+    # so keeping UNet loaded gives instant generation for subsequent images!
     if _can_use_qnn_server() and _QNN_SERVER is not None and _QNN_SERVER.is_available():
-        for k in ("encoder", "decoder"):
-            cp = CONTEXTS.get(k)
-            if cp:
-                _QNN_SERVER.unload(cp)
+        if "unet" not in CONTEXTS:
+            for k in ("encoder", "decoder"):
+                cp = CONTEXTS.get(k)
+                if cp:
+                    _QNN_SERVER.unload(cp)
 
     scaling_factor = 0.13025
 

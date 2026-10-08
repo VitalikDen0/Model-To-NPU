@@ -338,7 +338,7 @@ final class RuntimeBootstrap {
     // -------------------------------------------------------------------------
 
     private static final String PY_RUNTIME_ZIP_ASSET = "py_runtime.zip";
-    static final String PY_RUNTIME_VERSION = "py3.13-aarch64-v1";
+    static final String PY_RUNTIME_VERSION = "py3.13-aarch64-v2";
     private static final String PY_RUNTIME_VERSION_FILE = "py_runtime_version.txt";
 
     static File getPyRuntimeDir(Context context) {

@@ -92,7 +92,7 @@ def adb_cmd(adb_path, serial, *args):
 def adb_push(adb_path, serial, local, remote):
     """Push a file to phone, with progress info."""
     size_mb = os.path.getsize(local) / (1024 * 1024)
-    print(f"  Push {os.path.basename(local)} ({size_mb:.1f} MB) → {remote}")
+    print(f"  Push {os.path.basename(local)} ({size_mb:.1f} MB) -> {remote}")
     rc, out, err = adb_cmd(adb_path, serial, "push", local, remote)
     if rc != 0:
         print(f"    ERROR: {err.strip()}")
@@ -103,6 +103,7 @@ def adb_push(adb_path, serial, local, remote):
 def find_adb():
     """Find ADB in common locations."""
     candidates = [
+        r"D:\platform-tools\adb.exe",
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "adb.exe"),
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "adb"),
         "adb",

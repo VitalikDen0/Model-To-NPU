@@ -357,7 +357,7 @@ android {
     defaultConfig {
         applicationId "com.sdxlnpu.app"
         minSdk 28
-        targetSdk 34
+        targetSdk 28
         versionCode apkVersionCode
         versionName apkVersionName
     }

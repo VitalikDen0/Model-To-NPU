@@ -48,9 +48,11 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Random;
@@ -380,21 +382,13 @@ public class MainActivity extends AppCompatActivity {
                 String generatorScript = resolveGeneratorScriptPath(bundledPayload);
                 
                 StringBuilder script = new StringBuilder();
-                appendShellEnvironment(script);
+                appendShellEnvironment(script, plan.pythonCommand, activeBaseDir);
                 script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("export PYTHONDONTWRITEBYTECODE=1\n");
                 script.append("export SDXL_QNN_SHARED_SERVER=1\n");
                 script.append("export SDXL_QNN_PRESTAGE_RUNTIME=1\n");
                 appendBundledRuntimeEnvironment(script, bundledPayload);
-                
-                script.append(String.format(Locale.US,
-                    "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
-                    shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
-                script.append(String.format(Locale.US,
-                    "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
-                    shellEscape(activeBaseDir)));
-                
                 script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
                 // 1. Send --stop-server command cleanly to Python IPC
                 script.append("\"").append(shellEscape(plan.pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\" --stop-server\n");
@@ -500,7 +494,7 @@ public class MainActivity extends AppCompatActivity {
                 final String runtimeWorkDirPath = runtimeWorkDir.getAbsolutePath();
 
                 StringBuilder script = new StringBuilder();
-                appendShellEnvironment(script);
+                appendShellEnvironment(script, plan.pythonCommand, activeBaseDir);
                 script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("export SDXL_QNN_WORK_DIR=\"").append(shellEscape(runtimeWorkDirPath)).append("\"\n");
@@ -518,12 +512,6 @@ public class MainActivity extends AppCompatActivity {
                         .append("/htp_backend_extensions_lightning.json\"\n");
                     script.append("fi\n");
                 }
-                script.append(String.format(Locale.US,
-                    "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
-                    shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
-                script.append(String.format(Locale.US,
-                    "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
-                    shellEscape(activeBaseDir)));
                 script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
                 script.append("exec \"").append(shellEscape(plan.pythonCommand))
                     .append("\" \"").append(shellEscape(generatorScript))
@@ -1019,9 +1007,92 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private int[][] getActiveSizePresetDimensions() {
-        return MODEL_FAMILY_WAN21.equals(getSelectedModelFamily())
-            ? WAN_SIZE_PRESET_DIMENSIONS
-            : SDXL_SIZE_PRESET_DIMENSIONS;
+        if (MODEL_FAMILY_WAN21.equals(getSelectedModelFamily())) {
+            return WAN_SIZE_PRESET_DIMENSIONS;
+        }
+        int[][] discovered = discoverAvailableSdxlResolutions();
+        if (discovered != null && discovered.length > 0) {
+            return discovered;
+        }
+        return SDXL_SIZE_PRESET_DIMENSIONS;
+    }
+
+    private int[][] discoverAvailableSdxlResolutions() {
+        String baseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
+        if (baseDir == null || baseDir.isEmpty()) {
+            return null;
+        }
+        File contextDir = new File(baseDir, "context");
+        if (!contextDir.isDirectory()) {
+            return null;
+        }
+
+        // 1. Check context/manifest.json
+        File manifestFile = new File(contextDir, "manifest.json");
+        if (manifestFile.isFile()) {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(new FileInputStream(manifestFile), StandardCharsets.UTF_8))) {
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line);
+                }
+                JSONObject obj = new JSONObject(sb.toString());
+                JSONArray arr = obj.optJSONArray("resolutions");
+                if (arr != null && arr.length() > 0) {
+                    List<int[]> parsed = new ArrayList<>();
+                    for (int i = 0; i < arr.length(); i++) {
+                        String resStr = arr.optString(i);
+                        int[] dims = parseResolutionString(resStr);
+                        if (dims != null) {
+                            parsed.add(dims);
+                        }
+                    }
+                    if (!parsed.isEmpty()) {
+                        return parsed.toArray(new int[0][]);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to parse context/manifest.json", e);
+            }
+        }
+
+        // 2. Scan context/ for subdirectories matching WxH
+        File[] subdirs = contextDir.listFiles(File::isDirectory);
+        if (subdirs != null && subdirs.length > 0) {
+            List<int[]> parsed = new ArrayList<>();
+            for (File d : subdirs) {
+                int[] dims = parseResolutionString(d.getName());
+                if (dims != null) {
+                    parsed.add(dims);
+                }
+            }
+            if (!parsed.isEmpty()) {
+                parsed.sort((a, b) -> {
+                    if (a[0] != b[0]) return Integer.compare(b[0], a[0]);
+                    return Integer.compare(b[1], a[1]);
+                });
+                return parsed.toArray(new int[0][]);
+            }
+        }
+        return null;
+    }
+
+    private static int[] parseResolutionString(String resStr) {
+        if (resStr == null || !resStr.contains("x")) {
+            return null;
+        }
+        String[] parts = resStr.trim().split("x");
+        if (parts.length == 2) {
+            try {
+                int w = Integer.parseInt(parts[0].trim());
+                int h = Integer.parseInt(parts[1].trim());
+                if (w > 0 && h > 0) {
+                    return new int[] {w, h};
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
     }
 
     private void refreshSizePresetSpinnerItems() {
@@ -1505,6 +1576,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight, isPreloadOnly, frames, fps, finalLoraSlot);
             } catch (Exception e) {
+                Log.e(TAG, "Pipeline execution failed: " + e.getMessage(), e);
                 isGenerating = false;
                 mainHandler.post(() -> {
                     latestTempStatus = "";
@@ -1653,7 +1725,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Build shell script (multi-line — no nested-quote issues)
         StringBuilder script = new StringBuilder();
-        appendShellEnvironment(script);
+        appendShellEnvironment(script, pythonCommand, activeBaseDir);
         script.append("export MODEL_TO_NPU_MODEL_FAMILY=\"").append(shellEscape(modelFamily)).append("\"\n");
         script.append("export MODEL_TO_NPU_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
         script.append("export SDXL_QNN_BASE=\"").append(shellEscape(activeBaseDir)).append("\"\n");
@@ -1737,11 +1809,6 @@ public class MainActivity extends AppCompatActivity {
                 .append("/htp_backend_extensions_lightning.json\"\n");
             script.append("fi\n");
         }
-        script.append(String.format(Locale.US,
-            "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
-            shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
-        script.append(String.format(Locale.US,
-            "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n", shellEscape(activeBaseDir)));
         script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
 
         script.append("exec \"").append(shellEscape(pythonCommand)).append("\" \"").append(shellEscape(generatorScript)).append("\"");
@@ -1803,6 +1870,7 @@ public class MainActivity extends AppCompatActivity {
             pb = new ProcessBuilder("/system/bin/sh");
         }
         pb.redirectErrorStream(true);
+        Log.i(TAG, "Starting generator process, script:\n" + script.toString());
         Process process = pb.start();
         currentProcess = process;
 
@@ -1853,6 +1921,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             String line;
             while ((line = reader.readLine()) != null) {
+                    Log.i(TAG, "proc: " + line);
                     if (currentProcess == null) break; // stopped
                     if (rawLog.length() < 16000) rawLog.append(line).append("\n");
 
@@ -2151,29 +2220,52 @@ public class MainActivity extends AppCompatActivity {
         return isLegacyBaseDir(baseDir) || looksLikePrivatePythonPath(pythonCommand);
     }
 
-    private void appendShellEnvironment(StringBuilder script) {
-        // Prefer py_runtime (no-root, self-contained Python bundle)
+    private void appendShellEnvironment(StringBuilder script, String pythonCommand, String activeBaseDir) {
+        script.append("export LANG=en_US.UTF-8\n");
+        script.append("export LC_ALL=en_US.UTF-8\n");
+
+        if (activeBaseDir != null && !activeBaseDir.isEmpty()) {
+            script.append(String.format(Locale.US,
+                "export LD_LIBRARY_PATH=\"%s/lib:%s/bin:%s/model:$LD_LIBRARY_PATH\"\n",
+                shellEscape(activeBaseDir), shellEscape(activeBaseDir), shellEscape(activeBaseDir)));
+            script.append(String.format(Locale.US,
+                "export ADSP_LIBRARY_PATH=\"%s/lib;/vendor/lib64/rfs/dsp;/vendor/lib/rfsa/adsp;/vendor/dsp\"\n",
+                shellEscape(activeBaseDir)));
+        }
+
+        // Prefer py_runtime ONLY if the active command is actually py_runtime
         String pyRuntimePython = RuntimeBootstrap.findBundledPyRuntimePython(this);
-        if (pyRuntimePython != null) {
+        if (pyRuntimePython != null && pyRuntimePython.equals(pythonCommand)) {
             String home = RuntimeBootstrap.getPyRuntimeHome(this);
             String libDir = RuntimeBootstrap.getPyRuntimeLibDir(this);
             String binDir = new File(home, "bin").getAbsolutePath();
             Log.i(TAG, "runtimeEnv: mode=py_runtime, home=" + home + ", libDir=" + libDir);
+            script.append("export PREFIX=\"").append(shellEscape(home)).append("\"\n");
             script.append("export PYTHONHOME=\"").append(shellEscape(home)).append("\"\n");
             script.append("export LD_LIBRARY_PATH=\"")
                 .append(shellEscape(libDir)).append(":$LD_LIBRARY_PATH\"\n");
             script.append("export PATH=\"")
                 .append(shellEscape(binDir)).append(":$PATH\"\n");
+            File stdlib = new File(libDir, "python3.13");
+            File dynload = new File(libDir, "python3.13/lib-dynload");
+            File sitePackages = new File(libDir, "python3.13/site-packages");
+            script.append("export PYTHONPATH=\"")
+                .append(shellEscape(stdlib.getAbsolutePath())).append(":")
+                .append(shellEscape(dynload.getAbsolutePath())).append(":")
+                .append(shellEscape(sitePackages.getAbsolutePath())).append(":$PYTHONPATH\"\n");
             return;
         }
-        // Fall back to bundled Termux prefix
-        File bundledPrefix = RuntimeBootstrap.getBundledPrefixDir(this);
-        if (bundledPrefix.isDirectory()) {
+
+        // Bundled Termux prefix (only if pythonCommand matches bundled python)
+        String bundledPython = RuntimeBootstrap.findBundledPython(this);
+        if (bundledPython != null && bundledPython.equals(pythonCommand)) {
+            File bundledPrefix = RuntimeBootstrap.getBundledPrefixDir(this);
             File bundledBin = new File(bundledPrefix, "bin");
             File bundledLib = new File(bundledPrefix, "lib");
             Log.i(TAG, "runtimeEnv: mode=bundled_termux, prefix=" + bundledPrefix.getAbsolutePath());
             script.append("export PREFIX=\"").append(shellEscape(bundledPrefix.getAbsolutePath())).append("\"\n");
             script.append("export HOME=\"").append(shellEscape(new File(bundledPrefix, "home").getAbsolutePath())).append("\"\n");
+            script.append("export PYTHONHOME=\"").append(shellEscape(bundledPrefix.getAbsolutePath())).append("\"\n");
             script.append("export LD_LIBRARY_PATH=\"")
                 .append(shellEscape(bundledLib.getAbsolutePath()))
                 .append(":$LD_LIBRARY_PATH\"\n");
@@ -2182,8 +2274,39 @@ public class MainActivity extends AppCompatActivity {
                 .append(":/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\"\n");
             return;
         }
-        Log.i(TAG, "runtimeEnv: mode=system_sh_fallback");
-        script.append("export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:$PATH\n");
+
+        // Dynamic prefix resolution for Termux or custom / chroot Python
+        String targetPy = pythonCommand != null ? pythonCommand.trim() : "";
+        Log.i(TAG, "runtimeEnv: mode=dynamic_python, targetPy=" + targetPy);
+        script.append("TARGET_PY=\"").append(shellEscape(targetPy)).append("\"\n");
+        script.append("PY_PREFIX=\"\"\n");
+        script.append("if [ -f \"$TARGET_PY\" ]; then\n");
+        script.append("    PY_DIR=$(dirname \"$TARGET_PY\")\n");
+        script.append("    PY_CAND_PREFIX=$(dirname \"$PY_DIR\")\n");
+        script.append("    if [ -d \"$PY_CAND_PREFIX/lib\" ]; then\n");
+        script.append("        PY_PREFIX=\"$PY_CAND_PREFIX\"\n");
+        script.append("    fi\n");
+        script.append("fi\n");
+        script.append("if [ -z \"$PY_PREFIX\" ] && [ -d \"/data/data/com.termux/files/usr/lib\" ]; then\n");
+        script.append("    PY_PREFIX=\"/data/data/com.termux/files/usr\"\n");
+        script.append("fi\n");
+        script.append("if [ -n \"$PY_PREFIX\" ]; then\n");
+        script.append("    export PREFIX=\"$PY_PREFIX\"\n");
+        script.append("    export PYTHONHOME=\"$PY_PREFIX\"\n");
+        script.append("    export PATH=\"$PY_PREFIX/bin:$PATH\"\n");
+        script.append("    export LD_LIBRARY_PATH=\"$PY_PREFIX/lib:$LD_LIBRARY_PATH\"\n");
+        script.append("    for pydir in \"$PY_PREFIX\"/lib/python3.*; do\n");
+        script.append("        if [ -d \"$pydir\" ]; then\n");
+        script.append("            export PYTHONPATH=\"$pydir:$pydir/site-packages:$pydir/lib-dynload:$PYTHONPATH\"\n");
+        script.append("            break\n");
+        script.append("        fi\n");
+        script.append("    done\n");
+        script.append("fi\n");
+
+        script.append("export PATH=\"$PATH:/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets\"\n");
+        script.append("if [ -d \"/data/data/com.termux/files/usr/lib\" ]; then\n");
+        script.append("    export LD_LIBRARY_PATH=\"$LD_LIBRARY_PATH:/data/data/com.termux/files/usr/lib\"\n");
+        script.append("fi\n");
     }
 
     private ExecutionPlan resolveExecutionPlan(String activeBaseDir) throws IOException, InterruptedException {
@@ -2276,18 +2399,13 @@ public class MainActivity extends AppCompatActivity {
     private boolean canExecutePython(boolean useRootShell, String pythonCommand)
             throws IOException, InterruptedException {
         StringBuilder script = new StringBuilder();
-        appendShellEnvironment(script);
-        if (isSimpleCommandName(pythonCommand)) {
-            script.append("if command -v \"")
-                .append(shellEscape(pythonCommand))
-                .append("\" >/dev/null 2>&1; then echo OK; else echo MISS; fi\n");
-        } else {
-            script.append("if [ -x \"")
-                .append(shellEscape(pythonCommand))
-                .append("\" ]; then echo OK; else echo MISS; fi\n");
-        }
+        appendShellEnvironment(script, pythonCommand, null);
+        script.append("PROBE_ERR=$(\"").append(shellEscape(pythonCommand))
+            .append("\" -c \"import sys; sys.exit(0)\" 2>&1)\n");
+        script.append("if [ $? -eq 0 ]; then echo OK; else echo \"MISS: $PROBE_ERR\"; fi\n");
         String output = runShellScriptForOutput(useRootShell, script.toString(), 15);
-        return output.contains("OK");
+        Log.i(TAG, "canExecutePython: cmd=" + pythonCommand + ", result=" + output.trim());
+        return output.contains("OK") && !output.contains("MISS");
     }
 
     private boolean hasWorkingRootShell() {
@@ -2421,7 +2539,12 @@ public class MainActivity extends AppCompatActivity {
     private String buildRunFailureMessage(int exitCode, boolean useRootShell, String rawLog) {
         String safeRawLog = rawLog != null ? rawLog : "";
         String hint;
-        if (
+        if (safeRawLog.contains("No module named 'encodings'")
+                || safeRawLog.contains("Failed to import encodings module")) {
+            hint = "Ошибка инициализации Python (не найден модуль encodings).\n"
+                + "Окружение Python (Termux/chroot) не смогло найти стандартную библиотеку.\n"
+                + "Проверьте путь к Python в Настройках или используйте встроенный py_runtime.";
+        } else if (
                 safeRawLog.contains("Device Creation failure")
                     || safeRawLog.contains("contextCreateFromBinary_failed")
                     || safeRawLog.contains("Failed to load skel")
@@ -2559,6 +2682,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         configureLoraSpinner();
+        refreshSizePresetSpinnerItems();
     }
 
     @Override
