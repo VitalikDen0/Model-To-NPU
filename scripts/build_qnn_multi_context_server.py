@@ -56,7 +56,9 @@ def build(qairt_root: Path, ndk_root: Path, out_dir: Path) -> Path:
 
     cmd = [
         str(clang),
-        "-O2",
+        "-O3",
+        "-march=armv8.2-a+fp16+dotprod",
+        "-ffast-math",
         "-Wall", "-Wextra", "-Wno-unused-parameter",
         f"-I{qnn_include}",
         f"-I{qnn_include / 'HTP'}",
@@ -65,6 +67,7 @@ def build(qairt_root: Path, ndk_root: Path, out_dir: Path) -> Path:
         "-o", str(output_binary),
         "-ldl",
         "-lm",
+        "-lz",
         "-static-libgcc",
         "-pie",
     ]

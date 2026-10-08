@@ -172,7 +172,7 @@ def _load_prompts(prompts_json: Path | None, prompt_limit: int | None) -> list[s
 
 
 def _build_sample_plan(samples: int, prompts: list[str], timesteps, sampling_order: str) -> list[tuple[int, float, int]]:
-    if sampling_order == "legacy":
+    if sampling_order in ("trajectory", "legacy"):
         plan = []
         sample_idx = 0
         for prompt_idx in range(len(prompts)):
@@ -224,8 +224,8 @@ def main():
                     help="Optional JSON with prompt entries (supports {'prompts': [{'positive': ...}]})")
     ap.add_argument("--prompt-limit", type=int, default=None,
                     help="Optional cap on unique prompts loaded from --prompts-json")
-    ap.add_argument("--sampling-order", choices=["legacy", "cyclic_diverse"], default="legacy",
-                    help="Sample ordering strategy. legacy preserves the historical prompt-first order; cyclic_diverse spreads small sample counts across more prompts.")
+    ap.add_argument("--sampling-order", choices=["trajectory", "legacy", "cyclic_diverse"], default="trajectory",
+                    help="Sample ordering strategy. trajectory simulates the real diffusion sequence across timesteps; legacy treats each timestep independently; cyclic_diverse spreads small counts across prompts.")
     args = ap.parse_args()
 
     legacy_device = _device_from_arg(args.device)
@@ -296,6 +296,9 @@ def main():
     input_list_lines = []
     sample_plan = _build_sample_plan(args.samples, prompts, timesteps.tolist(), args.sampling_order)
 
+    current_prompt_idx = None
+    trajectory_latent = None
+
     for sample_idx, (prompt_idx, timestep_value, timestep_idx) in enumerate(sample_plan):
         prompt = prompts[prompt_idx]
 
@@ -327,10 +330,18 @@ def main():
         sample_dir = out_dir / f"sample_{sample_idx:04d}"
         sample_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create latent scaled by init_noise_sigma (matching real inference)
-        gen = torch.Generator(device=target_unet_device).manual_seed(42 + sample_idx * 13 + timestep_idx * 7)
-        latent = torch.randn((1, 4, 128, 128), generator=gen, device=target_unet_device, dtype=torch.float32)
-        latent = latent * init_sigma  # CRITICAL: match actual inference scale
+        if args.sampling_order == "trajectory":
+            if current_prompt_idx != prompt_idx or trajectory_latent is None:
+                current_prompt_idx = prompt_idx
+                gen = torch.Generator(device=target_unet_device).manual_seed(42 + prompt_idx * 1000)
+                trajectory_latent = torch.randn((1, 4, 128, 128), generator=gen, device=target_unet_device, dtype=torch.float32)
+                trajectory_latent = trajectory_latent * init_sigma
+            latent = trajectory_latent
+        else:
+            # Legacy independent random sample
+            gen = torch.Generator(device=target_unet_device).manual_seed(42 + sample_idx * 13 + timestep_idx * 7)
+            latent = torch.randn((1, 4, 128, 128), generator=gen, device=target_unet_device, dtype=torch.float32)
+            latent = latent * init_sigma
 
         # Scale model input for this timestep
         latent_in = scheduler.scale_model_input(latent, t)
@@ -370,6 +381,19 @@ def main():
 
         print(f"  [{sample_idx+1}/{args.samples}] prompt={prompt_idx}, t={timestep_value:.0f}, "
               f"latent_range=[{sample_np.min():.2f}, {sample_np.max():.2f}]")
+
+        # In trajectory mode, advance latent along the denoising path
+        if args.sampling_order == "trajectory":
+            with torch.no_grad():
+                t_input = torch.tensor([float(t)], dtype=torch.float32, device=target_unet_device)
+                model_pred = lightning_unet(
+                    latent_in.to(target_unet_device, dtype=torch.float32),
+                    t_input,
+                    encoder_hidden_states=pe,
+                    added_cond_kwargs={"text_embeds": ppe, "time_ids": add_time_ids},
+                    return_dict=False,
+                )[0]
+                trajectory_latent = scheduler.step(model_pred, t, trajectory_latent).prev_sample
 
     # Write input list
     input_list_path = out_dir / "unet_extbias_input_list.txt"

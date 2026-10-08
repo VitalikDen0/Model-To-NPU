@@ -34,6 +34,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <math.h>
+#include <ctype.h>
+#include <zlib.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 /* QNN headers */
 #include "QnnInterface.h"
@@ -45,11 +51,14 @@
 #include "QnnGraph.h"
 #include "QnnLog.h"
 #include "QnnMem.h"
+#include "QnnProfile.h"
 #include "QnnProperty.h"
 #include "System/QnnSystemInterface.h"
 #include "System/QnnSystemContext.h"
 #include "HTP/QnnHtpDevice.h"
+#include "HTP/QnnHtpGraph.h"
 #include "HTP/QnnHtpPerfInfrastructure.h"
+#include "HTP/QnnHtpProfile.h"
 
 /* ========================================================================= */
 /*  rpcmem for shared DSP memory                                            */
@@ -144,6 +153,7 @@ typedef Qnn_ErrorHandle_t (*QnnSystemInterfaceGetProvidersFn)(
 
 typedef struct {
     char     id[MAX_ID_LEN];
+    char     binaryPath[MAX_PATH_LEN];
     int      active;
 
     /* context binary (mmap'd) */
@@ -173,6 +183,8 @@ typedef struct {
     size_t       outputBufSizes[MAX_TENSORS];
     char         outputNames[MAX_TENSORS][MAX_GRAPH_NAME];
     Qnn_MemHandle_t outputMemHandles[MAX_TENSORS];
+
+    size_t       modelBytes;
 } ContextSlot;
 
 /* ========================================================================= */
@@ -192,6 +204,7 @@ static Qnn_DeviceHandle_t  g_deviceHandle  = NULL;
 
 static ContextSlot g_slots[MAX_CONTEXTS];
 static int         g_numSlots = 0;
+static size_t      g_totalLoadedBytes = 0;
 
 /* ========================================================================= */
 /*  Logging                                                                  */
@@ -279,7 +292,7 @@ static int load_file_malloc(const char* path, void** out_data, size_t* out_size)
     return 0;
 }
 
-static int read_file_to_buf(const char* path, void* buf, size_t expected_size) {
+static int __attribute__((unused)) read_file_to_buf(const char* path, void* buf, size_t expected_size) {
     FILE* f = fopen(path, "rb");
     if (!f) return -1;
     size_t rd = fread(buf, 1, expected_size, f);
@@ -462,7 +475,7 @@ static void set_perf_mode(void) {
 /* ========================================================================= */
 
 /* Extract graph info from context binary via system API */
-static int get_graph_info_from_binary(const void* data, size_t size,
+static int __attribute__((unused)) get_graph_info_from_binary(const void* data, size_t size,
                                        const char** out_graph_name,
                                        const QnnSystemContext_GraphInfo_t** out_graphs,
                                        uint32_t* out_num_graphs) {
@@ -675,12 +688,20 @@ static int cmd_load(const char* id, const char* context_path) {
     ContextSlot* slot = &g_slots[g_numSlots];
     memset(slot, 0, sizeof(ContextSlot));
     strncpy(slot->id, id, MAX_ID_LEN - 1);
+    strncpy(slot->binaryPath, context_path, MAX_PATH_LEN - 1);
 
     /* read the context binary into malloc'd buffer */
     if (load_file_malloc(context_path, &slot->binaryData, &slot->binarySize) != 0) {
         printf("ERR cannot_open %s: %s\n", context_path, strerror(errno));
         fflush(stdout);
         return -1;
+    }
+    slot->modelBytes = slot->binarySize;
+
+    if (g_totalLoadedBytes + slot->modelBytes > 3758096384ULL) {
+        fprintf(stderr, "[server] WARN: loading %s (%.1f MB) pushes total DSP context size (%.1f MB) past 3.5 GB FastRPC budget!\n",
+                id, (double)slot->modelBytes / (1024.0 * 1024.0),
+                (double)(g_totalLoadedBytes + slot->modelBytes) / (1024.0 * 1024.0));
     }
 
     fprintf(stderr, "[server] Loading context %s: %s (%.1f MB)\n",
@@ -847,6 +868,29 @@ static int cmd_load(const char* id, const char* context_path) {
         return -1;
     }
 
+    /* Unlock maximum HVX hardware threads on Hexagon V79 (8 or 6 instead of default 4) prior to first execution */
+    if (g_qnn.graphSetConfig) {
+        const uint64_t try_threads[2] = {8, 6};
+        for (int ti = 0; ti < 2; ++ti) {
+            QnnHtpGraph_CustomConfig_t htpCfg;
+            memset(&htpCfg, 0, sizeof(htpCfg));
+            htpCfg.option = QNN_HTP_GRAPH_CONFIG_OPTION_NUM_HVX_THREADS;
+            htpCfg.numHvxThreads = try_threads[ti];
+
+            QnnGraph_Config_t gCfg;
+            memset(&gCfg, 0, sizeof(gCfg));
+            gCfg.option = QNN_GRAPH_CONFIG_OPTION_CUSTOM;
+            gCfg.customConfig = &htpCfg;
+            const QnnGraph_Config_t* cfgList[2] = {&gCfg, NULL};
+
+            if (QNN_SUCCESS == g_qnn.graphSetConfig(slot->graphHandle, cfgList)) {
+                fprintf(stderr, "[server] Configured graph '%s' to use %llu HVX threads\n",
+                        slot->graphName, (unsigned long long)try_threads[ti]);
+                break;
+            }
+        }
+    }
+
     /* Finalize deserialized graph if supported by backend */
     if (g_qnn.graphFinalize && g_qnn.propertyHasCapability) {
         Qnn_ErrorHandle_t propErr = g_qnn.propertyHasCapability(
@@ -891,6 +935,7 @@ static int cmd_load(const char* id, const char* context_path) {
                 reg_count, numInputs + numOutputs);
     }
 
+    g_totalLoadedBytes += slot->modelBytes;
     slot->active = 1;
     g_numSlots++;
 
@@ -1004,14 +1049,59 @@ static int parse_input_line(char* line, ContextSlot* slot) {
                 uint8_t* p = (uint8_t*)dst;
                 for (size_t e = 0; e < rd; e++) p[e] = (uint8_t)floatBuf[e];
             } else if (dt == QNN_DATATYPE_UFIXED_POINT_16) { /* 0x0416 */
+                Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+                    ? t->v2.quantizeParams : t->v1.quantizeParams;
                 uint16_t* p = (uint16_t*)dst;
-                for (size_t e = 0; e < rd; e++) p[e] = (uint16_t)floatBuf[e];
+                if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+                    qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET &&
+                    qp.scaleOffsetEncoding.scale != 0.0f) {
+                    float inv_scale = 1.0f / qp.scaleOffsetEncoding.scale;
+                    int32_t offset = qp.scaleOffsetEncoding.offset;
+                    for (size_t e = 0; e < rd; e++) {
+                        int32_t q = (int32_t)lrintf(floatBuf[e] * inv_scale) - offset;
+                        if (q < 0) q = 0;
+                        else if (q > 65535) q = 65535;
+                        p[e] = (uint16_t)q;
+                    }
+                } else {
+                    for (size_t e = 0; e < rd; e++) p[e] = (uint16_t)floatBuf[e];
+                }
             } else if (dt == QNN_DATATYPE_UFIXED_POINT_8) {  /* 0x0408 */
+                Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+                    ? t->v2.quantizeParams : t->v1.quantizeParams;
                 uint8_t* p = (uint8_t*)dst;
-                for (size_t e = 0; e < rd; e++) p[e] = (uint8_t)floatBuf[e];
+                if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+                    qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET &&
+                    qp.scaleOffsetEncoding.scale != 0.0f) {
+                    float inv_scale = 1.0f / qp.scaleOffsetEncoding.scale;
+                    int32_t offset = qp.scaleOffsetEncoding.offset;
+                    for (size_t e = 0; e < rd; e++) {
+                        int32_t q = (int32_t)lrintf(floatBuf[e] * inv_scale) - offset;
+                        if (q < 0) q = 0;
+                        else if (q > 255) q = 255;
+                        p[e] = (uint8_t)q;
+                    }
+                } else {
+                    for (size_t e = 0; e < rd; e++) p[e] = (uint8_t)floatBuf[e];
+                }
             } else if (dt == QNN_DATATYPE_SFIXED_POINT_16) { /* 0x0316 */
+                Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+                    ? t->v2.quantizeParams : t->v1.quantizeParams;
                 int16_t* p = (int16_t*)dst;
-                for (size_t e = 0; e < rd; e++) p[e] = (int16_t)floatBuf[e];
+                if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+                    qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET &&
+                    qp.scaleOffsetEncoding.scale != 0.0f) {
+                    float inv_scale = 1.0f / qp.scaleOffsetEncoding.scale;
+                    int32_t offset = qp.scaleOffsetEncoding.offset;
+                    for (size_t e = 0; e < rd; e++) {
+                        int32_t q = (int32_t)lrintf(floatBuf[e] * inv_scale) - offset;
+                        if (q < -32768) q = -32768;
+                        else if (q > 32767) q = 32767;
+                        p[e] = (int16_t)q;
+                    }
+                } else {
+                    for (size_t e = 0; e < rd; e++) p[e] = (int16_t)floatBuf[e];
+                }
             } else if (dt == QNN_DATATYPE_SFIXED_POINT_8) {  /* 0x0308 */
                 int8_t* p = (int8_t*)dst;
                 for (size_t e = 0; e < rd; e++) p[e] = (int8_t)floatBuf[e];
@@ -1451,34 +1541,1343 @@ static int cmd_run_chain(const char* enc_id, const char* dec_id,
 }
 
 /* ========================================================================= */
+/*  DENOISE: Autonomous 8-Step Denoise Loop in Server Memory (Zero-Copy)    */
+/* ========================================================================= */
+
+typedef struct {
+    int   step;
+    float timestep;
+    float sigma;
+    float sigma_next;
+} DenoiseScheduleStep;
+
+static inline float fp16_to_f32(uint16_t h) {
+#if defined(__aarch64__)
+    __fp16 fh;
+    memcpy(&fh, &h, 2);
+    return (float)fh;
+#else
+    uint32_t sign = (h >> 15) & 1;
+    uint32_t exp  = (h >> 10) & 0x1F;
+    uint32_t mant = h & 0x3FF;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) f = sign << 31;
+        else {
+            exp = 1;
+            while (!(mant & 0x400)) { mant <<= 1; exp--; }
+            mant &= 0x3FF;
+            f = (sign << 31) | ((exp + 127 - 15) << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        f = (sign << 31) | 0x7F800000 | (mant << 13);
+    } else {
+        f = (sign << 31) | ((exp + 127 - 15) << 23) | (mant << 13);
+    }
+    float res;
+    memcpy(&res, &f, 4);
+    return res;
+#endif
+}
+
+static inline uint16_t f32_to_fp16(float val) {
+#if defined(__aarch64__)
+    __fp16 fh = (__fp16)val;
+    uint16_t h;
+    memcpy(&h, &fh, 2);
+    return h;
+#else
+    uint32_t bits;
+    memcpy(&bits, &val, 4);
+    uint32_t s = (bits >> 16) & 0x8000;
+    int32_t ex = ((bits >> 23) & 0xFF) - 127 + 15;
+    uint32_t m = bits & 0x007FFFFF;
+    if (ex <= 0) return (uint16_t)s;
+    if (ex >= 31) return (uint16_t)(s | 0x7C00);
+    return (uint16_t)(s | (ex << 10) | (m >> 13));
+#endif
+}
+
+static void tensor_get_f32(ContextSlot* slot, uint32_t idx, float* dst, size_t numElems) {
+    Qnn_Tensor_t* t = &slot->outputs[idx];
+    Qnn_DataType_t dt = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dataType : t->v1.dataType;
+    void* src = slot->outputBufs[idx];
+
+    if (dt == QNN_DATATYPE_FLOAT_32) {
+        memcpy(dst, src, numElems * sizeof(float));
+    } else if (dt == QNN_DATATYPE_FLOAT_16) {
+        const uint16_t* s = (const uint16_t*)src;
+        for (size_t e = 0; e < numElems; e++) {
+            dst[e] = fp16_to_f32(s[e]);
+        }
+    } else if (dt == QNN_DATATYPE_UFIXED_POINT_16) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        const uint16_t* s = (const uint16_t*)src;
+        if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+            qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET) {
+            float scale = qp.scaleOffsetEncoding.scale;
+            int32_t offset = qp.scaleOffsetEncoding.offset;
+            for (size_t e = 0; e < numElems; e++) {
+                dst[e] = ((float)s[e] + (float)offset) * scale;
+            }
+        } else {
+            for (size_t e = 0; e < numElems; e++) dst[e] = (float)s[e];
+        }
+    } else if (dt == QNN_DATATYPE_SFIXED_POINT_16) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        const int16_t* s = (const int16_t*)src;
+        if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+            qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET) {
+            float scale = qp.scaleOffsetEncoding.scale;
+            int32_t offset = qp.scaleOffsetEncoding.offset;
+            for (size_t e = 0; e < numElems; e++) {
+                dst[e] = ((float)s[e] + (float)offset) * scale;
+            }
+        } else {
+            for (size_t e = 0; e < numElems; e++) dst[e] = (float)s[e];
+        }
+    } else if (dt == QNN_DATATYPE_UFIXED_POINT_8) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        const uint8_t* s = (const uint8_t*)src;
+        if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+            qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET) {
+            float scale = qp.scaleOffsetEncoding.scale;
+            int32_t offset = qp.scaleOffsetEncoding.offset;
+            for (size_t e = 0; e < numElems; e++) {
+                dst[e] = ((float)s[e] + (float)offset) * scale;
+            }
+        } else {
+            for (size_t e = 0; e < numElems; e++) dst[e] = (float)s[e];
+        }
+    } else if (dt == QNN_DATATYPE_INT_32) {
+        const int32_t* s = (const int32_t*)src;
+        for (size_t e = 0; e < numElems; e++) dst[e] = (float)s[e];
+    } else {
+        memcpy(dst, src, numElems * sizeof(float));
+    }
+}
+
+static void tensor_set_f32(ContextSlot* slot, uint32_t idx, const float* src, size_t numElems) {
+    Qnn_Tensor_t* t = &slot->inputs[idx];
+    Qnn_DataType_t dt = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dataType : t->v1.dataType;
+    void* dst = slot->inputBufs[idx];
+
+    if (dt == QNN_DATATYPE_FLOAT_32) {
+        memcpy(dst, src, numElems * sizeof(float));
+    } else if (dt == QNN_DATATYPE_FLOAT_16) {
+        uint16_t* p = (uint16_t*)dst;
+        for (size_t e = 0; e < numElems; e++) {
+            p[e] = f32_to_fp16(src[e]);
+        }
+    } else if (dt == QNN_DATATYPE_UFIXED_POINT_16) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        uint16_t* p = (uint16_t*)dst;
+        if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+            qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET &&
+            qp.scaleOffsetEncoding.scale != 0.0f) {
+            float inv_scale = 1.0f / qp.scaleOffsetEncoding.scale;
+            int32_t offset = qp.scaleOffsetEncoding.offset;
+            for (size_t e = 0; e < numElems; e++) {
+                int32_t q = (int32_t)lrintf(src[e] * inv_scale) - offset;
+                if (q < 0) q = 0;
+                else if (q > 65535) q = 65535;
+                p[e] = (uint16_t)q;
+            }
+        } else {
+            for (size_t e = 0; e < numElems; e++) p[e] = (uint16_t)src[e];
+        }
+    } else if (dt == QNN_DATATYPE_SFIXED_POINT_16) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        int16_t* p = (int16_t*)dst;
+        if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+            qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET &&
+            qp.scaleOffsetEncoding.scale != 0.0f) {
+            float inv_scale = 1.0f / qp.scaleOffsetEncoding.scale;
+            int32_t offset = qp.scaleOffsetEncoding.offset;
+            for (size_t e = 0; e < numElems; e++) {
+                int32_t q = (int32_t)lrintf(src[e] * inv_scale) - offset;
+                if (q < -32768) q = -32768;
+                else if (q > 32767) q = 32767;
+                p[e] = (int16_t)q;
+            }
+        } else {
+            for (size_t e = 0; e < numElems; e++) p[e] = (int16_t)src[e];
+        }
+    } else if (dt == QNN_DATATYPE_UFIXED_POINT_8) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        uint8_t* p = (uint8_t*)dst;
+        if (qp.encodingDefinition == QNN_DEFINITION_DEFINED &&
+            qp.quantizationEncoding == QNN_QUANTIZATION_ENCODING_SCALE_OFFSET &&
+            qp.scaleOffsetEncoding.scale != 0.0f) {
+            float inv_scale = 1.0f / qp.scaleOffsetEncoding.scale;
+            int32_t offset = qp.scaleOffsetEncoding.offset;
+            for (size_t e = 0; e < numElems; e++) {
+                int32_t q = (int32_t)lrintf(src[e] * inv_scale) - offset;
+                if (q < 0) q = 0;
+                else if (q > 255) q = 255;
+                p[e] = (uint8_t)q;
+            }
+        } else {
+            for (size_t e = 0; e < numElems; e++) p[e] = (uint8_t)src[e];
+        }
+    } else if (dt == QNN_DATATYPE_INT_32) {
+        int32_t* p = (int32_t*)dst;
+        for (size_t e = 0; e < numElems; e++) p[e] = (int32_t)src[e];
+    } else {
+        memcpy(dst, src, numElems * datatype_size(dt));
+    }
+}
+
+/* ========================================================================= */
+/*  Monolithic UNet Time/Aug Embedding + 17 ResNet Bias Engine (utemb)       */
+/* ========================================================================= */
+
+typedef struct {
+    uint32_t  out_dim;
+    uint32_t  in_dim;
+    uint16_t* w_fp16;
+    float*    b_fp32;
+} TembLinearLayer;
+
+typedef struct {
+    int             loaded;
+    void*           raw_blob;
+    size_t          raw_size;
+    TembLinearLayer layers[21]; /* 0..1: time_emb, 2..3: add_emb, 4..20: 17 resnets */
+} UnetTembModel;
+
+static UnetTembModel g_temb = {0};
+
+static int ensure_temb_loaded(const char* context_binary_path) {
+    if (g_temb.loaded) return 0;
+
+    char candidates[4][MAX_PATH_LEN];
+    int num_cand = 0;
+
+    const char* env_p = getenv("SDXL_TEMB_BIN");
+    if (env_p && env_p[0]) {
+        strncpy(candidates[num_cand++], env_p, MAX_PATH_LEN - 1);
+    }
+    if (context_binary_path && context_binary_path[0]) {
+        char dir[MAX_PATH_LEN];
+        strncpy(dir, context_binary_path, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        char* slash = strrchr(dir, '/');
+        if (slash) {
+            *slash = '\0';
+            snprintf(candidates[num_cand++], MAX_PATH_LEN, "%s/unet_temb_fp16.bin", dir);
+        }
+    }
+    snprintf(candidates[num_cand++], MAX_PATH_LEN, "/sdcard/Download/sdxl_qnn/context/unet_temb_fp16.bin");
+    snprintf(candidates[num_cand++], MAX_PATH_LEN, "/data/local/tmp/sdxl_test/unet_temb_fp16.bin");
+
+    void* blob = NULL;
+    size_t sz = 0;
+    const char* loaded_path = NULL;
+    for (int i = 0; i < num_cand; ++i) {
+        if (load_file_malloc(candidates[i], &blob, &sz) == 0 && sz > 16) {
+            loaded_path = candidates[i];
+            break;
+        }
+    }
+    if (!blob) {
+        fprintf(stderr, "[temb] ERR: could not find unet_temb_fp16.bin!\n");
+        return -1;
+    }
+
+    const uint8_t* ptr = (const uint8_t*)blob;
+    const uint8_t* end = ptr + sz;
+    if (memcmp(ptr, "UTMB", 4) != 0) {
+        fprintf(stderr, "[temb] ERR: invalid magic in %s\n", loaded_path);
+        free(blob);
+        return -1;
+    }
+    uint32_t ver = 0;
+    memcpy(&ver, ptr + 4, 4);
+    ptr += 8;
+
+    for (int i = 0; i < 21; ++i) {
+        if (ptr + 8 > end) { free(blob); return -1; }
+        uint32_t out_d = 0, in_d = 0;
+        memcpy(&out_d, ptr, 4);
+        memcpy(&in_d, ptr + 4, 4);
+        ptr += 8;
+        size_t w_bytes = (size_t)out_d * (size_t)in_d * sizeof(uint16_t);
+        size_t b_bytes = (size_t)out_d * sizeof(float);
+        if (ptr + w_bytes + b_bytes > end) {
+            fprintf(stderr, "[temb] ERR: truncated layer %d in %s\n", i, loaded_path);
+            free(blob);
+            return -1;
+        }
+        g_temb.layers[i].out_dim = out_d;
+        g_temb.layers[i].in_dim  = in_d;
+        g_temb.layers[i].w_fp16  = (uint16_t*)ptr;
+        ptr += w_bytes;
+        g_temb.layers[i].b_fp32  = (float*)ptr;
+        ptr += b_bytes;
+    }
+
+    g_temb.raw_blob = blob;
+    g_temb.raw_size = sz;
+    g_temb.loaded   = 1;
+    fprintf(stderr, "[temb] Loaded 21 projection layers from %s (%.1f MB)\n",
+            loaded_path, (double)sz / (1024.0 * 1024.0));
+    return 0;
+}
+
+static void time_proj_f32(float val, int num_channels, float* out) {
+    int half = num_channels / 2;
+    const float log_10000 = 9.210340371976184f;
+    for (int i = 0; i < half; ++i) {
+        float freq = expf(-log_10000 * (float)i / (float)half);
+        float arg = val * freq;
+        out[i]        = cosf(arg); /* flip_sin_to_cos=True */
+        out[half + i] = sinf(arg);
+    }
+}
+
+static void silu_inplace(float* x, int n) {
+    for (int i = 0; i < n; ++i) {
+        float v = x[i];
+        x[i] = v / (1.0f + expf(-v));
+    }
+}
+
+/* ========================================================================= */
+/*  Hardware & Host Profiling Telemetry                                      */
+/* ========================================================================= */
+
+typedef struct {
+    int      enabled;
+    int      detailed;
+    uint32_t seen_events;
+    int      hvx_threads;
+    double   temb_proj_ms;
+    double   rpcmem_bias_ms;
+    double   io_quant_ms;
+    double   qnn_wall_ms;
+    double   qnn_exec_us;
+    double   qnn_device_us;
+    double   qnn_device_excl_wait_us;
+    double   qnn_host_rpc_us;
+    double   qnn_htp_rpc_us;
+    double   qnn_wait_us;
+    double   qnn_pre_us;
+    double   qnn_post_us;
+    uint64_t qnn_device_cycles;
+    int      unet_passes;
+    double   vae_wall_ms;
+    double   vae_device_us;
+    uint64_t vae_device_cycles;
+} PerfTelemetry;
+
+static PerfTelemetry       g_perf = {0};
+static Qnn_ProfileHandle_t g_profHandle = NULL;
+static int                 g_use_legacy_temb = 0;
+
+static void record_qnn_profile_Node(QnnProfile_EventId_t evId, int is_vae) {
+    QnnProfile_EventType_t ev_type = 0;
+    QnnProfile_EventUnit_t ev_unit = 0;
+    uint64_t               ev_val  = 0;
+    int                    got_ev  = 0;
+
+    if (g_qnn.profileGetEventData) {
+        QnnProfile_EventData_t data;
+        memset(&data, 0, sizeof(data));
+        if (QNN_SUCCESS == g_qnn.profileGetEventData(evId, &data)) {
+            ev_type = data.type;
+            ev_unit = data.unit;
+            ev_val  = data.value;
+            got_ev  = 1;
+        }
+    }
+    if (!got_ev && g_qnn.profileGetExtendedEventData) {
+        QnnProfile_ExtendedEventData_t ext = QNN_PROFILE_EXTENDED_EVENT_DATA_INIT;
+        if (QNN_SUCCESS == g_qnn.profileGetExtendedEventData(evId, &ext)) {
+            ev_type = ext.v1.type;
+            ev_unit = ext.v1.unit;
+            ev_val  = ext.v1.value.uint64Value;
+            got_ev  = 1;
+        }
+    }
+
+    if (got_ev) {
+        if (!is_vae) {
+            if (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE && ev_unit == QNN_PROFILE_EVENTUNIT_MICROSEC) {
+                g_perf.qnn_exec_us += (double)ev_val;
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_HOST_RPC_TIME_MICROSEC) {
+                g_perf.qnn_host_rpc_us += (double)ev_val;
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_HTP_RPC_TIME_MICROSEC) {
+                g_perf.qnn_htp_rpc_us += (double)ev_val;
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_TIME_MICROSEC ||
+                       (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_DEVICE && ev_unit == QNN_PROFILE_EVENTUNIT_MICROSEC)) {
+                g_perf.qnn_device_us += (double)ev_val;
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_EXCL_WAIT_TIME_MICROSEC) {
+                g_perf.qnn_device_excl_wait_us += (double)ev_val;
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_TIME_CYCLE ||
+                       (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_DEVICE && ev_unit == QNN_PROFILE_EVENTUNIT_CYCLES)) {
+                g_perf.qnn_device_cycles += ev_val;
+            } else if (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_QUEUE_WAIT ||
+                       ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_VTCM_ACQUIRE_TIME ||
+                       ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_RESOURCE_POWER_UP_TIME) {
+                g_perf.qnn_wait_us += (double)ev_val;
+            } else if (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_PREPROCESS) {
+                g_perf.qnn_pre_us += (double)ev_val;
+            } else if (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_POSTPROCESS) {
+                g_perf.qnn_post_us += (double)ev_val;
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_NUMBER_OF_HVX_THREADS && ev_val > 0) {
+                g_perf.hvx_threads = (int)ev_val;
+            }
+        } else {
+            if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_TIME_MICROSEC ||
+                ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_EXCL_WAIT_TIME_MICROSEC ||
+                (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_DEVICE && ev_unit == QNN_PROFILE_EVENTUNIT_MICROSEC)) {
+                if (g_perf.vae_device_us == 0.0 || ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_EXCL_WAIT_TIME_MICROSEC) {
+                    g_perf.vae_device_us = (double)ev_val;
+                }
+            } else if (ev_type == QNN_HTP_PROFILE_EVENTTYPE_GRAPH_EXECUTE_ACCEL_TIME_CYCLE ||
+                       (ev_type == QNN_PROFILE_EVENTTYPE_EXECUTE_DEVICE && ev_unit == QNN_PROFILE_EVENTUNIT_CYCLES)) {
+                g_perf.vae_device_cycles += ev_val;
+            }
+        }
+    }
+
+    if (g_qnn.profileGetSubEvents) {
+        const QnnProfile_EventId_t* subEvents = NULL;
+        uint32_t numSub = 0;
+        if (QNN_SUCCESS == g_qnn.profileGetSubEvents(evId, &subEvents, &numSub) && subEvents) {
+            for (uint32_t i = 0; i < numSub; ++i) {
+                record_qnn_profile_Node(subEvents[i], is_vae);
+            }
+        }
+    }
+}
+
+static void collect_qnn_profile_events(Qnn_ProfileHandle_t prof, int is_vae) {
+    if (!prof || !g_qnn.profileGetEvents) return;
+    const QnnProfile_EventId_t* events = NULL;
+    uint32_t numEvents = 0;
+    if (QNN_SUCCESS == g_qnn.profileGetEvents(prof, &events, &numEvents) && events) {
+        for (uint32_t i = 0; i < numEvents; ++i) {
+            record_qnn_profile_Node(events[i], is_vae);
+        }
+    }
+}
+
+static void temb_linear_fwd(const TembLinearLayer* L, const float* x, float* y) {
+    uint32_t out_d = L->out_dim;
+    uint32_t in_d  = L->in_dim;
+#if defined(__aarch64__)
+    if (!g_use_legacy_temb) {
+        for (uint32_t o = 0; o < out_d; ++o) {
+            const uint16_t* w_row = L->w_fp16 + (size_t)o * in_d;
+            float32x4_t acc0 = vdupq_n_f32(0.0f);
+            float32x4_t acc1 = vdupq_n_f32(0.0f);
+            uint32_t i = 0;
+            for (; i + 8 <= in_d; i += 8) {
+                float16x8_t w16 = vld1q_f16((const __fp16*)(w_row + i));
+                float32x4_t w_lo = vcvt_f32_f16(vget_low_f16(w16));
+                float32x4_t w_hi = vcvt_high_f32_f16(w16);
+                float32x4_t x_lo = vld1q_f32(x + i);
+                float32x4_t x_hi = vld1q_f32(x + i + 4);
+                acc0 = vfmaq_f32(acc0, w_lo, x_lo);
+                acc1 = vfmaq_f32(acc1, w_hi, x_hi);
+            }
+            float sum = L->b_fp32[o] + vaddvq_f32(vaddq_f32(acc0, acc1));
+            for (; i < in_d; ++i) {
+                sum += fp16_to_f32(w_row[i]) * x[i];
+            }
+            y[o] = sum;
+        }
+        return;
+    }
+#endif
+    for (uint32_t o = 0; o < out_d; ++o) {
+        const uint16_t* w_row = L->w_fp16 + (size_t)o * in_d;
+        float sum = L->b_fp32[o];
+        for (uint32_t i = 0; i < in_d; ++i) {
+            sum += fp16_to_f32(w_row[i]) * x[i];
+        }
+        y[o] = sum;
+    }
+}
+
+typedef struct {
+    int          valid;
+    const float* te_ptr;
+    float        te_head[4];
+    float        tid[6];
+    float        aug_emb[1280];
+} AugEmbCacheSlot;
+
+static AugEmbCacheSlot g_aug_cache[2] = {{0}};
+
+static int compute_and_set_unet_resnet_biases(ContextSlot* slot, float timestep,
+                                              const float* text_embeds, const float* time_ids) {
+    if (ensure_temb_loaded(slot->binaryPath) != 0) return -1;
+
+    double t0 = now_ms();
+    float t_emb[320];
+    time_proj_f32(timestep, 320, t_emb);
+
+    float h1[1280], emb[1280], aug_emb[1280];
+    temb_linear_fwd(&g_temb.layers[0], t_emb, h1);
+    silu_inplace(h1, 1280);
+    temb_linear_fwd(&g_temb.layers[1], h1, emb);
+
+    int cache_hit = 0;
+    if (!g_use_legacy_temb) {
+        for (int c = 0; c < 2; ++c) {
+            if (g_aug_cache[c].valid && g_aug_cache[c].te_ptr == text_embeds &&
+                memcmp(g_aug_cache[c].te_head, text_embeds, 4 * sizeof(float)) == 0 &&
+                memcmp(g_aug_cache[c].tid, time_ids, 6 * sizeof(float)) == 0) {
+                memcpy(aug_emb, g_aug_cache[c].aug_emb, 1280 * sizeof(float));
+                cache_hit = 1;
+                break;
+            }
+        }
+    }
+    if (!cache_hit) {
+        float add_in[2816];
+        memcpy(add_in, text_embeds, 1280 * sizeof(float));
+        for (int k = 0; k < 6; ++k) {
+            time_proj_f32(time_ids[k], 256, add_in + 1280 + k * 256);
+        }
+        temb_linear_fwd(&g_temb.layers[2], add_in, h1);
+        silu_inplace(h1, 1280);
+        temb_linear_fwd(&g_temb.layers[3], h1, aug_emb);
+        if (!g_use_legacy_temb) {
+            int slot_idx = g_aug_cache[0].valid ? 1 : 0;
+            if (g_aug_cache[0].valid && g_aug_cache[0].te_ptr == text_embeds) slot_idx = 0;
+            g_aug_cache[slot_idx].valid = 1;
+            g_aug_cache[slot_idx].te_ptr = text_embeds;
+            memcpy(g_aug_cache[slot_idx].te_head, text_embeds, 4 * sizeof(float));
+            memcpy(g_aug_cache[slot_idx].tid, time_ids, 6 * sizeof(float));
+            memcpy(g_aug_cache[slot_idx].aug_emb, aug_emb, 1280 * sizeof(float));
+        }
+    }
+
+    for (int i = 0; i < 1280; ++i) emb[i] += aug_emb[i];
+    silu_inplace(emb, 1280);
+    g_perf.temb_proj_ms += (now_ms() - t0);
+
+    static uint8_t staging_block[65536] __attribute__((aligned(64)));
+
+    for (int k = 0; k < 17; ++k) {
+        double tl0 = now_ms();
+        const TembLinearLayer* L = &g_temb.layers[4 + k];
+        uint32_t C = L->out_dim;
+        float bias_1d[1280];
+        temb_linear_fwd(L, emb, bias_1d);
+        g_perf.temb_proj_ms += (now_ms() - tl0);
+
+        uint32_t idx = (uint32_t)(2 + k);
+        if (idx >= slot->numInputs) break;
+
+        Qnn_Tensor_t* t = &slot->inputs[idx];
+        Qnn_DataType_t dt = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dataType : t->v1.dataType;
+        uint32_t rank = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.rank : t->v1.rank;
+        const uint32_t* dims = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dimensions : t->v1.dimensions;
+        size_t total_elems = 1;
+        for (uint32_t d = 0; d < rank; ++d) total_elems *= dims[d];
+        size_t spatial = (C > 0) ? (total_elems / C) : 0;
+
+        double tb0 = now_ms();
+        if (dt == QNN_DATATYPE_UFIXED_POINT_16 || dt == QNN_DATATYPE_FLOAT_16) {
+            uint16_t row_q[1280];
+            if (dt == QNN_DATATYPE_UFIXED_POINT_16) {
+                Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+                    ? t->v2.quantizeParams : t->v1.quantizeParams;
+                float inv_scale = (qp.scaleOffsetEncoding.scale != 0.0f)
+                    ? (1.0f / qp.scaleOffsetEncoding.scale) : 1.0f;
+                int32_t offset = qp.scaleOffsetEncoding.offset;
+                for (uint32_t c = 0; c < C; ++c) {
+                    int32_t q = (int32_t)lrintf(bias_1d[c] * inv_scale) - offset;
+                    if (q < 0) q = 0;
+                    else if (q > 65535) q = 65535;
+                    row_q[c] = (uint16_t)q;
+                }
+            } else {
+                for (uint32_t c = 0; c < C; ++c) row_q[c] = f32_to_fp16(bias_1d[c]);
+            }
+
+            uint16_t* dst = (uint16_t*)slot->inputBufs[idx];
+            if (rank == 4 && dims[3] == C) {
+                /* NHWC [1, H, W, C]: replicate row_q across H*W spatial positions */
+                size_t row_bytes = (size_t)C * sizeof(uint16_t);
+                if (!g_use_legacy_temb && spatial >= 16 && row_bytes <= 8192) {
+                    /* Build 64KB cached block via exponential doubling, then burst-write to ION RPCMEM */
+                    size_t block_rows = sizeof(staging_block) / row_bytes;
+                    if (block_rows > spatial) block_rows = spatial;
+                    memcpy(staging_block, row_q, row_bytes);
+                    size_t filled = 1;
+                    while (filled < block_rows) {
+                        size_t step_r = (filled * 2 <= block_rows) ? filled : (block_rows - filled);
+                        memcpy(staging_block + filled * row_bytes, staging_block, step_r * row_bytes);
+                        filled += step_r;
+                    }
+                    size_t block_bytes = block_rows * row_bytes;
+                    uint8_t* dst_u8 = (uint8_t*)dst;
+                    size_t pos = 0;
+                    for (; pos + block_rows <= spatial; pos += block_rows) {
+                        memcpy(dst_u8 + pos * row_bytes, staging_block, block_bytes);
+                    }
+                    if (pos < spatial) {
+                        memcpy(dst_u8 + pos * row_bytes, staging_block, (spatial - pos) * row_bytes);
+                    }
+                } else {
+                    for (size_t s = 0; s < spatial; ++s) {
+                        memcpy(dst + s * C, row_q, row_bytes);
+                    }
+                }
+            } else {
+                /* NCHW [1, C, H, W] */
+                for (uint32_t c = 0; c < C; ++c) {
+                    uint16_t v = row_q[c];
+                    uint16_t* ch_dst = dst + (size_t)c * spatial;
+                    for (size_t s = 0; s < spatial; ++s) ch_dst[s] = v;
+                }
+            }
+        } else if (dt == QNN_DATATYPE_FLOAT_32) {
+            float* dst = (float*)slot->inputBufs[idx];
+            if (rank == 4 && dims[3] == C) {
+                for (size_t s = 0; s < spatial; ++s) {
+                    memcpy(dst + s * C, bias_1d, (size_t)C * sizeof(float));
+                }
+            } else {
+                for (uint32_t c = 0; c < C; ++c) {
+                    float v = bias_1d[c];
+                    float* ch_dst = dst + (size_t)c * spatial;
+                    for (size_t s = 0; s < spatial; ++s) ch_dst[s] = v;
+                }
+            }
+        }
+        g_perf.rpcmem_bias_ms += (now_ms() - tb0);
+    }
+    return 0;
+}
+
+/* Symmetric mirror-reflection coordinate helper for Dynamic Resolution Sub-Canvas Isolation */
+static inline int reflect_coord(int c, int limit) {
+    if (limit <= 1) return 0;
+    int period = 2 * limit - 2;
+    int m = c % period;
+    if (m < 0) m += period;
+    return (m < limit) ? m : (period - m);
+}
+
+/* Query compiled spatial dimensions (H, W) of a 4D tensor (NHWC or NCHW) */
+static void get_tensor_spatial_hw(const Qnn_Tensor_t* t, int* out_h, int* out_w) {
+    uint32_t rank = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.rank : t->v1.rank;
+    const uint32_t* dims = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dimensions : t->v1.dimensions;
+    if (rank == 4 && dims) {
+        if (dims[3] == 3 || dims[3] == 4 || dims[3] >= 320) {
+            /* NHWC [1, H, W, C] */
+            *out_h = (int)dims[1];
+            *out_w = (int)dims[2];
+        } else {
+            /* NCHW [1, C, H, W] */
+            *out_h = (int)dims[2];
+            *out_w = (int)dims[3];
+        }
+    }
+}
+
+/*
+ * Sub-canvas layout-aware sample setter:
+ * Places active [1, 4, act_H, act_W] into top-left of graph [1, graph_H, graph_W, 4]
+ * and fills [act_H..graph_H, act_W..graph_W] using symmetric mirror-reflection (pad_mode=0),
+ * periodic tiling (pad_mode=1), or zeros (pad_mode=2), fused with UFIXED_POINT_16 quantization.
+ */
+static void unet_set_sample_subrect_nchw(ContextSlot* slot, uint32_t idx, const float* nchw,
+                                         int act_H, int act_W, int pad_mode) {
+    double t0 = now_ms();
+    Qnn_Tensor_t* t = &slot->inputs[idx];
+    Qnn_DataType_t dt = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dataType : t->v1.dataType;
+    uint32_t rank = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.rank : t->v1.rank;
+    const uint32_t* dims = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dimensions : t->v1.dimensions;
+    size_t act_hw = (size_t)act_H * (size_t)act_W;
+
+    int graph_H = act_H, graph_W = act_W;
+    get_tensor_spatial_hw(t, &graph_H, &graph_W);
+    size_t graph_hw = (size_t)graph_H * (size_t)graph_W;
+
+    if (rank == 4 && dims[3] == 4 && dt == QNN_DATATYPE_UFIXED_POINT_16 && !g_use_legacy_temb) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        float inv_scale = (qp.scaleOffsetEncoding.scale != 0.0f)
+            ? (1.0f / qp.scaleOffsetEncoding.scale) : 1.0f;
+        int32_t offset = qp.scaleOffsetEncoding.offset;
+        int32_t zero_q = -offset;
+        if (zero_q < 0) zero_q = 0; else if (zero_q > 65535) zero_q = 65535;
+
+        uint16_t* dst = (uint16_t*)slot->inputBufs[idx];
+        const float* c0 = nchw + 0 * act_hw;
+        const float* c1 = nchw + 1 * act_hw;
+        const float* c2 = nchw + 2 * act_hw;
+        const float* c3 = nchw + 3 * act_hw;
+
+        if (act_H == graph_H && act_W == graph_W) {
+            for (size_t p = 0; p < graph_hw; ++p) {
+                int32_t q0 = (int32_t)lrintf(c0[p] * inv_scale) - offset;
+                int32_t q1 = (int32_t)lrintf(c1[p] * inv_scale) - offset;
+                int32_t q2 = (int32_t)lrintf(c2[p] * inv_scale) - offset;
+                int32_t q3 = (int32_t)lrintf(c3[p] * inv_scale) - offset;
+                dst[p * 4 + 0] = (uint16_t)(q0 < 0 ? 0 : (q0 > 65535 ? 65535 : q0));
+                dst[p * 4 + 1] = (uint16_t)(q1 < 0 ? 0 : (q1 > 65535 ? 65535 : q1));
+                dst[p * 4 + 2] = (uint16_t)(q2 < 0 ? 0 : (q2 > 65535 ? 65535 : q2));
+                dst[p * 4 + 3] = (uint16_t)(q3 < 0 ? 0 : (q3 > 65535 ? 65535 : q3));
+            }
+        } else {
+            for (int gy = 0; gy < graph_H; ++gy) {
+                int sy = (gy < act_H) ? gy : ((pad_mode == 1) ? (gy % act_H) : reflect_coord(gy, act_H));
+                for (int gx = 0; gx < graph_W; ++gx) {
+                    size_t gp = ((size_t)gy * (size_t)graph_W + (size_t)gx) * 4;
+                    if (pad_mode == 2 && (gy >= act_H || gx >= act_W)) {
+                        dst[gp + 0] = (uint16_t)zero_q;
+                        dst[gp + 1] = (uint16_t)zero_q;
+                        dst[gp + 2] = (uint16_t)zero_q;
+                        dst[gp + 3] = (uint16_t)zero_q;
+                    } else {
+                        int sx = (gx < act_W) ? gx : ((pad_mode == 1) ? (gx % act_W) : reflect_coord(gx, act_W));
+                        size_t sp = (size_t)sy * (size_t)act_W + (size_t)sx;
+                        int32_t q0 = (int32_t)lrintf(c0[sp] * inv_scale) - offset;
+                        int32_t q1 = (int32_t)lrintf(c1[sp] * inv_scale) - offset;
+                        int32_t q2 = (int32_t)lrintf(c2[sp] * inv_scale) - offset;
+                        int32_t q3 = (int32_t)lrintf(c3[sp] * inv_scale) - offset;
+                        dst[gp + 0] = (uint16_t)(q0 < 0 ? 0 : (q0 > 65535 ? 65535 : q0));
+                        dst[gp + 1] = (uint16_t)(q1 < 0 ? 0 : (q1 > 65535 ? 65535 : q1));
+                        dst[gp + 2] = (uint16_t)(q2 < 0 ? 0 : (q2 > 65535 ? 65535 : q2));
+                        dst[gp + 3] = (uint16_t)(q3 < 0 ? 0 : (q3 > 65535 ? 65535 : q3));
+                    }
+                }
+            }
+        }
+        g_perf.io_quant_ms += (now_ms() - t0);
+        return;
+    }
+
+    /* Fallback path (FP16 / FP32 / NCHW / legacy) */
+    size_t num_elems = 4 * graph_hw;
+    if (rank == 4 && dims[3] == 4) {
+        float* nhwc = (float*)malloc(num_elems * sizeof(float));
+        for (int gy = 0; gy < graph_H; ++gy) {
+            int sy = (gy < act_H) ? gy : ((pad_mode == 1) ? (gy % act_H) : reflect_coord(gy, act_H));
+            for (int gx = 0; gx < graph_W; ++gx) {
+                size_t gp = (size_t)gy * (size_t)graph_W + (size_t)gx;
+                if (pad_mode == 2 && (gy >= act_H || gx >= act_W)) {
+                    nhwc[gp * 4 + 0] = 0.0f;
+                    nhwc[gp * 4 + 1] = 0.0f;
+                    nhwc[gp * 4 + 2] = 0.0f;
+                    nhwc[gp * 4 + 3] = 0.0f;
+                } else {
+                    int sx = (gx < act_W) ? gx : ((pad_mode == 1) ? (gx % act_W) : reflect_coord(gx, act_W));
+                    size_t sp = (size_t)sy * (size_t)act_W + (size_t)sx;
+                    nhwc[gp * 4 + 0] = nchw[0 * act_hw + sp];
+                    nhwc[gp * 4 + 1] = nchw[1 * act_hw + sp];
+                    nhwc[gp * 4 + 2] = nchw[2 * act_hw + sp];
+                    nhwc[gp * 4 + 3] = nchw[3 * act_hw + sp];
+                }
+            }
+        }
+        tensor_set_f32(slot, idx, nhwc, num_elems);
+        free(nhwc);
+    } else {
+        float* pad_nchw = (float*)malloc(num_elems * sizeof(float));
+        for (int c = 0; c < 4; ++c) {
+            for (int gy = 0; gy < graph_H; ++gy) {
+                int sy = (gy < act_H) ? gy : ((pad_mode == 1) ? (gy % act_H) : reflect_coord(gy, act_H));
+                for (int gx = 0; gx < graph_W; ++gx) {
+                    size_t gp = (size_t)c * graph_hw + (size_t)gy * (size_t)graph_W + (size_t)gx;
+                    if (pad_mode == 2 && (gy >= act_H || gx >= act_W)) {
+                        pad_nchw[gp] = 0.0f;
+                    } else {
+                        int sx = (gx < act_W) ? gx : ((pad_mode == 1) ? (gx % act_W) : reflect_coord(gx, act_W));
+                        pad_nchw[gp] = nchw[(size_t)c * act_hw + (size_t)sy * (size_t)act_W + (size_t)sx];
+                    }
+                }
+            }
+        }
+        tensor_set_f32(slot, idx, pad_nchw, num_elems);
+        free(pad_nchw);
+    }
+    g_perf.io_quant_ms += (now_ms() - t0);
+}
+
+static void unet_set_sample_nchw(ContextSlot* slot, uint32_t idx, const float* nchw, int H, int W) {
+    unet_set_sample_subrect_nchw(slot, idx, nchw, H, W, 0);
+}
+
+static void unet_set_enc_hidden(ContextSlot* slot, uint32_t idx, const float* pe_77x2048) {
+    double t0 = now_ms();
+    Qnn_Tensor_t* t = &slot->inputs[idx];
+    uint32_t rank = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.rank : t->v1.rank;
+    const uint32_t* dims = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dimensions : t->v1.dimensions;
+    const size_t seq = 77, dim = 2048;
+
+    static const float* last_pe_ptr = NULL;
+    static ContextSlot* last_slot_ptr = NULL;
+    static uint32_t last_idx = 999;
+    if (!g_use_legacy_temb && last_slot_ptr == slot && last_idx == idx && last_pe_ptr == pe_77x2048) {
+        /* Already loaded into this slot's input buffer! */
+        return;
+    }
+
+    if (rank == 3 && dims[1] == 2048 && dims[2] == 77) {
+        /* Transpose [1, 77, 2048] -> [1, 2048, 77] */
+        float* nfc = (float*)malloc(seq * dim * sizeof(float));
+        for (size_t s = 0; s < seq; ++s) {
+            for (size_t c = 0; c < dim; ++c) {
+                nfc[c * seq + s] = pe_77x2048[s * dim + c];
+            }
+        }
+        tensor_set_f32(slot, idx, nfc, seq * dim);
+        free(nfc);
+    } else {
+        tensor_set_f32(slot, idx, pe_77x2048, seq * dim);
+    }
+    last_slot_ptr = slot;
+    last_idx = idx;
+    last_pe_ptr = pe_77x2048;
+    g_perf.io_quant_ms += (now_ms() - t0);
+}
+
+static void unet_get_noise_pred_subrect_nchw(ContextSlot* slot, uint32_t idx, float* dst_nchw, int act_H, int act_W) {
+    double t0 = now_ms();
+    Qnn_Tensor_t* t = &slot->outputs[idx];
+    Qnn_DataType_t dt = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dataType : t->v1.dataType;
+    uint32_t rank = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.rank : t->v1.rank;
+    const uint32_t* dims = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dimensions : t->v1.dimensions;
+    size_t act_hw = (size_t)act_H * (size_t)act_W;
+
+    int graph_H = act_H, graph_W = act_W;
+    get_tensor_spatial_hw(t, &graph_H, &graph_W);
+    size_t graph_hw = (size_t)graph_H * (size_t)graph_W;
+
+    if (rank == 4 && dims[3] == 4 && dt == QNN_DATATYPE_UFIXED_POINT_16 && !g_use_legacy_temb) {
+        Qnn_QuantizeParams_t qp = (t->version == QNN_TENSOR_VERSION_2)
+            ? t->v2.quantizeParams : t->v1.quantizeParams;
+        float scale = qp.scaleOffsetEncoding.scale;
+        float bias  = (float)qp.scaleOffsetEncoding.offset * scale;
+        const uint16_t* src = (const uint16_t*)slot->outputBufs[idx];
+        float* d0 = dst_nchw + 0 * act_hw;
+        float* d1 = dst_nchw + 1 * act_hw;
+        float* d2 = dst_nchw + 2 * act_hw;
+        float* d3 = dst_nchw + 3 * act_hw;
+
+        for (int y = 0; y < act_H; ++y) {
+            const uint16_t* row = src + ((size_t)y * (size_t)graph_W) * 4;
+            size_t dst_row = (size_t)y * (size_t)act_W;
+            for (int x = 0; x < act_W; ++x) {
+                d0[dst_row + x] = (float)row[x * 4 + 0] * scale + bias;
+                d1[dst_row + x] = (float)row[x * 4 + 1] * scale + bias;
+                d2[dst_row + x] = (float)row[x * 4 + 2] * scale + bias;
+                d3[dst_row + x] = (float)row[x * 4 + 3] * scale + bias;
+            }
+        }
+        g_perf.io_quant_ms += (now_ms() - t0);
+        return;
+    }
+
+    size_t num_elems = 4 * graph_hw;
+    float* full_buf = (float*)malloc(num_elems * sizeof(float));
+    tensor_get_f32(slot, idx, full_buf, num_elems);
+    if (rank == 4 && dims[3] == 4) {
+        for (int y = 0; y < act_H; ++y) {
+            for (int x = 0; x < act_W; ++x) {
+                size_t gp = (size_t)y * (size_t)graph_W + (size_t)x;
+                size_t dp = (size_t)y * (size_t)act_W + (size_t)x;
+                dst_nchw[0 * act_hw + dp] = full_buf[gp * 4 + 0];
+                dst_nchw[1 * act_hw + dp] = full_buf[gp * 4 + 1];
+                dst_nchw[2 * act_hw + dp] = full_buf[gp * 4 + 2];
+                dst_nchw[3 * act_hw + dp] = full_buf[gp * 4 + 3];
+            }
+        }
+    } else {
+        for (int c = 0; c < 4; ++c) {
+            for (int y = 0; y < act_H; ++y) {
+                memcpy(dst_nchw + (size_t)c * act_hw + (size_t)y * (size_t)act_W,
+                       full_buf + (size_t)c * graph_hw + (size_t)y * (size_t)graph_W,
+                       (size_t)act_W * sizeof(float));
+            }
+        }
+    }
+    free(full_buf);
+    g_perf.io_quant_ms += (now_ms() - t0);
+}
+
+static void unet_get_noise_pred_nchw(ContextSlot* slot, uint32_t idx, float* dst_nchw, int H, int W) {
+    unet_get_noise_pred_subrect_nchw(slot, idx, dst_nchw, H, W);
+}
+
+static void vae_get_rgb_subrect(ContextSlot* vae, uint32_t idx, float* dst_rgb,
+                                int crop_y, int crop_x, int act_H, int act_W) {
+    Qnn_Tensor_t* t = &vae->outputs[idx];
+    int vae_H = act_H, vae_W = act_W;
+    get_tensor_spatial_hw(t, &vae_H, &vae_W);
+    size_t vae_elems = (size_t)vae_H * (size_t)vae_W * 3;
+
+    if (crop_y == 0 && crop_x == 0 && act_H == vae_H && act_W == vae_W) {
+        tensor_get_f32(vae, idx, dst_rgb, vae_elems);
+        return;
+    }
+    float* full_rgb = (float*)malloc(vae_elems * sizeof(float));
+    tensor_get_f32(vae, idx, full_rgb, vae_elems);
+    for (int y = 0; y < act_H; ++y) {
+        int sy = crop_y + y;
+        if (sy < 0) sy = 0; else if (sy >= vae_H) sy = vae_H - 1;
+        memcpy(dst_rgb + (size_t)y * (size_t)act_W * 3,
+               full_rgb + ((size_t)sy * (size_t)vae_W + (size_t)crop_x) * 3,
+               (size_t)act_W * 3 * sizeof(float));
+    }
+    free(full_rgb);
+}
+
+static int load_f32_raw(const char* path, float** out_buf, size_t* out_count) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz % sizeof(float) != 0) {
+        fclose(f);
+        return -2;
+    }
+    size_t count = (size_t)sz / sizeof(float);
+    float* buf = (float*)malloc(sz);
+    if (!buf) { fclose(f); return -3; }
+    if (fread(buf, sizeof(float), count, f) != count) {
+        free(buf);
+        fclose(f);
+        return -4;
+    }
+    fclose(f);
+    *out_buf = buf;
+    *out_count = count;
+    return 0;
+}
+
+static int find_slot_input(ContextSlot* slot, const char* hint, uint32_t expected_elements) {
+    for (uint32_t i = 0; i < slot->numInputs; ++i) {
+        if (strstr(slot->inputNames[i], hint) != NULL) {
+            return (int)i;
+        }
+    }
+    if (expected_elements > 0) {
+        for (uint32_t i = 0; i < slot->numInputs; ++i) {
+            Qnn_Tensor_t* t = &slot->inputs[i];
+            uint32_t rank = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.rank : t->v1.rank;
+            const uint32_t* dims = (t->version == QNN_TENSOR_VERSION_2) ? t->v2.dimensions : t->v1.dimensions;
+            size_t count = 1;
+            for (uint32_t d = 0; d < rank; ++d) count *= dims[d];
+            if (count == expected_elements) {
+                return (int)i;
+            }
+        }
+    }
+    return -1;
+}
+
+static int cmd_denoise(const char* cfg_path) {
+    FILE* fcfg = fopen(cfg_path, "r");
+    if (!fcfg) {
+        printf("ERR cannot_open_denoise_cfg %s\n", cfg_path);
+        fflush(stdout);
+        return -1;
+    }
+
+    char mode[32] = "chain";
+    char enc_id[MAX_ID_LEN] = {0};
+    char dec_id[MAX_ID_LEN] = {0};
+    char init_latent_path[MAX_PATH_LEN] = {0};
+    char out_latent_path[MAX_PATH_LEN] = {0};
+    char schedule_path[MAX_PATH_LEN] = {0};
+    char cond_dir[MAX_PATH_LEN] = {0};
+    char uncond_dir[MAX_PATH_LEN] = {0};
+    char preview_dir[MAX_PATH_LEN] = {0};
+    float cfg_scale = 1.0f;
+    int progressive_cfg = 999;
+    int preview_stride = 0;
+    int latent_h = 128;
+    int latent_w = 128;
+    char pipes_str[MAX_LINE_LEN] = {0};
+
+    char line[MAX_LINE_LEN];
+    while (fgets(line, sizeof(line), fcfg)) {
+        char* ln = line;
+        while (*ln == ' ' || *ln == '\t') ln++;
+        size_t len = strlen(ln);
+        while (len > 0 && (ln[len - 1] == '\n' || ln[len - 1] == '\r')) ln[--len] = '\0';
+        if (len == 0 || ln[0] == '#') continue;
+
+        char* eq = strchr(ln, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char* key = ln;
+        char* val = eq + 1;
+        while (*val == ' ' || *val == '\t') val++;
+
+        if (strcmp(key, "mode") == 0) strncpy(mode, val, sizeof(mode) - 1);
+        else if (strcmp(key, "enc_id") == 0 || strcmp(key, "unet_id") == 0) strncpy(enc_id, val, sizeof(enc_id) - 1);
+        else if (strcmp(key, "dec_id") == 0) strncpy(dec_id, val, sizeof(dec_id) - 1);
+        else if (strcmp(key, "init_latent") == 0) strncpy(init_latent_path, val, sizeof(init_latent_path) - 1);
+        else if (strcmp(key, "out_latent") == 0) strncpy(out_latent_path, val, sizeof(out_latent_path) - 1);
+        else if (strcmp(key, "schedule_file") == 0) strncpy(schedule_path, val, sizeof(schedule_path) - 1);
+        else if (strcmp(key, "cond_dir") == 0) strncpy(cond_dir, val, sizeof(cond_dir) - 1);
+        else if (strcmp(key, "uncond_dir") == 0) strncpy(uncond_dir, val, sizeof(uncond_dir) - 1);
+        else if (strcmp(key, "preview_dir") == 0) strncpy(preview_dir, val, sizeof(preview_dir) - 1);
+        else if (strcmp(key, "cfg_scale") == 0) cfg_scale = (float)atof(val);
+        else if (strcmp(key, "progressive_cfg") == 0) progressive_cfg = atoi(val);
+        else if (strcmp(key, "preview_stride") == 0) preview_stride = atoi(val);
+        else if (strcmp(key, "latent_h") == 0) latent_h = atoi(val);
+        else if (strcmp(key, "latent_w") == 0) latent_w = atoi(val);
+        else if (strcmp(key, "pipes") == 0) strncpy(pipes_str, val, sizeof(pipes_str) - 1);
+    }
+    fclose(fcfg);
+
+    int is_chain = (strcmp(mode, "chain") == 0);
+    int enc_si = find_slot(enc_id);
+    if (enc_si < 0) {
+        printf("ERR enc_or_unet_context_not_found %s\n", enc_id);
+        fflush(stdout);
+        return -1;
+    }
+    ContextSlot* enc = &g_slots[enc_si];
+    ContextSlot* dec = NULL;
+
+    typedef struct { int enc_out_idx; int dec_in_idx; size_t copy_size; } PipeMap;
+    PipeMap pipes[MAX_TENSORS];
+    int num_pipes = 0;
+
+    if (is_chain) {
+        int dec_si = find_slot(dec_id);
+        if (dec_si < 0) {
+            printf("ERR dec_context_not_found %s\n", dec_id);
+            fflush(stdout);
+            return -1;
+        }
+        dec = &g_slots[dec_si];
+
+        char pstr_copy[MAX_LINE_LEN];
+        strncpy(pstr_copy, pipes_str, sizeof(pstr_copy) - 1);
+        char* ptok = strtok(pstr_copy, " \t");
+        while (ptok && num_pipes < MAX_TENSORS) {
+            char* col = strchr(ptok, ':');
+            if (col) {
+                *col = '\0';
+                const char* e_name = ptok;
+                const char* d_name = col + 1;
+                int eidx = -1, didx = -1;
+                for (uint32_t j = 0; j < enc->numOutputs; ++j) {
+                    if (strcmp(enc->outputNames[j], e_name) == 0) { eidx = (int)j; break; }
+                }
+                for (uint32_t j = 0; j < dec->numInputs; ++j) {
+                    if (strcmp(dec->inputNames[j], d_name) == 0) { didx = (int)j; break; }
+                }
+                if (eidx >= 0 && didx >= 0) {
+                    pipes[num_pipes].enc_out_idx = eidx;
+                    pipes[num_pipes].dec_in_idx = didx;
+                    pipes[num_pipes].copy_size = (enc->outputBufSizes[eidx] < dec->inputBufSizes[didx])
+                                                 ? enc->outputBufSizes[eidx] : dec->inputBufSizes[didx];
+                    num_pipes++;
+                }
+            }
+            ptok = strtok(NULL, " \t");
+        }
+    }
+
+    FILE* fsched = fopen(schedule_path, "r");
+    if (!fsched) {
+        printf("ERR cannot_open_schedule %s\n", schedule_path);
+        fflush(stdout);
+        return -1;
+    }
+    DenoiseScheduleStep sched[64];
+    int num_steps = 0;
+    char sline[256];
+    while (fgets(sline, sizeof(sline), fsched) && num_steps < 64) {
+        int step = 0;
+        float ts = 0.0f, s1 = 0.0f, s2 = 0.0f;
+        if (sscanf(sline, "%d %f %f %f", &step, &ts, &s1, &s2) >= 4) {
+            sched[num_steps].step = step;
+            sched[num_steps].timestep = ts;
+            sched[num_steps].sigma = s1;
+            sched[num_steps].sigma_next = s2;
+            num_steps++;
+        }
+    }
+    fclose(fsched);
+    if (num_steps == 0) {
+        printf("ERR empty_schedule\n");
+        fflush(stdout);
+        return -1;
+    }
+
+    size_t num_latent = (size_t)1 * 4 * (size_t)latent_h * (size_t)latent_w;
+    float* latent = NULL;
+    size_t l_count = 0;
+    if (load_f32_raw(init_latent_path, &latent, &l_count) != 0 || l_count != num_latent) {
+        printf("ERR invalid_init_latent %s (expected %zu floats, got %zu)\n", init_latent_path, num_latent, l_count);
+        fflush(stdout);
+        if (latent) free(latent);
+        return -1;
+    }
+
+    int is_ext_resnet = (!is_chain && enc->numInputs >= 19);
+    int enc_smp_idx = find_slot_input(enc, "sample", (uint32_t)num_latent);
+    int enc_ts_idx  = is_ext_resnet ? -1 : find_slot_input(enc, "timestep", 1);
+    int enc_tid_idx = is_ext_resnet ? -1 : find_slot_input(enc, "time_ids", 6);
+    int enc_te_idx  = is_ext_resnet ? -1 : find_slot_input(enc, "text_embeds", 1280);
+    int enc_enc_idx = find_slot_input(enc, "encoder_hidden_states", 77 * 2048);
+
+    int dec_enc_idx = -1;
+    if (is_chain && dec) {
+        dec_enc_idx = find_slot_input(dec, "encoder_hidden_states", 77 * 2048);
+    }
+
+    if (!is_ext_resnet) {
+        if (enc_smp_idx < 0) enc_smp_idx = 4;
+        if (enc_ts_idx < 0)  enc_ts_idx = 1;
+        if (enc_tid_idx < 0) enc_tid_idx = 2;
+        if (enc_te_idx < 0)  enc_te_idx = 3;
+        if (enc_enc_idx < 0) enc_enc_idx = 0;
+    } else {
+        if (enc_smp_idx < 0) enc_smp_idx = 0;
+        if (enc_enc_idx < 0) enc_enc_idx = 1;
+    }
+    if (dec && dec_enc_idx < 0) dec_enc_idx = 0;
+
+    ContextSlot* final_out_slot = (is_chain && dec) ? dec : enc;
+    int final_out_idx = 0;
+
+    float *cond_enc = NULL, *cond_te = NULL, *cond_tid = NULL;
+    size_t c_enc_cnt = 0, c_te_cnt = 0, c_tid_cnt = 0;
+    char path_buf[MAX_PATH_LEN];
+
+    snprintf(path_buf, sizeof(path_buf), "%s/enc.raw", cond_dir);
+    load_f32_raw(path_buf, &cond_enc, &c_enc_cnt);
+    snprintf(path_buf, sizeof(path_buf), "%s/te.raw", cond_dir);
+    load_f32_raw(path_buf, &cond_te, &c_te_cnt);
+    snprintf(path_buf, sizeof(path_buf), "%s/tid.raw", cond_dir);
+    load_f32_raw(path_buf, &cond_tid, &c_tid_cnt);
+
+    int has_uncond = (uncond_dir[0] != '\0' && strcmp(uncond_dir, "-") != 0 && cfg_scale > 1.0f);
+    float *uncond_enc = NULL, *uncond_te = NULL, *uncond_tid = NULL;
+    size_t u_enc_cnt = 0, u_te_cnt = 0, u_tid_cnt = 0;
+    if (has_uncond) {
+        snprintf(path_buf, sizeof(path_buf), "%s/enc.raw", uncond_dir);
+        load_f32_raw(path_buf, &uncond_enc, &u_enc_cnt);
+        snprintf(path_buf, sizeof(path_buf), "%s/te.raw", uncond_dir);
+        load_f32_raw(path_buf, &uncond_te, &u_te_cnt);
+        snprintf(path_buf, sizeof(path_buf), "%s/tid.raw", uncond_dir);
+        load_f32_raw(path_buf, &uncond_tid, &u_tid_cnt);
+    }
+
+    float* scaled_sample = (float*)malloc(num_latent * sizeof(float));
+    float* cond_pred_buf = (float*)malloc(num_latent * sizeof(float));
+    float* uncond_pred_buf = has_uncond ? (float*)malloc(num_latent * sizeof(float)) : NULL;
+
+    fprintf(stderr, "[server] DENOISE started: mode=%s (ext_resnet=%d) steps=%d cfg=%.2f progressive=%d latent=%dx%d\n",
+            mode, is_ext_resnet, num_steps, cfg_scale, progressive_cfg, latent_h, latent_w);
+
+    double t_start = now_ms();
+
+    for (int s = 0; s < num_steps; ++s) {
+        double t_step0 = now_ms();
+        DenoiseScheduleStep step = sched[s];
+        int step_uses_cfg = (has_uncond && s < progressive_cfg);
+
+        float inv = 1.0f / sqrtf(step.sigma * step.sigma + 1.0f);
+        for (size_t i = 0; i < num_latent; ++i) {
+            scaled_sample[i] = latent[i] * inv;
+        }
+        unet_set_sample_nchw(enc, (uint32_t)enc_smp_idx, scaled_sample, latent_h, latent_w);
+        if (enc_ts_idx >= 0) tensor_set_f32(enc, (uint32_t)enc_ts_idx, &step.timestep, 1);
+
+        if (step_uses_cfg) {
+            /* 1. Uncond pass */
+            if (is_ext_resnet) {
+                if (compute_and_set_unet_resnet_biases(enc, step.timestep, uncond_te, uncond_tid) != 0) {
+                    printf("ERR temb_failed\n"); fflush(stdout); return -1;
+                }
+            } else {
+                if (uncond_tid && enc_tid_idx >= 0) tensor_set_f32(enc, (uint32_t)enc_tid_idx, uncond_tid, u_tid_cnt);
+                if (uncond_te && enc_te_idx >= 0)   tensor_set_f32(enc, (uint32_t)enc_te_idx, uncond_te, u_te_cnt);
+            }
+            if (uncond_enc) {
+                if (enc_enc_idx >= 0 && (uint32_t)enc_enc_idx < enc->numInputs)
+                    unet_set_enc_hidden(enc, (uint32_t)enc_enc_idx, uncond_enc);
+                if (dec && dec_enc_idx >= 0 && (uint32_t)dec_enc_idx < dec->numInputs)
+                    unet_set_enc_hidden(dec, (uint32_t)dec_enc_idx, uncond_enc);
+            }
+            g_qnn.graphExecute(enc->graphHandle, enc->inputs, enc->numInputs, enc->outputs, enc->numOutputs, NULL, NULL);
+            if (is_chain && dec) {
+                for (int p = 0; p < num_pipes; ++p) {
+                    memcpy(dec->inputBufs[pipes[p].dec_in_idx], enc->outputBufs[pipes[p].enc_out_idx], pipes[p].copy_size);
+                }
+                g_qnn.graphExecute(dec->graphHandle, dec->inputs, dec->numInputs, dec->outputs, dec->numOutputs, NULL, NULL);
+            }
+            unet_get_noise_pred_nchw(final_out_slot, (uint32_t)final_out_idx, uncond_pred_buf, latent_h, latent_w);
+
+            /* 2. Cond pass */
+            if (is_ext_resnet) {
+                compute_and_set_unet_resnet_biases(enc, step.timestep, cond_te, cond_tid);
+            } else {
+                if (cond_tid && enc_tid_idx >= 0) tensor_set_f32(enc, (uint32_t)enc_tid_idx, cond_tid, c_tid_cnt);
+                if (cond_te && enc_te_idx >= 0)   tensor_set_f32(enc, (uint32_t)enc_te_idx, cond_te, c_te_cnt);
+            }
+            if (cond_enc) {
+                if (enc_enc_idx >= 0 && (uint32_t)enc_enc_idx < enc->numInputs)
+                    unet_set_enc_hidden(enc, (uint32_t)enc_enc_idx, cond_enc);
+                if (dec && dec_enc_idx >= 0 && (uint32_t)dec_enc_idx < dec->numInputs)
+                    unet_set_enc_hidden(dec, (uint32_t)dec_enc_idx, cond_enc);
+            }
+            g_qnn.graphExecute(enc->graphHandle, enc->inputs, enc->numInputs, enc->outputs, enc->numOutputs, NULL, NULL);
+            if (is_chain && dec) {
+                for (int p = 0; p < num_pipes; ++p) {
+                    memcpy(dec->inputBufs[pipes[p].dec_in_idx], enc->outputBufs[pipes[p].enc_out_idx], pipes[p].copy_size);
+                }
+                g_qnn.graphExecute(dec->graphHandle, dec->inputs, dec->numInputs, dec->outputs, dec->numOutputs, NULL, NULL);
+            }
+            unet_get_noise_pred_nchw(final_out_slot, (uint32_t)final_out_idx, cond_pred_buf, latent_h, latent_w);
+
+            /* CFG + Euler step in memory */
+            float delta = step.sigma_next - step.sigma;
+            for (size_t i = 0; i < num_latent; ++i) {
+                float guided = uncond_pred_buf[i] + cfg_scale * (cond_pred_buf[i] - uncond_pred_buf[i]);
+                latent[i] += delta * guided;
+            }
+        } else {
+            /* Cond pass only */
+            if (is_ext_resnet) {
+                if (compute_and_set_unet_resnet_biases(enc, step.timestep, cond_te, cond_tid) != 0) {
+                    printf("ERR temb_failed\n"); fflush(stdout); return -1;
+                }
+            } else {
+                if (cond_tid && enc_tid_idx >= 0) tensor_set_f32(enc, (uint32_t)enc_tid_idx, cond_tid, c_tid_cnt);
+                if (cond_te && enc_te_idx >= 0)   tensor_set_f32(enc, (uint32_t)enc_te_idx, cond_te, c_te_cnt);
+            }
+            if (cond_enc) {
+                if (enc_enc_idx >= 0 && (uint32_t)enc_enc_idx < enc->numInputs)
+                    unet_set_enc_hidden(enc, (uint32_t)enc_enc_idx, cond_enc);
+                if (dec && dec_enc_idx >= 0 && (uint32_t)dec_enc_idx < dec->numInputs)
+                    unet_set_enc_hidden(dec, (uint32_t)dec_enc_idx, cond_enc);
+            }
+            g_qnn.graphExecute(enc->graphHandle, enc->inputs, enc->numInputs, enc->outputs, enc->numOutputs, NULL, NULL);
+            if (is_chain && dec) {
+                for (int p = 0; p < num_pipes; ++p) {
+                    memcpy(dec->inputBufs[pipes[p].dec_in_idx], enc->outputBufs[pipes[p].enc_out_idx], pipes[p].copy_size);
+                }
+                g_qnn.graphExecute(dec->graphHandle, dec->inputs, dec->numInputs, dec->outputs, dec->numOutputs, NULL, NULL);
+            }
+            unet_get_noise_pred_nchw(final_out_slot, (uint32_t)final_out_idx, cond_pred_buf, latent_h, latent_w);
+
+            /* Euler step in memory */
+            float delta = step.sigma_next - step.sigma;
+            for (size_t i = 0; i < num_latent; ++i) {
+                latent[i] += delta * cond_pred_buf[i];
+            }
+        }
+
+        fprintf(stderr, "[server]   [UNet %d/%d]%s %.0fms\n",
+                s + 1, num_steps, step_uses_cfg ? " CFG" : "", now_ms() - t_step0);
+
+        /* Optional preview output */
+        if (preview_stride > 0 && preview_dir[0] != '\0') {
+            int is_last = (s == num_steps - 1);
+            if (is_last || (s % preview_stride == preview_stride - 1)) {
+                snprintf(path_buf, sizeof(path_buf), "%s/preview_step_%02d.raw", preview_dir, s + 1);
+                write_raw_file(path_buf, latent, num_latent * sizeof(float));
+            }
+        }
+    }
+
+    double t_end = now_ms();
+    double total_denoise_ms = t_end - t_start;
+
+    /* Write final output latent */
+    write_raw_file(out_latent_path, latent, num_latent * sizeof(float));
+
+    /* Cleanup temporary memory */
+    if (latent) free(latent);
+    if (scaled_sample) free(scaled_sample);
+    if (cond_pred_buf) free(cond_pred_buf);
+    if (uncond_pred_buf) free(uncond_pred_buf);
+    if (cond_enc) free(cond_enc);
+    if (cond_te) free(cond_te);
+    if (cond_tid) free(cond_tid);
+    if (uncond_enc) free(uncond_enc);
+    if (uncond_te) free(uncond_te);
+    if (uncond_tid) free(uncond_tid);
+
+    fprintf(stderr, "[server] DENOISE finished: %.1f ms (%d steps, avg %.1f ms/step)\n",
+            total_denoise_ms, num_steps, (num_steps > 0) ? (total_denoise_ms / num_steps) : 0.0);
+    printf("OK %.1f\n", total_denoise_ms);
+    fflush(stdout);
+    return 0;
+}
+
+/* ========================================================================= */
 /*  Cleanup                                                                  */
 /* ========================================================================= */
 
 static void cleanup_slot(ContextSlot* slot) {
     if (!slot->active) return;
 
-    if (slot->contextHandle && g_qnn.contextFree) {
-        g_qnn.contextFree(slot->contextHandle, NULL);
-    }
-
+    /* 1. De-register memory handles BEFORE freeing the context */
     for (uint32_t i = 0; i < slot->numInputs; ++i) {
-        if (slot->inputMemHandles[i] && g_qnn.memDeRegister)
+        if (slot->inputMemHandles[i] && g_qnn.memDeRegister) {
             g_qnn.memDeRegister(&slot->inputMemHandles[i], 1);
-        free(slot->inputDims[i]);
-        shared_free(slot->inputBufs[i]);
+            slot->inputMemHandles[i] = NULL;
+        }
+        if (slot->inputDims[i]) {
+            free(slot->inputDims[i]);
+            slot->inputDims[i] = NULL;
+        }
+        if (slot->inputBufs[i]) {
+            shared_free(slot->inputBufs[i]);
+            slot->inputBufs[i] = NULL;
+        }
     }
     for (uint32_t i = 0; i < slot->numOutputs; ++i) {
-        if (slot->outputMemHandles[i] && g_qnn.memDeRegister)
+        if (slot->outputMemHandles[i] && g_qnn.memDeRegister) {
             g_qnn.memDeRegister(&slot->outputMemHandles[i], 1);
-        free(slot->outputDims[i]);
-        shared_free(slot->outputBufs[i]);
+            slot->outputMemHandles[i] = NULL;
+        }
+        if (slot->outputDims[i]) {
+            free(slot->outputDims[i]);
+            slot->outputDims[i] = NULL;
+        }
+        if (slot->outputBufs[i]) {
+            shared_free(slot->outputBufs[i]);
+            slot->outputBufs[i] = NULL;
+        }
     }
 
+    /* 2. Free QNN context handle */
+    if (slot->contextHandle && g_qnn.contextFree) {
+        g_qnn.contextFree(slot->contextHandle, NULL);
+        slot->contextHandle = NULL;
+    }
+
+    /* 3. Free binary data if still present */
     if (slot->binaryData) {
         free(slot->binaryData);
         slot->binaryData = NULL;
     }
 
+    if (g_totalLoadedBytes >= slot->modelBytes) {
+        g_totalLoadedBytes -= slot->modelBytes;
+    } else {
+        g_totalLoadedBytes = 0;
+    }
+    slot->modelBytes = 0;
     slot->active = 0;
 }
 
@@ -1629,10 +3028,1225 @@ static int dispatch_command_line(char* line) {
             printf("ERR RUN_CHAIN needs >=5 args (got %d)\n", nt - 1);
             fflush(stdout);
         }
+    } else if (strcmp(cmd, "DENOISE") == 0 && nargs >= 2) {
+        cmd_denoise(arg1);
     } else {
         printf("ERR unknown_command %s\n", cmd);
         fflush(stdout);
     }
+    return 0;
+}
+
+/* ========================================================================= */
+/*  Standalone End-to-End CLI Generator (Zero Python / Zero Root / Zero APK) */
+/* ========================================================================= */
+
+#define VOCAB_HASH_SIZE 131072
+
+typedef struct {
+    char*   key;
+    int32_t val;
+} StrIntEntry;
+
+typedef struct {
+    StrIntEntry* vocab;
+    StrIntEntry* merges;
+    char         byte_enc[256][4];
+    int32_t      bos_id;
+    int32_t      eos_id;
+} ClipBpeTokenizer;
+
+static uint32_t fnv1a_str(const char* s) {
+    uint32_t h = 2166136261u;
+    while (*s) {
+        h ^= (uint8_t)(*s++);
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void ht_put(StrIntEntry* table, const char* key, int32_t val) {
+    uint32_t idx = fnv1a_str(key) & (VOCAB_HASH_SIZE - 1);
+    while (table[idx].key != NULL) {
+        if (strcmp(table[idx].key, key) == 0) {
+            table[idx].val = val;
+            return;
+        }
+        idx = (idx + 1) & (VOCAB_HASH_SIZE - 1);
+    }
+    table[idx].key = strdup(key);
+    table[idx].val = val;
+}
+
+static int32_t ht_get(const StrIntEntry* table, const char* key, int32_t def_val) {
+    uint32_t idx = fnv1a_str(key) & (VOCAB_HASH_SIZE - 1);
+    while (table[idx].key != NULL) {
+        if (strcmp(table[idx].key, key) == 0) return table[idx].val;
+        idx = (idx + 1) & (VOCAB_HASH_SIZE - 1);
+    }
+    return def_val;
+}
+
+static int encode_utf8_cp(uint32_t cp, char* out) {
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        out[1] = '\0';
+        return 1;
+    } else if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        out[2] = '\0';
+        return 2;
+    } else {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        out[3] = '\0';
+        return 3;
+    }
+}
+
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+
+static int clip_tok_init(ClipBpeTokenizer* tok, const char* vocab_path, const char* merges_path) {
+    memset(tok, 0, sizeof(*tok));
+    tok->vocab  = (StrIntEntry*)calloc(VOCAB_HASH_SIZE, sizeof(StrIntEntry));
+    tok->merges = (StrIntEntry*)calloc(VOCAB_HASH_SIZE, sizeof(StrIntEntry));
+    tok->bos_id = 49406;
+    tok->eos_id = 49407;
+
+    /* 1. Build byte_to_unicode table */
+    int in_bs[256] = {0};
+    for (int b = 33; b <= 126; ++b) in_bs[b] = 1;
+    for (int b = 161; b <= 172; ++b) in_bs[b] = 1;
+    for (int b = 174; b <= 255; ++b) in_bs[b] = 1;
+    int extra = 0;
+    for (int b = 0; b < 256; ++b) {
+        uint32_t cp = in_bs[b] ? (uint32_t)b : (uint32_t)(256 + extra++);
+        encode_utf8_cp(cp, tok->byte_enc[b]);
+    }
+
+    /* 2. Parse vocab.json (line-by-line "key": id) */
+    FILE* fv = fopen(vocab_path, "r");
+    if (!fv) {
+        fprintf(stderr, "[tok] ERR: cannot open %s\n", vocab_path);
+        return -1;
+    }
+    char line[4096];
+    while (fgets(line, sizeof(line), fv)) {
+        char* q1 = strchr(line, '"');
+        if (!q1) continue;
+        char key[1024];
+        int ki = 0;
+        char* p = q1 + 1;
+        while (*p && *p != '"' && ki < 1018) {
+            if (*p == '\\') {
+                p++;
+                if (*p == '"' || *p == '\\' || *p == '/') key[ki++] = *p++;
+                else if (*p == 'n') { key[ki++] = '\n'; p++; }
+                else if (*p == 't') { key[ki++] = '\t'; p++; }
+                else if (*p == 'u' && p[1] && p[2] && p[3] && p[4]) {
+                    uint32_t cp = (uint32_t)((hex_val(p[1]) << 12) | (hex_val(p[2]) << 8) |
+                                             (hex_val(p[3]) << 4)  |  hex_val(p[4]));
+                    char u8[4];
+                    int n = encode_utf8_cp(cp, u8);
+                    for (int j = 0; j < n; ++j) key[ki++] = u8[j];
+                    p += 5;
+                } else if (*p) {
+                    key[ki++] = *p++;
+                }
+            } else {
+                key[ki++] = *p++;
+            }
+        }
+        key[ki] = '\0';
+        if (*p == '"') p++;
+        char* col = strchr(p, ':');
+        if (!col) continue;
+        int32_t id = (int32_t)strtol(col + 1, NULL, 10);
+        ht_put(tok->vocab, key, id);
+    }
+    fclose(fv);
+
+    /* 3. Parse merges.txt */
+    FILE* fm = fopen(merges_path, "r");
+    if (!fm) {
+        fprintf(stderr, "[tok] ERR: cannot open %s\n", merges_path);
+        return -1;
+    }
+    int32_t rank = 0;
+    int first_line = 1;
+    while (fgets(line, sizeof(line), fm)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+        if (first_line && strncmp(line, "#version", 8) == 0) { first_line = 0; continue; }
+        first_line = 0;
+        char* sp = strchr(line, ' ');
+        if (!sp) continue;
+        *sp = '\x01';
+        ht_put(tok->merges, line, rank++);
+    }
+    fclose(fm);
+    return 0;
+}
+
+static void clip_bpe_encode_word(const ClipBpeTokenizer* tok, const char* raw_word, int raw_len,
+                                 int32_t* out_ids, int* io_count, int max_ids) {
+    if (raw_len <= 0) return;
+
+    /* Split raw bytes into UTF-8 byte_encoder symbols; append </w> to last symbol */
+    char syms[256][256];
+    int n_syms = 0;
+    for (int i = 0; i < raw_len && n_syms < 255; ++i) {
+        uint8_t b = (uint8_t)raw_word[i];
+        if (i == raw_len - 1) {
+            snprintf(syms[n_syms], sizeof(syms[0]), "%s</w>", tok->byte_enc[b]);
+        } else {
+            snprintf(syms[n_syms], sizeof(syms[0]), "%s", tok->byte_enc[b]);
+        }
+        n_syms++;
+    }
+
+    while (n_syms > 1) {
+        int best_rank = 0x7FFFFFFF;
+        int best_idx = -1;
+        for (int i = 0; i < n_syms - 1; ++i) {
+            char pair_key[520];
+            snprintf(pair_key, sizeof(pair_key), "%s\x01%s", syms[i], syms[i + 1]);
+            int32_t r = ht_get(tok->merges, pair_key, -1);
+            if (r >= 0 && r < best_rank) {
+                best_rank = r;
+                best_idx = i;
+            }
+        }
+        if (best_idx < 0) break;
+
+        char first[256], second[256];
+        strncpy(first, syms[best_idx], sizeof(first) - 1); first[sizeof(first) - 1] = '\0';
+        strncpy(second, syms[best_idx + 1], sizeof(second) - 1); second[sizeof(second) - 1] = '\0';
+
+        char next_syms[256][256];
+        int next_n = 0;
+        int i = 0;
+        while (i < n_syms) {
+            if (i < n_syms - 1 && strcmp(syms[i], first) == 0 && strcmp(syms[i + 1], second) == 0) {
+                snprintf(next_syms[next_n++], sizeof(next_syms[0]), "%s%s", first, second);
+                i += 2;
+            } else {
+                snprintf(next_syms[next_n++], sizeof(next_syms[0]), "%s", syms[i]);
+                i += 1;
+            }
+        }
+        n_syms = next_n;
+        for (int j = 0; j < n_syms; ++j) {
+            strcpy(syms[j], next_syms[j]);
+        }
+    }
+
+    for (int i = 0; i < n_syms && *io_count < max_ids; ++i) {
+        int32_t id = ht_get(tok->vocab, syms[i], tok->eos_id);
+        out_ids[(*io_count)++] = id;
+    }
+}
+
+static void clip_tok_encode(const ClipBpeTokenizer* tok, const char* text,
+                            int32_t pad_id, float* out_f32_77) {
+    int32_t ids[77];
+    int count = 0;
+    ids[count++] = tok->bos_id;
+
+    /* Lowercase copy */
+    char low[4096];
+    size_t len = strlen(text);
+    if (len >= sizeof(low)) len = sizeof(low) - 1;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        low[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
+    }
+    low[len] = '\0';
+
+    const char* p = low;
+    while (*p && count < 76) {
+        if (isspace((unsigned char)*p)) { p++; continue; }
+        /* Contractions */
+        if (*p == '\'' && (p[1] == 's' || p[1] == 't' || p[1] == 'm' || p[1] == 'd') &&
+            !isalpha((unsigned char)p[2])) {
+            clip_bpe_encode_word(tok, p, 2, ids, &count, 76);
+            p += 2;
+            continue;
+        }
+        if (*p == '\'' && ((p[1] == 'r' && p[2] == 'e') || (p[1] == 'v' && p[2] == 'e') ||
+                           (p[1] == 'l' && p[2] == 'l')) && !isalpha((unsigned char)p[3])) {
+            clip_bpe_encode_word(tok, p, 3, ids, &count, 76);
+            p += 3;
+            continue;
+        }
+        /* Letters (including UTF-8 bytes >= 128) */
+        if (isalpha((unsigned char)*p) || ((unsigned char)*p >= 128)) {
+            const char* s = p;
+            while (*p && (isalpha((unsigned char)*p) || ((unsigned char)*p >= 128))) p++;
+            clip_bpe_encode_word(tok, s, (int)(p - s), ids, &count, 76);
+            continue;
+        }
+        /* Single digit */
+        if (isdigit((unsigned char)*p)) {
+            clip_bpe_encode_word(tok, p, 1, ids, &count, 76);
+            p++;
+            continue;
+        }
+        /* Punctuation / non-whitespace non-alphanumeric */
+        const char* s = p;
+        while (*p && !isspace((unsigned char)*p) && !isalnum((unsigned char)*p) && ((unsigned char)*p < 128)) p++;
+        clip_bpe_encode_word(tok, s, (int)(p - s), ids, &count, 76);
+    }
+
+    if (count < 77) ids[count++] = tok->eos_id;
+    else ids[76] = tok->eos_id;
+
+    while (count < 77) ids[count++] = pad_id;
+    for (int i = 0; i < 77; ++i) out_f32_77[i] = (float)ids[i];
+}
+
+/* NumPy-exact MT19937 + polar Box-Muller randn */
+typedef struct {
+    uint32_t key[624];
+    int      pos;
+    int      has_gauss;
+    double   gauss;
+} NumpyRng;
+
+static void np_rng_seed(NumpyRng* rng, uint32_t seed) {
+    rng->key[0] = seed;
+    for (int i = 1; i < 624; ++i) {
+        rng->key[i] = (1812433253UL * (rng->key[i - 1] ^ (rng->key[i - 1] >> 30)) + (uint32_t)i);
+    }
+    rng->pos = 624;
+    rng->has_gauss = 0;
+    rng->gauss = 0.0;
+}
+
+static uint32_t np_rng_u32(NumpyRng* rng) {
+    if (rng->pos == 624) {
+        for (int i = 0; i < 624 - 397; ++i) {
+            uint32_t y = (rng->key[i] & 0x80000000UL) | (rng->key[i + 1] & 0x7FFFFFFFUL);
+            rng->key[i] = rng->key[i + 397] ^ (y >> 1) ^ ((y & 1) ? 0x9908B0DFUL : 0UL);
+        }
+        for (int i = 624 - 397; i < 623; ++i) {
+            uint32_t y = (rng->key[i] & 0x80000000UL) | (rng->key[i + 1] & 0x7FFFFFFFUL);
+            rng->key[i] = rng->key[i + (397 - 624)] ^ (y >> 1) ^ ((y & 1) ? 0x9908B0DFUL : 0UL);
+        }
+        uint32_t y = (rng->key[623] & 0x80000000UL) | (rng->key[0] & 0x7FFFFFFFUL);
+        rng->key[623] = rng->key[396] ^ (y >> 1) ^ ((y & 1) ? 0x9908B0DFUL : 0UL);
+        rng->pos = 0;
+    }
+    uint32_t y = rng->key[rng->pos++];
+    y ^= (y >> 11);
+    y ^= (y << 7) & 0x9D2C5680UL;
+    y ^= (y << 15) & 0xEFC60000UL;
+    y ^= (y >> 18);
+    return y;
+}
+
+static double np_rng_double(NumpyRng* rng) {
+    int32_t a = (int32_t)(np_rng_u32(rng) >> 5);
+    int32_t b = (int32_t)(np_rng_u32(rng) >> 6);
+    return (a * 67108864.0 + b) / 9007199254740992.0;
+}
+
+static double np_rng_gauss(NumpyRng* rng) {
+    if (rng->has_gauss) {
+        rng->has_gauss = 0;
+        return rng->gauss;
+    }
+    double x1, x2, r2;
+    do {
+        x1 = 2.0 * np_rng_double(rng) - 1.0;
+        x2 = 2.0 * np_rng_double(rng) - 1.0;
+        r2 = x1 * x1 + x2 * x2;
+    } while (r2 >= 1.0 || r2 == 0.0);
+    double f = sqrt(-2.0 * log(r2) / r2);
+    rng->gauss = f * x1;
+    rng->has_gauss = 1;
+    return f * x2;
+}
+
+/* Minimal PNG writer using zlib compress2 + crc32 */
+static void write_be32(uint8_t* p, uint32_t v) {
+    p[0] = (uint8_t)((v >> 24) & 0xFF);
+    p[1] = (uint8_t)((v >> 16) & 0xFF);
+    p[2] = (uint8_t)((v >> 8) & 0xFF);
+    p[3] = (uint8_t)(v & 0xFF);
+}
+
+static void write_png_chunk(FILE* f, const char type[4], const uint8_t* data, uint32_t len) {
+    uint8_t len_be[4], crc_be[4];
+    write_be32(len_be, len);
+    fwrite(len_be, 1, 4, f);
+    fwrite(type, 1, 4, f);
+    if (len > 0 && data) fwrite(data, 1, len, f);
+    uLong crc = crc32(0L, Z_NULL, 0);
+    crc = crc32(crc, (const Bytef*)type, 4);
+    if (len > 0 && data) crc = crc32(crc, (const Bytef*)data, len);
+    write_be32(crc_be, (uint32_t)crc);
+    fwrite(crc_be, 1, 4, f);
+}
+
+static int save_rgb_png(const char* path, const uint8_t* rgb, int width, int height) {
+    size_t row_bytes = (size_t)width * 3;
+    size_t raw_size = (row_bytes + 1) * (size_t)height;
+    uint8_t* raw = (uint8_t*)malloc(raw_size);
+    if (!raw) return -1;
+    for (int y = 0; y < height; ++y) {
+        raw[y * (row_bytes + 1)] = 0; /* filter type 0 (None) */
+        memcpy(raw + y * (row_bytes + 1) + 1, rgb + (size_t)y * row_bytes, row_bytes);
+    }
+
+    uLongf z_cap = compressBound((uLong)raw_size);
+    uint8_t* z_buf = (uint8_t*)malloc(z_cap);
+    if (!z_buf) { free(raw); return -1; }
+    if (compress2(z_buf, &z_cap, raw, (uLong)raw_size, 1) != Z_OK) {
+        free(z_buf);
+        free(raw);
+        return -1;
+    }
+    free(raw);
+
+    FILE* f = fopen(path, "wb");
+    if (!f) { free(z_buf); return -1; }
+    static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    fwrite(sig, 1, 8, f);
+
+    uint8_t ihdr[13];
+    write_be32(ihdr + 0, (uint32_t)width);
+    write_be32(ihdr + 4, (uint32_t)height);
+    ihdr[8]  = 8; /* bit depth */
+    ihdr[9]  = 2; /* color type: truecolor RGB */
+    ihdr[10] = 0; /* compression */
+    ihdr[11] = 0; /* filter */
+    ihdr[12] = 0; /* interlace */
+    write_png_chunk(f, "IHDR", ihdr, 13);
+    write_png_chunk(f, "IDAT", z_buf, (uint32_t)z_cap);
+    write_png_chunk(f, "IEND", NULL, 0);
+    fclose(f);
+    free(z_buf);
+    return 0;
+}
+
+static int run_clip_pair_in_memory(ContextSlot* clip_l, ContextSlot* clip_g,
+                                   const ClipBpeTokenizer* tok, const char* text,
+                                   float* out_pe_77x2048, float* out_te_1280,
+                                   double* out_ms_l, double* out_ms_g) {
+    float ids_l[77], ids_g[77];
+    clip_tok_encode(tok, text, 49407, ids_l);
+    clip_tok_encode(tok, text, 0,     ids_g);
+
+    tensor_set_f32(clip_l, 0, ids_l, 77);
+    double t0 = now_ms();
+    if (QNN_SUCCESS != g_qnn.graphExecute(clip_l->graphHandle, clip_l->inputs, clip_l->numInputs,
+                                          clip_l->outputs, clip_l->numOutputs, NULL, NULL)) {
+        return -1;
+    }
+    *out_ms_l = now_ms() - t0;
+
+    tensor_set_f32(clip_g, 0, ids_g, 77);
+    double t1 = now_ms();
+    if (QNN_SUCCESS != g_qnn.graphExecute(clip_g->graphHandle, clip_g->inputs, clip_g->numInputs,
+                                          clip_g->outputs, clip_g->numOutputs, NULL, NULL)) {
+        return -1;
+    }
+    *out_ms_g = now_ms() - t1;
+
+    float* cl = (float*)malloc(77 * 768 * sizeof(float));
+    float* cg = (float*)malloc(77 * 1280 * sizeof(float));
+    tensor_get_f32(clip_l, 0, cl, 77 * 768);
+    tensor_get_f32(clip_g, 0, cg, 77 * 1280);
+    tensor_get_f32(clip_g, 1, out_te_1280, 1280);
+
+    for (int s = 0; s < 77; ++s) {
+        memcpy(out_pe_77x2048 + s * 2048,       cl + s * 768,  768 * sizeof(float));
+        memcpy(out_pe_77x2048 + s * 2048 + 768, cg + s * 1280, 1280 * sizeof(float));
+    }
+    free(cl);
+    free(cg);
+    return 0;
+}
+
+static inline float catmull_rom_weight(float x) {
+    float ax = fabsf(x);
+    if (ax <= 1.0f) {
+        return 1.5f * ax * ax * ax - 2.5f * ax * ax + 1.0f;
+    } else if (ax < 2.0f) {
+        return -0.5f * ax * ax * ax + 2.5f * ax * ax - 4.0f * ax + 2.0f;
+    }
+    return 0.0f;
+}
+
+static inline int clamp_i(int v, int lo, int hi) {
+    return (v < lo) ? lo : ((v > hi) ? hi : v);
+}
+
+/*
+ * 4x4 Catmull-Rom Bicubic Resizer + AMD FidelityFX Contrast-Adaptive Sharpening (CAS)
+ * Used when target (dst_W, dst_H) exceeds the loaded NPU bucket canvas (src_W, src_H).
+ */
+static float* resize_rgb_catmull_rom_cas(const float* src_rgb, int src_W, int src_H,
+                                         int dst_W, int dst_H, float cas_strength) {
+    size_t dst_pixels = (size_t)dst_W * (size_t)dst_H;
+    float* tmp_rgb = (float*)malloc(dst_pixels * 3 * sizeof(float));
+    if (!tmp_rgb) return NULL;
+
+    float scale_x = (float)src_W / (float)dst_W;
+    float scale_y = (float)src_H / (float)dst_H;
+
+    for (int dy = 0; dy < dst_H; ++dy) {
+        float sy = ((float)dy + 0.5f) * scale_y - 0.5f;
+        int iy = (int)floorf(sy);
+        float fy = sy - (float)iy;
+        float wy[4] = {
+            catmull_rom_weight(fy + 1.0f),
+            catmull_rom_weight(fy),
+            catmull_rom_weight(1.0f - fy),
+            catmull_rom_weight(2.0f - fy)
+        };
+        int y_idx[4] = {
+            clamp_i(iy - 1, 0, src_H - 1),
+            clamp_i(iy,     0, src_H - 1),
+            clamp_i(iy + 1, 0, src_H - 1),
+            clamp_i(iy + 2, 0, src_H - 1)
+        };
+
+        for (int dx = 0; dx < dst_W; ++dx) {
+            float sx = ((float)dx + 0.5f) * scale_x - 0.5f;
+            int ix = (int)floorf(sx);
+            float fx = sx - (float)ix;
+            float wx[4] = {
+                catmull_rom_weight(fx + 1.0f),
+                catmull_rom_weight(fx),
+                catmull_rom_weight(1.0f - fx),
+                catmull_rom_weight(2.0f - fx)
+            };
+            int x_idx[4] = {
+                clamp_i(ix - 1, 0, src_W - 1),
+                clamp_i(ix,     0, src_W - 1),
+                clamp_i(ix + 1, 0, src_W - 1),
+                clamp_i(ix + 2, 0, src_W - 1)
+            };
+
+            float r = 0.0f, g = 0.0f, b = 0.0f;
+            for (int m = 0; m < 4; ++m) {
+                const float* row = src_rgb + (size_t)y_idx[m] * (size_t)src_W * 3;
+                float wy_m = wy[m];
+                for (int n = 0; n < 4; ++n) {
+                    float w = wy_m * wx[n];
+                    const float* px = row + (size_t)x_idx[n] * 3;
+                    r += w * px[0];
+                    g += w * px[1];
+                    b += w * px[2];
+                }
+            }
+            float* out_px = tmp_rgb + ((size_t)dy * (size_t)dst_W + (size_t)dx) * 3;
+            out_px[0] = r;
+            out_px[1] = g;
+            out_px[2] = b;
+        }
+    }
+
+    if (cas_strength <= 0.0f) return tmp_rgb;
+
+    /* Apply Contrast-Adaptive Sharpening (CAS) in [0, 1] normalized space */
+    float* cas_rgb = (float*)malloc(dst_pixels * 3 * sizeof(float));
+    if (!cas_rgb) return tmp_rgb;
+
+    float peak = -1.0f / (8.0f - 3.0f * cas_strength);
+    for (int y = 0; y < dst_H; ++y) {
+        int ym1 = (y > 0) ? (y - 1) : 0;
+        int yp1 = (y + 1 < dst_H) ? (y + 1) : (dst_H - 1);
+        for (int x = 0; x < dst_W; ++x) {
+            int xm1 = (x > 0) ? (x - 1) : 0;
+            int xp1 = (x + 1 < dst_W) ? (x + 1) : (dst_W - 1);
+
+            const float* pN = tmp_rgb + ((size_t)ym1 * dst_W + x) * 3;
+            const float* pS = tmp_rgb + ((size_t)yp1 * dst_W + x) * 3;
+            const float* pW = tmp_rgb + ((size_t)y * dst_W + xm1) * 3;
+            const float* pE = tmp_rgb + ((size_t)y * dst_W + xp1) * 3;
+            const float* pC = tmp_rgb + ((size_t)y * dst_W + x) * 3;
+            float* dst_px   = cas_rgb + ((size_t)y * dst_W + x) * 3;
+
+            for (int c = 0; c < 3; ++c) {
+                /* Convert [-1, 1] -> [0, 1] for CAS min/max envelope */
+                float vN = pN[c] * 0.5f + 0.5f;
+                float vS = pS[c] * 0.5f + 0.5f;
+                float vW = pW[c] * 0.5f + 0.5f;
+                float vE = pE[c] * 0.5f + 0.5f;
+                float vC = pC[c] * 0.5f + 0.5f;
+
+                float mn = vC;
+                if (vN < mn) mn = vN;
+                if (vS < mn) mn = vS;
+                if (vW < mn) mn = vW;
+                if (vE < mn) mn = vE;
+                if (mn < 0.0f) mn = 0.0f;
+
+                float mx = vC;
+                if (vN > mx) mx = vN;
+                if (vS > mx) mx = vS;
+                if (vW > mx) mx = vW;
+                if (vE > mx) mx = vE;
+                if (mx > 1.0f) mx = 1.0f;
+
+                float d_min = mn;
+                float d_max = 1.0f - mx;
+                float amp = (mx > 1e-4f) ? sqrtf((d_min < d_max ? d_min : d_max) / mx) : 0.0f;
+                float w = amp * peak;
+                float out_v = (vC + w * (vN + vS + vW + vE)) / (1.0f + 4.0f * w);
+                dst_px[c] = (out_v - 0.5f) * 2.0f;
+            }
+        }
+    }
+    free(tmp_rgb);
+    return cas_rgb;
+}
+
+static int file_exists_nonempty(const char* path) {
+    struct stat st;
+    return (stat(path, &st) == 0 && st.st_size > 1024);
+}
+
+/*
+ * Multi-Bucket Resolution Auto-Router:
+ * Searches <base_dir>/context/ for the tightest compiled QNN context binary (Wg >= req_W, Hg >= req_H).
+ * Falls back to the default 1024x1024 context binary if no resolution-specific binary is found.
+ */
+static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H,
+                                 char* out_unet_path, char* out_vae_path) {
+    static const int buckets[][2] = {
+        {768, 768},
+        {832, 1216}, {1216, 832},
+        {1024, 1024},
+        {1024, 1280}, {1280, 1024},
+        {1152, 1536}, {1536, 1152},
+        {1344, 1728}, {1728, 1344},
+        {1536, 1536}
+    };
+    const int num_buckets = (int)(sizeof(buckets) / sizeof(buckets[0]));
+
+    /* 1. Check exact resolution match first */
+    char cand_u[MAX_PATH_LEN], cand_v[MAX_PATH_LEN];
+    snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, req_W, req_H);
+    snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder_%dx%d.serialized.bin.bin", base_dir, req_W, req_H);
+    if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
+        strcpy(out_unet_path, cand_u);
+        strcpy(out_vae_path, cand_v);
+        return;
+    }
+
+    /* 2. Check tightest covering bucket (Wg >= req_W && Hg >= req_H) with minimal area */
+    int best_area = 0x7FFFFFFF;
+    char best_u[MAX_PATH_LEN] = {0}, best_v[MAX_PATH_LEN] = {0};
+
+    for (int i = 0; i < num_buckets; ++i) {
+        int bw = buckets[i][0], bh = buckets[i][1];
+        if (bw < req_W || bh < req_H) continue;
+        int area = bw * bh;
+        if (area >= best_area) continue;
+
+        snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, bw, bh);
+        snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder_%dx%d.serialized.bin.bin", base_dir, bw, bh);
+        if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
+            best_area = area;
+            strcpy(best_u, cand_u);
+            strcpy(best_v, cand_v);
+            continue;
+        }
+        if (bw == 1024 && bh == 1024) {
+            snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+            snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder.serialized.bin.bin", base_dir);
+            if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
+                best_area = area;
+                strcpy(best_u, cand_u);
+                strcpy(best_v, cand_v);
+            }
+        }
+    }
+
+    if (best_u[0] && best_v[0]) {
+        strcpy(out_unet_path, best_u);
+        strcpy(out_vae_path, best_v);
+        return;
+    }
+
+    /* 3. Default fallback */
+    snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+    snprintf(out_vae_path,  MAX_PATH_LEN, "%s/context/vae_decoder.serialized.bin.bin", base_dir);
+}
+
+static void print_npu_utilization_report(int graph_W, int graph_H, int act_W, int act_H,
+                                         double total_unet_ms, double total_vae_ms) {
+    int passes = (g_perf.unet_passes > 0) ? g_perf.unet_passes : 1;
+    double pass_wall_ms    = total_unet_ms / passes;
+    double pass_qnn_ms     = g_perf.qnn_wall_ms / passes;
+    double pass_temb_ms    = g_perf.temb_proj_ms / passes;
+    double pass_rpcmem_ms  = g_perf.rpcmem_bias_ms / passes;
+    double pass_io_ms      = g_perf.io_quant_ms / passes;
+    double pass_dev_ms     = (g_perf.qnn_device_us / 1000.0) / passes;
+    double pass_dev_ex_ms  = (g_perf.qnn_device_excl_wait_us / 1000.0) / passes;
+    double pass_host_rpc   = (g_perf.qnn_host_rpc_us / 1000.0) / passes;
+    double pass_htp_rpc    = (g_perf.qnn_htp_rpc_us / 1000.0) / passes;
+    double pass_wait_ms    = (g_perf.qnn_wait_us / 1000.0) / passes;
+    uint64_t pass_cycles   = g_perf.qnn_device_cycles / (uint64_t)passes;
+
+    /*
+     * Theoretical Roofline Model for SDXL UNet on Snapdragon 8 Elite (SM8750, Hexagon V79):
+     * - Base @ 1024x1024 (128x128 latent): 6,280.0 GFLOPs (6.28 TFLOPs / 3.14 TMACs) per forward pass
+     *   across 60 Transformer blocks @ C=1280 (4.00 TFLOPs), 10 Transformer blocks @ C=640 (1.04 TFLOPs),
+     *   and 17 ResNet Conv2d blocks (1.24 TFLOPs).
+     * - Model weights read per pass: 2.44 GiB (2.618 GB) W8 + 96.99 MB U16 resnet_bias + intermediate
+     *   activation DDR spill/fill across 362 layers (8 MB VTCM holds working tiles; ~13.8 GB activation traffic).
+     * - Effective sustained LPDDR5X-4800MHz (9600 MT/s) NPU DMA ceiling: ~58.0 GB/s.
+     * - Practical hardware ceiling for monolithic 2.57B W8A16 UNet @ 1024x1024 is ~640 ms/pass (~9.81 TOPS).
+     */
+    double scale_area = ((double)graph_W * (double)graph_H) / (1024.0 * 1024.0);
+    double gflops_pass = 6280.0 * scale_area;
+    double pure_npu_ms = (pass_dev_ex_ms > 1.0) ? pass_dev_ex_ms : ((pass_dev_ms > 1.0) ? pass_dev_ms : pass_qnn_ms);
+    double achieved_tops = (pure_npu_ms > 0.0) ? (gflops_pass / pure_npu_ms) : 0.0; /* GFLOPs/ms == TOPS */
+    double dsp_ghz = (pure_npu_ms > 0.0 && pass_cycles > 0)
+        ? ((double)pass_cycles / (pure_npu_ms * 1.0e6)) : 0.0;
+
+    double hw_limit_ms = 640.0 * scale_area;
+    double npu_roof_pct = (pure_npu_ms > 0.0) ? (100.0 * hw_limit_ms / pure_npu_ms) : 0.0;
+    if (npu_roof_pct > 99.9) npu_roof_pct = 99.9;
+    double pipeline_npu_duty_pct = (pass_wall_ms > 0.0) ? (100.0 * pure_npu_ms / pass_wall_ms) : 0.0;
+
+    fprintf(stderr, "\n================ [NPU UTILIZATION & BOTTLENECK AUDIT] ================\n");
+    fprintf(stderr, "Graph Canvas: %dx%d | Active Sub-Canvas: %dx%d | UNet Passes: %d",
+            graph_W, graph_H, act_W, act_H, passes);
+    if (g_perf.hvx_threads > 0) fprintf(stderr, " | HVX Threads: %d", g_perf.hvx_threads);
+    fprintf(stderr, "\n----------------------------------------------------------------------\n");
+    fprintf(stderr, "[Per-Pass Host & NPU Breakdown (avg over %d passes)]:\n", passes);
+    fprintf(stderr, "  1. Host temb MLP (21 FP16 layers):  %6.2f ms (%5.1f%%) [Total: %6.1f ms]\n",
+            pass_temb_ms, 100.0 * pass_temb_ms / pass_wall_ms, g_perf.temb_proj_ms);
+    fprintf(stderr, "  2. Host->RPCMEM 97MB bias fill:     %6.2f ms (%5.1f%%) [Total: %6.1f ms]\n",
+            pass_rpcmem_ms, 100.0 * pass_rpcmem_ms / pass_wall_ms, g_perf.rpcmem_bias_ms);
+    fprintf(stderr, "  3. Host sample/enc/pred quant+xpose:%6.2f ms (%5.1f%%) [Total: %6.1f ms]\n",
+            pass_io_ms, 100.0 * pass_io_ms / pass_wall_ms, g_perf.io_quant_ms);
+    fprintf(stderr, "  4. QNN graphExecute (Host Wall):    %6.2f ms (%5.1f%%) [Total: %6.1f ms]\n",
+            pass_qnn_ms, 100.0 * pass_qnn_ms / pass_wall_ms, g_perf.qnn_wall_ms);
+    if (pass_dev_ms > 0.0 || pass_host_rpc > 0.0) {
+        fprintf(stderr, "     ├─ ARM FastRPC Call Time:        %6.2f ms\n", pass_host_rpc);
+        fprintf(stderr, "     ├─ HTP DSP FastRPC Time:         %6.2f ms\n", pass_htp_rpc);
+        fprintf(stderr, "     ├─ VTCM / HMX+HVX Acquire Wait:  %6.2f ms\n", pass_wait_ms);
+        if (pass_cycles > 0) {
+            fprintf(stderr, "     └─ Pure Hexagon V79 NPU Accel:   %6.2f ms (%llu Mcycles @ %.2f GHz)\n",
+                    pure_npu_ms, (unsigned long long)(pass_cycles / 1000000ULL), dsp_ghz);
+        } else {
+            fprintf(stderr, "     └─ Pure Hexagon V79 NPU Accel:   %6.2f ms (excl wait: %.2f ms)\n",
+                    pass_dev_ms, pass_dev_ex_ms);
+        }
+    }
+    fprintf(stderr, "  --------------------------------------------------------------------\n");
+    fprintf(stderr, "  Total Per-Pass Wall Time:           %6.2f ms (100.0%%) [Total: %6.1f ms]\n",
+            pass_wall_ms, total_unet_ms);
+    fprintf(stderr, "----------------------------------------------------------------------\n");
+    fprintf(stderr, "[Hexagon V79 Hardware Roofline & Utilization]:\n");
+    fprintf(stderr, "  • NPU Pipeline Duty Cycle (NPU Active / Step Wall):  %5.1f%%\n", pipeline_npu_duty_pct);
+    fprintf(stderr, "  • Achieved Effective Math Throughput (W8A16):        %5.2f TOPS (%.1f TFLOPs/pass)\n",
+            achieved_tops, gflops_pass / 1000.0);
+    fprintf(stderr, "  • Practical NPU Hardware Roof Achieved (vs ~%.0fms):  %5.1f%%\n",
+            hw_limit_ms, npu_roof_pct);
+    if (g_perf.vae_device_us > 0.0) {
+        fprintf(stderr, "  • VAE Decoder NPU Accel: %.1f ms device / %.1f ms wall\n",
+                g_perf.vae_device_us / 1000.0, total_vae_ms);
+    }
+    fprintf(stderr, "======================================================================\n");
+}
+
+static int run_standalone_generate(const char* base_dir, const char* prompt, const char* neg_prompt,
+                                   uint32_t seed, int steps, float cfg_scale, int cfg_cutoff_arg,
+                                   int cfg_cache_mode, int req_width, int req_height, int pad_mode,
+                                   const char* unet_mode, const char* out_png_path) {
+    double t_total0 = now_ms();
+
+    /* Validate & snap requested resolution to multiples of 8 within [512x512, 1536x1536] pixel budget */
+    int width  = ((req_width  + 4) / 8) * 8;
+    int height = ((req_height + 4) / 8) * 8;
+    if (width < 256) width = 256;
+    if (height < 256) height = 256;
+
+    const int min_pixels = 512 * 512;   /* 262,144 (0.26 MP) */
+    const int max_pixels = 1536 * 1536; /* 2,359,296 (2.36 MP, covers 1344x1728 = 2,322,432) */
+    long long req_pixels = (long long)width * (long long)height;
+    if (req_pixels < min_pixels) {
+        double sc = sqrt((double)min_pixels / (double)req_pixels);
+        width  = (((int)ceil(width  * sc) + 7) / 8) * 8;
+        height = (((int)ceil(height * sc) + 7) / 8) * 8;
+        fprintf(stderr, "[res] Clamped up to minimum SDXL pixel budget: %dx%d\n", width, height);
+    } else if (req_pixels > max_pixels) {
+        double sc = sqrt((double)max_pixels / (double)req_pixels);
+        width  = (((int)floor(width  * sc)) / 8) * 8;
+        height = (((int)floor(height * sc)) / 8) * 8;
+        fprintf(stderr, "[res] Clamped down to maximum SDXL 2.36MP pixel budget: %dx%d\n", width, height);
+    }
+
+    int use_cfg = (cfg_scale > 1.0f);
+    int cfg_cutoff = (use_cfg && cfg_cutoff_arg > 0 && cfg_cutoff_arg < steps) ? cfg_cutoff_arg : steps;
+    if (!neg_prompt || !neg_prompt[0]) {
+        neg_prompt = use_cfg ? "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry" : "";
+    }
+    const char* cache_name = (cfg_cache_mode == 1) ? "delta-cache" : ((cfg_cache_mode == 2) ? "uncond-cache" : "cfg1-after");
+    const char* pad_name   = (pad_mode == 1) ? "tile" : ((pad_mode == 2) ? "zero" : "reflect");
+
+    /* Create QNN Profile handle if --profile was requested */
+    if (g_perf.enabled && g_qnn.profileCreate && !g_profHandle) {
+        QnnProfile_Level_t lvl = g_perf.detailed ? QNN_PROFILE_LEVEL_DETAILED : QNN_PROFILE_LEVEL_BASIC;
+        if (QNN_SUCCESS != g_qnn.profileCreate(g_backendHandle, lvl, &g_profHandle)) {
+            fprintf(stderr, "[prof] WARN: QnnProfile_create failed, continuing with host timers\n");
+            g_profHandle = NULL;
+        }
+    }
+
+    /* Resolve tightest covering context bucket */
+    char unet_bin_path[MAX_PATH_LEN], vae_bin_path[MAX_PATH_LEN];
+    resolve_bucket_paths(base_dir, width, height, unet_bin_path, vae_bin_path);
+
+    fprintf(stderr, "================================================\n");
+    fprintf(stderr, "[SDXL-NPU Standalone C Engine]\n");
+    fprintf(stderr, "Prompt:     %s\n", prompt);
+    fprintf(stderr, "Mode:       %s (steps=%d, cfg=%.2f, cutoff=%d/%d [%s], seed=%u)\n",
+            unet_mode, steps, cfg_scale, cfg_cutoff, steps, cache_name, seed);
+    fprintf(stderr, "Target Res: %dx%d (%.2f MP, pad=%s)\n",
+            width, height, ((double)width * height) / 1e6, pad_name);
+    fprintf(stderr, "Output:     %s\n", out_png_path);
+    fprintf(stderr, "================================================\n");
+
+    /* 1. Initialize CLIP BPE Tokenizer */
+    char vocab_path[MAX_PATH_LEN], merges_path[MAX_PATH_LEN];
+    snprintf(vocab_path, sizeof(vocab_path), "%s/phone_gen/tokenizer/vocab.json", base_dir);
+    snprintf(merges_path, sizeof(merges_path), "%s/phone_gen/tokenizer/merges.txt", base_dir);
+    ClipBpeTokenizer tok;
+    if (clip_tok_init(&tok, vocab_path, merges_path) != 0) return 1;
+
+    /* 2. Load & Run CLIP-L and CLIP-G */
+    char clip_l_path[MAX_PATH_LEN], clip_g_path[MAX_PATH_LEN];
+    snprintf(clip_l_path, sizeof(clip_l_path), "%s/context/clip_l.serialized.bin.bin", base_dir);
+    snprintf(clip_g_path, sizeof(clip_g_path), "%s/context/clip_g.serialized.bin.bin", base_dir);
+    if (cmd_load("clip_l", clip_l_path) != 0 || cmd_load("clip_g", clip_g_path) != 0) return 1;
+
+    ContextSlot* s_cl = &g_slots[find_slot("clip_l")];
+    ContextSlot* s_cg = &g_slots[find_slot("clip_g")];
+
+    float* pe_cond = (float*)malloc(77 * 2048 * sizeof(float));
+    float* te_cond = (float*)malloc(1280 * sizeof(float));
+    float* pe_uncond = use_cfg ? (float*)malloc(77 * 2048 * sizeof(float)) : NULL;
+    float* te_uncond = use_cfg ? (float*)malloc(1280 * sizeof(float)) : NULL;
+
+    double ms_cl1 = 0, ms_cg1 = 0, ms_cl2 = 0, ms_cg2 = 0;
+    if (run_clip_pair_in_memory(s_cl, s_cg, &tok, prompt, pe_cond, te_cond, &ms_cl1, &ms_cg1) != 0) return 1;
+    fprintf(stderr, "[CLIP cond]   L=%.1fms G=%.1fms\n", ms_cl1, ms_cg1);
+    if (use_cfg) {
+        if (run_clip_pair_in_memory(s_cl, s_cg, &tok, neg_prompt, pe_uncond, te_uncond, &ms_cl2, &ms_cg2) != 0) return 1;
+        fprintf(stderr, "[CLIP uncond] L=%.1fms G=%.1fms\n", ms_cl2, ms_cg2);
+    }
+    double total_clip_ms = ms_cl1 + ms_cg1 + ms_cl2 + ms_cg2;
+
+    /* Unload CLIP contexts before loading UNet */
+    cmd_unload("clip_g");
+    cmd_unload("clip_l");
+
+    /* 3. Load UNet (Monolithic W8A16 by default, or Split FP16 if --mode split) */
+    int is_split = (strcmp(unet_mode, "split") == 0);
+    if (!is_split) {
+        if (cmd_load("unet", unet_bin_path) != 0) return 1;
+    } else {
+        char enc_path[MAX_PATH_LEN], dec_path[MAX_PATH_LEN];
+        snprintf(enc_path, sizeof(enc_path), "%s/context/unet_encoder_fp16.serialized.bin.bin", base_dir);
+        snprintf(dec_path, sizeof(dec_path), "%s/context/unet_decoder_fp16.serialized.bin.bin", base_dir);
+        if (cmd_load("enc", enc_path) != 0 || cmd_load("dec", dec_path) != 0) return 1;
+    }
+
+    ContextSlot* enc = &g_slots[find_slot(is_split ? "enc" : "unet")];
+    ContextSlot* dec = is_split ? &g_slots[find_slot("dec")] : NULL;
+    ContextSlot* final_out_slot = is_split ? dec : enc;
+    int is_ext_resnet = (!is_split && enc->numInputs >= 19);
+
+    int enc_smp_idx = is_ext_resnet ? 0 : 4;
+    int enc_enc_idx = is_ext_resnet ? 1 : 0;
+    int enc_ts_idx  = is_ext_resnet ? -1 : 1;
+    int enc_tid_idx = is_ext_resnet ? -1 : 2;
+    int enc_te_idx  = is_ext_resnet ? -1 : 3;
+
+    /* Inspect compiled UNet graph latent dimensions (graph_lat_h, graph_lat_w) */
+    int graph_lat_h = 128, graph_lat_w = 128;
+    get_tensor_spatial_hw(&enc->inputs[enc_smp_idx], &graph_lat_h, &graph_lat_w);
+    int graph_W = graph_lat_w * 8;
+    int graph_H = graph_lat_h * 8;
+
+    /*
+     * Determine active sub-canvas (act_W, act_H) centered inside (graph_W, graph_H):
+     * - If width <= graph_W && height <= graph_H: 1:1 native sub-canvas (act_W = width, act_H = height).
+     * - If width > graph_W || height > graph_H (and no larger bucket binary was on disk):
+     *   Fit maximum aspect-ratio-preserving multiple-of-16 sub-canvas inside (graph_W, graph_H),
+     *   pass true target resolution in SDXL micro-conditioning time_ids = [height, width, 0, 0, height, width],
+     *   and reconstruct exact (width, height) after VAE with 4x4 Catmull-Rom + CAS!
+     */
+    int act_W = width, act_H = height;
+    if (act_W > graph_W || act_H > graph_H) {
+        double sc_w = (double)graph_W / (double)width;
+        double sc_h = (double)graph_H / (double)height;
+        double sc = (sc_w < sc_h) ? sc_w : sc_h;
+        act_W = (((int)floor(width  * sc + 0.5)) / 16) * 16;
+        act_H = (((int)floor(height * sc + 0.5)) / 16) * 16;
+        if (act_W < 64) act_W = 64;
+        if (act_H < 64) act_H = 64;
+        if (act_W > graph_W) act_W = graph_W;
+        if (act_H > graph_H) act_H = graph_H;
+    }
+
+    int act_lat_h = act_H / 8, act_lat_w = act_W / 8;
+    int lat_y0 = (graph_lat_h - act_lat_h) / 2;
+    int lat_x0 = (graph_lat_w - act_lat_w) / 2;
+    int crop_y = lat_y0 * 8;
+    int crop_x = lat_x0 * 8;
+
+    if (width != act_W || height != act_H) {
+        fprintf(stderr, "[res] Graph bucket %dx%d -> Centered Spatial-CFG Sub-Canvas %dx%d @ (%d,%d) + Catmull-Rom CAS -> %dx%d\n",
+                graph_W, graph_H, act_W, act_H, crop_x, crop_y, width, height);
+    } else if (act_W < graph_W || act_H < graph_H) {
+        fprintf(stderr, "[res] Native 1:1 Centered Spatial-CFG Sub-Canvas: %dx%d @ (%d,%d) inside %dx%d graph\n",
+                act_W, act_H, crop_x, crop_y, graph_W, graph_H);
+    }
+
+    /*
+     * Natural Full-Grid Latent Evolution + Spatial CFG Framing:
+     * Evolve the full [1, 4, graph_lat_h, graph_lat_w] latent coherently (zero mirror-symmetry seams,
+     * 100% exact GroupNorm variance) while concentrating CFG guidance inside the centered active window
+     * [lat_y0 .. lat_y0 + act_lat_h, lat_x0 .. lat_x0 + act_lat_w] and smoothly decaying to uncond (CFG=1)
+     * in the inactive outer margin so the main subject is framed squarely inside [act_W, act_H].
+     */
+    int latent_h = graph_lat_h, latent_w = graph_lat_w;
+    size_t spatial_lat = (size_t)latent_h * (size_t)latent_w;
+    size_t num_latent  = (size_t)4 * spatial_lat;
+
+    float* spatial_cfg_mask = (float*)malloc(spatial_lat * sizeof(float));
+    for (int ly = 0; ly < latent_h; ++ly) {
+        int dy = (ly < lat_y0) ? (lat_y0 - ly) : ((ly >= lat_y0 + act_lat_h) ? (ly - (lat_y0 + act_lat_h - 1)) : 0);
+        for (int lx = 0; lx < latent_w; ++lx) {
+            int dx = (lx < lat_x0) ? (lat_x0 - lx) : ((lx >= lat_x0 + act_lat_w) ? (lx - (lat_x0 + act_lat_w - 1)) : 0);
+            if (dx == 0 && dy == 0) {
+                spatial_cfg_mask[(size_t)ly * latent_w + lx] = 1.0f;
+            } else {
+                float d2 = (float)(dx * dx + dy * dy);
+                spatial_cfg_mask[(size_t)ly * latent_w + lx] = expf(-0.25f * d2);
+            }
+        }
+    }
+
+    /* 4. Euler Discrete Scheduler + NumPy-exact Initial Latent for [1, 4, latent_h, latent_w] */
+    double all_sigmas[1000];
+    double alpha_cumprod = 1.0;
+    double b0_sqrt = sqrt(0.00085), b1_sqrt = sqrt(0.012);
+    for (int i = 0; i < 1000; ++i) {
+        double bs = b0_sqrt + (b1_sqrt - b0_sqrt) * ((double)i / 999.0);
+        double beta = bs * bs;
+        alpha_cumprod *= (1.0 - beta);
+        all_sigmas[i] = sqrt((1.0 - alpha_cumprod) / alpha_cumprod);
+    }
+    DenoiseScheduleStep sched[64];
+    double step_ratio = 1000.0 / (double)steps;
+    float sigmas[65];
+    float timesteps[64];
+    for (int s = 0; s < steps; ++s) {
+        int t_idx = (int)llround(1000.0 - (double)s * step_ratio) - 1;
+        if (t_idx < 0) t_idx = 0;
+        if (t_idx > 999) t_idx = 999;
+        timesteps[s] = (float)t_idx;
+        sigmas[s] = (float)all_sigmas[t_idx];
+    }
+    sigmas[steps] = 0.0f;
+    for (int s = 0; s < steps; ++s) {
+        sched[s].step = s;
+        sched[s].timestep = timesteps[s];
+        sched[s].sigma = sigmas[s];
+        sched[s].sigma_next = sigmas[s + 1];
+    }
+    float init_noise_sigma = sigmas[0];
+
+    NumpyRng rng;
+    np_rng_seed(&rng, seed);
+    float* latent = (float*)malloc(num_latent * sizeof(float));
+    for (size_t i = 0; i < num_latent; ++i) {
+        latent[i] = (float)np_rng_gauss(&rng) * init_noise_sigma;
+    }
+
+    /* SDXL Micro-Conditioning: [orig_H, orig_W, crop_top=0, crop_left=0, target_H, target_W] */
+    float tid[6] = {(float)height, (float)width, 0.0f, 0.0f, (float)height, (float)width};
+
+    typedef struct { int enc_out_idx; int dec_in_idx; size_t copy_size; } PipeMap;
+    PipeMap pipes[16];
+    int num_pipes = 0;
+    if (is_split && dec) {
+        static const char* pipe_pairs[11][2] = {
+            {"output_0", "mid_out"}, {"output_1", "skip_0"}, {"output_2", "skip_1"},
+            {"output_3", "skip_2"},  {"output_4", "skip_3"}, {"output_5", "skip_4"},
+            {"output_6", "skip_5"},  {"output_7", "skip_6"}, {"output_8", "skip_7"},
+            {"output_9", "skip_8"},  {"output_10", "temb"}
+        };
+        for (int p = 0; p < 11; ++p) {
+            int eidx = -1, didx = -1;
+            for (uint32_t j = 0; j < enc->numOutputs; ++j)
+                if (strcmp(enc->outputNames[j], pipe_pairs[p][0]) == 0) { eidx = (int)j; break; }
+            for (uint32_t j = 0; j < dec->numInputs; ++j)
+                if (strcmp(dec->inputNames[j], pipe_pairs[p][1]) == 0) { didx = (int)j; break; }
+            if (eidx >= 0 && didx >= 0) {
+                pipes[num_pipes].enc_out_idx = eidx;
+                pipes[num_pipes].dec_in_idx = didx;
+                pipes[num_pipes].copy_size = enc->outputBufSizes[eidx];
+                num_pipes++;
+            }
+        }
+    }
+
+    float* scaled_sample   = (float*)malloc(num_latent * sizeof(float));
+    float* cond_pred_buf   = (float*)malloc(num_latent * sizeof(float));
+    float* uncond_pred_buf = use_cfg ? (float*)malloc(num_latent * sizeof(float)) : NULL;
+
+    double t_unet0 = now_ms();
+    for (int s = 0; s < steps; ++s) {
+        double ts0 = now_ms();
+        DenoiseScheduleStep st = sched[s];
+        int step_cfg = (use_cfg && s < cfg_cutoff);
+        float inv = 1.0f / sqrtf(st.sigma * st.sigma + 1.0f);
+        for (size_t i = 0; i < num_latent; ++i) scaled_sample[i] = latent[i] * inv;
+
+        unet_set_sample_nchw(enc, (uint32_t)enc_smp_idx, scaled_sample, latent_h, latent_w);
+        if (enc_ts_idx >= 0) tensor_set_f32(enc, (uint32_t)enc_ts_idx, &st.timestep, 1);
+
+        if (step_cfg) {
+            /* Uncond */
+            if (is_ext_resnet) {
+                if (compute_and_set_unet_resnet_biases(enc, st.timestep, te_uncond, tid) != 0) return 1;
+            } else {
+                tensor_set_f32(enc, (uint32_t)enc_tid_idx, tid, 6);
+                tensor_set_f32(enc, (uint32_t)enc_te_idx, te_uncond, 1280);
+            }
+            unet_set_enc_hidden(enc, (uint32_t)enc_enc_idx, pe_uncond);
+            if (is_split && dec) unet_set_enc_hidden(dec, 0, pe_uncond);
+            double tq0 = now_ms();
+            g_qnn.graphExecute(enc->graphHandle, enc->inputs, enc->numInputs, enc->outputs, enc->numOutputs, g_profHandle, NULL);
+            g_perf.qnn_wall_ms += (now_ms() - tq0);
+            g_perf.unet_passes++;
+            if (g_profHandle) collect_qnn_profile_events(g_profHandle, 0);
+            if (is_split && dec) {
+                for (int p = 0; p < num_pipes; ++p)
+                    memcpy(dec->inputBufs[pipes[p].dec_in_idx], enc->outputBufs[pipes[p].enc_out_idx], pipes[p].copy_size);
+                g_qnn.graphExecute(dec->graphHandle, dec->inputs, dec->numInputs, dec->outputs, dec->numOutputs, g_profHandle, NULL);
+            }
+            unet_get_noise_pred_nchw(final_out_slot, 0, uncond_pred_buf, latent_h, latent_w);
+
+            /* Cond */
+            if (is_ext_resnet) {
+                compute_and_set_unet_resnet_biases(enc, st.timestep, te_cond, tid);
+            } else {
+                tensor_set_f32(enc, (uint32_t)enc_tid_idx, tid, 6);
+                tensor_set_f32(enc, (uint32_t)enc_te_idx, te_cond, 1280);
+            }
+            unet_set_enc_hidden(enc, (uint32_t)enc_enc_idx, pe_cond);
+            if (is_split && dec) unet_set_enc_hidden(dec, 0, pe_cond);
+            double tq1 = now_ms();
+            g_qnn.graphExecute(enc->graphHandle, enc->inputs, enc->numInputs, enc->outputs, enc->numOutputs, g_profHandle, NULL);
+            g_perf.qnn_wall_ms += (now_ms() - tq1);
+            g_perf.unet_passes++;
+            if (g_profHandle) collect_qnn_profile_events(g_profHandle, 0);
+            if (is_split && dec) {
+                for (int p = 0; p < num_pipes; ++p)
+                    memcpy(dec->inputBufs[pipes[p].dec_in_idx], enc->outputBufs[pipes[p].enc_out_idx], pipes[p].copy_size);
+                g_qnn.graphExecute(dec->graphHandle, dec->inputs, dec->numInputs, dec->outputs, dec->numOutputs, g_profHandle, NULL);
+            }
+            unet_get_noise_pred_nchw(final_out_slot, 0, cond_pred_buf, latent_h, latent_w);
+
+            float delta = st.sigma_next - st.sigma;
+            float base_boost = cfg_scale - 1.0f;
+            for (int c = 0; c < 4; ++c) {
+                size_t ch_off = (size_t)c * spatial_lat;
+                for (size_t p = 0; p < spatial_lat; ++p) {
+                    size_t i = ch_off + p;
+                    float d_cfg = cond_pred_buf[i] - uncond_pred_buf[i];
+                    float w_px = 1.0f + base_boost * spatial_cfg_mask[p];
+                    float guided = uncond_pred_buf[i] + w_px * d_cfg;
+                    latent[i] += delta * guided;
+                    if (cfg_cache_mode == 1 && s == cfg_cutoff - 1) {
+                        uncond_pred_buf[i] = d_cfg * spatial_cfg_mask[p];
+                    }
+                }
+            }
+        } else {
+            if (is_ext_resnet) {
+                if (compute_and_set_unet_resnet_biases(enc, st.timestep, te_cond, tid) != 0) return 1;
+            } else {
+                tensor_set_f32(enc, (uint32_t)enc_tid_idx, tid, 6);
+                tensor_set_f32(enc, (uint32_t)enc_te_idx, te_cond, 1280);
+            }
+            unet_set_enc_hidden(enc, (uint32_t)enc_enc_idx, pe_cond);
+            if (is_split && dec) unet_set_enc_hidden(dec, 0, pe_cond);
+            double tq2 = now_ms();
+            g_qnn.graphExecute(enc->graphHandle, enc->inputs, enc->numInputs, enc->outputs, enc->numOutputs, g_profHandle, NULL);
+            g_perf.qnn_wall_ms += (now_ms() - tq2);
+            g_perf.unet_passes++;
+            if (g_profHandle) collect_qnn_profile_events(g_profHandle, 0);
+            if (is_split && dec) {
+                for (int p = 0; p < num_pipes; ++p)
+                    memcpy(dec->inputBufs[pipes[p].dec_in_idx], enc->outputBufs[pipes[p].enc_out_idx], pipes[p].copy_size);
+                g_qnn.graphExecute(dec->graphHandle, dec->inputs, dec->numInputs, dec->outputs, dec->numOutputs, g_profHandle, NULL);
+            }
+            unet_get_noise_pred_nchw(final_out_slot, 0, cond_pred_buf, latent_h, latent_w);
+
+            float delta = st.sigma_next - st.sigma;
+            if (use_cfg && cfg_cache_mode == 1 && uncond_pred_buf && cfg_cutoff > 0) {
+                /* Sigma-Damped Delta-Cache: guided = cond + (w - 1) * decay * cached_delta */
+                float sigma_ref = sched[cfg_cutoff - 1].sigma;
+                float decay = (sigma_ref > 1e-5f) ? (0.35f * (st.sigma / sigma_ref)) : 0.0f;
+                float w_eff = (cfg_scale - 1.0f) * decay;
+                for (size_t i = 0; i < num_latent; ++i) {
+                    float guided = cond_pred_buf[i] + w_eff * uncond_pred_buf[i];
+                    latent[i] += delta * guided;
+                }
+            } else if (use_cfg && cfg_cache_mode == 2 && uncond_pred_buf) {
+                /* Uncond-Cache: guided = cached_uncond + w * (cond - cached_uncond) */
+                float base_boost = cfg_scale - 1.0f;
+                for (int c = 0; c < 4; ++c) {
+                    size_t ch_off = (size_t)c * spatial_lat;
+                    for (size_t p = 0; p < spatial_lat; ++p) {
+                        size_t i = ch_off + p;
+                        float w_px = 1.0f + base_boost * spatial_cfg_mask[p];
+                        float guided = uncond_pred_buf[i] + w_px * (cond_pred_buf[i] - uncond_pred_buf[i]);
+                        latent[i] += delta * guided;
+                    }
+                }
+            } else {
+                for (size_t i = 0; i < num_latent; ++i) latent[i] += delta * cond_pred_buf[i];
+            }
+        }
+        const char* step_tag = step_cfg ? " CFG" : ((use_cfg && cfg_cache_mode == 1) ? " CFG-dCache" : ((use_cfg && cfg_cache_mode == 2) ? " CFG-uCache" : ""));
+        fprintf(stderr, "  [UNet %d/%d]%s %.0fms\n", s + 1, steps, step_tag, now_ms() - ts0);
+    }
+    double total_unet_ms = now_ms() - t_unet0;
+    free(spatial_cfg_mask);
+
+    if (is_split) {
+        cmd_unload("dec");
+        cmd_unload("enc");
+    }
+
+    /* 5. Load & Run VAE Decoder */
+    if (cmd_load("vae", vae_bin_path) != 0) return 1;
+    ContextSlot* vae = &g_slots[find_slot("vae")];
+
+    const float inv_scaling = 1.0f / 0.13025f;
+    for (size_t i = 0; i < num_latent; ++i) scaled_sample[i] = latent[i] * inv_scaling;
+    unet_set_sample_nchw(vae, 0, scaled_sample, latent_h, latent_w);
+
+    double t_vae0 = now_ms();
+    if (QNN_SUCCESS != g_qnn.graphExecute(vae->graphHandle, vae->inputs, vae->numInputs,
+                                          vae->outputs, vae->numOutputs, g_profHandle, NULL)) {
+        return 1;
+    }
+    double total_vae_ms = now_ms() - t_vae0;
+    g_perf.vae_wall_ms = total_vae_ms;
+    if (g_profHandle) collect_qnn_profile_events(g_profHandle, 1);
+    fprintf(stderr, "[VAE] %.0fms\n", total_vae_ms);
+
+    /* Extract centered active [act_H, act_W, 3] RGB sub-image from VAE output */
+    size_t act_rgb_elems = (size_t)act_W * (size_t)act_H * 3;
+    float* img_f32 = (float*)malloc(act_rgb_elems * sizeof(float));
+    vae_get_rgb_subrect(vae, 0, img_f32, crop_y, crop_x, act_H, act_W);
+
+    /* If target (width, height) > bucket (act_W, act_H), reconstruct via 4x4 Catmull-Rom + CAS */
+    if (width != act_W || height != act_H) {
+        double tr0 = now_ms();
+        float* hi_f32 = resize_rgb_catmull_rom_cas(img_f32, act_W, act_H, width, height, 0.65f);
+        if (hi_f32) {
+            free(img_f32);
+            img_f32 = hi_f32;
+            fprintf(stderr, "[CatmullRom+CAS] %dx%d -> %dx%d in %.1fms\n",
+                    act_W, act_H, width, height, now_ms() - tr0);
+        }
+    }
+
+    size_t num_rgb = (size_t)width * (size_t)height * 3;
+
+    /* Normalize [-1, 1] -> [0, 1] and compute [0.5%, 99.5%] contrast stretch via 4096-bin histogram */
+    uint32_t hist[4096] = {0};
+    for (size_t i = 0; i < num_rgb; ++i) {
+        float v = img_f32[i] * 0.5f + 0.5f;
+        if (v < 0.0f) v = 0.0f;
+        else if (v > 1.0f) v = 1.0f;
+        img_f32[i] = v;
+        int bin = (int)(v * 4095.0f + 0.5f);
+        if (bin < 0) bin = 0; else if (bin > 4095) bin = 4095;
+        hist[bin]++;
+    }
+    uint32_t target_lo = (uint32_t)(num_rgb * 0.005);
+    uint32_t target_hi = (uint32_t)(num_rgb * 0.995);
+    uint32_t acc = 0;
+    int bin_lo = 0, bin_hi = 4095;
+    for (int b = 0; b < 4096; ++b) {
+        acc += hist[b];
+        if (acc >= target_lo) { bin_lo = b; break; }
+    }
+    acc = 0;
+    for (int b = 0; b < 4096; ++b) {
+        acc += hist[b];
+        if (acc >= target_hi) { bin_hi = b; break; }
+    }
+    float lo = (float)bin_lo / 4095.0f;
+    float hi = (float)bin_hi / 4095.0f;
+    float range = (hi - lo > 0.05f) ? (hi - lo) : 1.0f;
+    float base_lo = (hi - lo > 0.05f) ? lo : 0.0f;
+
+    uint8_t* rgb_u8 = (uint8_t*)malloc(num_rgb);
+    for (size_t i = 0; i < num_rgb; ++i) {
+        float v = (img_f32[i] - base_lo) / range;
+        if (v < 0.0f) v = 0.0f;
+        else if (v > 1.0f) v = 1.0f;
+        rgb_u8[i] = (uint8_t)(v * 255.0f + 0.5f);
+    }
+
+    if (save_rgb_png(out_png_path, rgb_u8, width, height) != 0) {
+        fprintf(stderr, "ERR: failed to write PNG %s\n", out_png_path);
+        return 1;
+    }
+
+    if (g_perf.enabled) {
+        print_npu_utilization_report(graph_W, graph_H, act_W, act_H, total_unet_ms, total_vae_ms);
+    }
+
+    double total_wall_s = (now_ms() - t_total0) / 1000.0;
+    fprintf(stderr, "\n========================================\n");
+    fprintf(stderr, "Saved: %s (%dx%d)\n", out_png_path, width, height);
+    fprintf(stderr, "CLIP: %.0fms | UNet (%s): %.0fms (%.0fms/step) | VAE: %.0fms\n",
+            total_clip_ms, unet_mode, total_unet_ms, total_unet_ms / steps, total_vae_ms);
+    fprintf(stderr, "Total Wall Time: %.2fs\n", total_wall_s);
+    fprintf(stderr, "========================================\n");
+
+    if (g_profHandle && g_qnn.profileFree) {
+        g_qnn.profileFree(g_profHandle);
+        g_profHandle = NULL;
+    }
+
+    free(rgb_u8);
+    free(img_f32);
+    free(scaled_sample);
+    free(cond_pred_buf);
+    if (uncond_pred_buf) free(uncond_pred_buf);
+    free(latent);
+    free(pe_cond);
+    free(te_cond);
+    if (pe_uncond) free(pe_uncond);
+    if (te_uncond) free(te_uncond);
     return 0;
 }
 
@@ -1642,26 +4256,50 @@ static int dispatch_command_line(char* line) {
 
 static void usage(const char* prog) {
     fprintf(stderr,
-        "Usage: %s --backend <libQnnHtp.so> --system_lib <libQnnSystem.so>\n"
-        "\nPersistent multi-context QNN server.\n"
-        "Reads commands from stdin/stdout by default, or via optional shared FIFOs.\n"
-        "\nCommands:\n"
-        "  PING\n"
-        "  LOAD <id> <context_binary_path>\n"
-        "  UNLOAD <id>\n"
-        "  RUN <id> <input_list_path> <output_dir>\n"
-        "  RUN_CHAIN <enc_id> <dec_id> <enc_input_list> <dec_input_list> <output_dir> [enc_out:dec_in ...]\n"
-        "  QUIT\n"
-        "\nOptions:\n"
+        "Usage: %s --backend <libQnnHtp.so> --system_lib <libQnnSystem.so> [options]\n"
+        "\nPersistent multi-context QNN server & Standalone SDXL CLI Engine.\n"
+        "\nStandalone CLI Generation Options:\n"
+        "  --prompt <text>         Generate SDXL image directly in C (no Python/root/APK)\n"
+        "  --neg <text>            Negative prompt (optional)\n"
+        "  --width <int>           Target width (multiple of 8, default: 1024)\n"
+        "  --height <int>          Target height (multiple of 8, default: 1024)\n"
+        "  --res <WxH>             Target resolution shorthand (e.g. 832x1216, 768x1024, 1344x1728)\n"
+        "  --pad_mode <mode>       Sub-canvas boundary isolation: reflect (default), tile, zero\n"
+        "  --seed <uint>           Random seed (default: 42)\n"
+        "  --steps <int>           Denoising steps (default: 8)\n"
+        "  --cfg <float>           CFG guidance scale (default: 3.5, 1.0 = no CFG)\n"
+        "  --prog_cfg              Progressive CFG (5/8 steps + sigma-damped delta-cache)\n"
+        "  --cfg_cutoff <int>      Number of initial steps with full 2-pass CFG (1..steps)\n"
+        "  --cfg_cache <mode>      After cutoff: none (CFG=1), delta (reuse cond-uncond), uncond (reuse uncond)\n"
+        "  --full_cfg              Full CFG on all steps (default)\n"
+        "  --profile               Print NPU hardware utilization & host bottleneck audit\n"
+        "  --legacy_temb           Disable NEON + 64KB block-doubling RPCMEM optimization (for A/B test)\n"
+        "  --mode <mono|split>     UNet mode: mono (W8A16 monolithic, default) or split\n"
+        "  --base_dir <path>       SDXL base dir (default: /sdcard/Download/sdxl_qnn)\n"
+        "  --out <png_path>        Output PNG file path\n"
+        "\nServer Options:\n"
         "  --request_fifo <path>   Optional request FIFO for shared-server mode\n"
         "  --response_fifo <path>  Optional response FIFO for shared-server mode\n", prog);
 }
 
 int main(int argc, char** argv) {
-    const char* backend_path = NULL;
-    const char* system_path = NULL;
+    const char* backend_path = "libQnnHtp.so";
+    const char* system_path = "libQnnSystem.so";
     const char* request_fifo = NULL;
     const char* response_fifo = NULL;
+    const char* prompt = NULL;
+    const char* neg_prompt = NULL;
+    const char* unet_mode = "mono";
+    const char* base_dir = "/sdcard/Download/sdxl_qnn";
+    const char* out_png = "/sdcard/Download/sdxl_qnn/outputs/standalone_out.png";
+    uint32_t seed = 42;
+    int steps = 8;
+    float cfg_scale = 3.5f;
+    int cfg_cutoff = 0; /* 0 = full CFG (all steps) */
+    int cfg_cache_mode = 0; /* 0 = none (CFG=1 after cutoff), 1 = delta, 2 = uncond */
+    int req_width = 1024;
+    int req_height = 1024;
+    int pad_mode = 0; /* 0 = reflect, 1 = tile, 2 = zero */
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
@@ -1672,11 +4310,64 @@ int main(int argc, char** argv) {
             request_fifo = argv[++i];
         } else if (strcmp(argv[i], "--response_fifo") == 0 && i + 1 < argc) {
             response_fifo = argv[++i];
+        } else if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
+            prompt = argv[++i];
+        } else if (strcmp(argv[i], "--neg") == 0 && i + 1 < argc) {
+            neg_prompt = argv[++i];
+        } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
+            req_width = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
+            req_height = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--res") == 0 && i + 1 < argc) {
+            const char* rstr = argv[++i];
+            int rw = 0, rh = 0;
+            if (sscanf(rstr, "%dx%d", &rw, &rh) == 2 || sscanf(rstr, "%dX%d", &rw, &rh) == 2) {
+                req_width = rw;
+                req_height = rh;
+            }
+        } else if (strcmp(argv[i], "--pad_mode") == 0 && i + 1 < argc) {
+            const char* pm = argv[++i];
+            if (strcmp(pm, "tile") == 0) pad_mode = 1;
+            else if (strcmp(pm, "zero") == 0) pad_mode = 2;
+            else pad_mode = 0;
+        } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+            seed = (uint32_t)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--steps") == 0 && i + 1 < argc) {
+            steps = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--cfg") == 0 && i + 1 < argc) {
+            cfg_scale = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--prog_cfg") == 0 || strcmp(argv[i], "--prog-cfg") == 0) {
+            cfg_cutoff = -1; /* resolve to 5/8 steps + sigma-damped delta-cache after parsing */
+            if (cfg_cache_mode == 0) cfg_cache_mode = 1;
+        } else if (strcmp(argv[i], "--cfg_cutoff") == 0 && i + 1 < argc) {
+            cfg_cutoff = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--cfg_cache") == 0 && i + 1 < argc) {
+            const char* cm = argv[++i];
+            if (strcmp(cm, "delta") == 0) cfg_cache_mode = 1;
+            else if (strcmp(cm, "uncond") == 0) cfg_cache_mode = 2;
+            else cfg_cache_mode = 0;
+        } else if (strcmp(argv[i], "--full_cfg") == 0 || strcmp(argv[i], "--no_prog_cfg") == 0) {
+            cfg_cutoff = 0;
+            cfg_cache_mode = 0;
+        } else if (strcmp(argv[i], "--profile") == 0) {
+            g_perf.enabled = 1;
+        } else if (strcmp(argv[i], "--profile_detailed") == 0) {
+            g_perf.enabled = 1;
+            g_perf.detailed = 1;
+        } else if (strcmp(argv[i], "--legacy_temb") == 0) {
+            g_use_legacy_temb = 1;
+        } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            unet_mode = argv[++i];
+        } else if (strcmp(argv[i], "--base_dir") == 0 && i + 1 < argc) {
+            base_dir = argv[++i];
+        } else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
+            out_png = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
         }
     }
+    if (cfg_cutoff == -1) cfg_cutoff = (steps * 5 + 4) / 8;
 
     if (!backend_path || !system_path) {
         usage(argv[0]);
@@ -1704,6 +4395,15 @@ int main(int argc, char** argv) {
 
     /* Set HTP performance mode */
     set_perf_mode();
+
+    /* Standalone CLI Generation Mode */
+    if (prompt != NULL) {
+        int rc = run_standalone_generate(base_dir, prompt, neg_prompt, seed, steps, cfg_scale,
+                                         cfg_cutoff, cfg_cache_mode, req_width, req_height,
+                                         pad_mode, unet_mode, out_png);
+        cleanup_all();
+        return rc;
+    }
 
     fprintf(stderr, "[server] Ready (backend=%s)\n", backend_path);
     printf("READY\n");

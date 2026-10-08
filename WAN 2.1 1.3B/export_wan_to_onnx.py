@@ -14,8 +14,8 @@ from typing import Any, cast
 import torch
 
 
-DEFAULT_MODEL_DIR = Path(r"D:\platform-tools\wan21_13b_work\official_core\official-diffusers")
-DEFAULT_OUT_DIR = Path(r"D:\platform-tools\wan21_13b_work\onnx")
+DEFAULT_MODEL_DIR = Path(__file__).parent / "downloads" / "int8-diffusers"
+DEFAULT_OUT_DIR = Path(__file__).parent / "output"
 AIHUB_EXTERNAL_DATA_INLINE_THRESHOLD_BYTES = 1024
 
 
@@ -35,7 +35,8 @@ class ExportableRMSNorm(torch.nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_dtype = hidden_states.dtype
         x = hidden_states.to(torch.float32)
-        dims = tuple(range(-len(self.normalized_shape), 0))
+        # Явно указываем axis как список для корректного ONNX экспорта
+        dims = list(range(-len(self.normalized_shape), 0))
         variance = x.pow(2).mean(dim=dims, keepdim=True)
         x = x * torch.rsqrt(variance + self.eps)
         if self.weight is not None:
@@ -64,7 +65,8 @@ class ExportableLayerNorm(torch.nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_dtype = hidden_states.dtype
         x = hidden_states.to(torch.float32)
-        dims = tuple(range(-len(self.normalized_shape), 0))
+        # Явно указываем axis как список для корректного ONNX экспорта
+        dims = list(range(-len(self.normalized_shape), 0))
         mean = x.mean(dim=dims, keepdim=True)
         variance = (x - mean).pow(2).mean(dim=dims, keepdim=True)
         x = (x - mean) * torch.rsqrt(variance + self.eps)
@@ -640,15 +642,40 @@ def export_transformer(
     consolidate_external_data: bool,
 ) -> dict[str, Any]:
     from diffusers import WanTransformer3DModel
+    import json
 
     _release_torch_memory()
 
-    transformer = WanTransformer3DModel.from_pretrained(
-        str(model_dir),
-        subfolder="transformer",
-        torch_dtype=torch.float16,
-        local_files_only=True,
-    )
+    # Load transformer, handling unsupported quantization configs
+    transformer_config_path = model_dir / "transformer" / "config.json"
+    try:
+        transformer = WanTransformer3DModel.from_pretrained(
+            str(model_dir),
+            subfolder="transformer",
+            torch_dtype=torch.float16,
+            local_files_only=True,
+        )
+    except ValueError as e:
+        if "Unknown quantization type" in str(e):
+            print(f"[warn] quantization config not supported by diffusers, removing it: {e}")
+            # Temporarily remove quantization config
+            if transformer_config_path.exists():
+                with open(transformer_config_path, 'r') as f:
+                    config = json.load(f)
+                if 'quantization_config' in config:
+                    del config['quantization_config']
+                    # Create temporary config without quantization
+                    with open(transformer_config_path, 'w') as f:
+                        json.dump(config, f, indent=2)
+            
+            transformer = WanTransformer3DModel.from_pretrained(
+                str(model_dir),
+                subfolder="transformer",
+                torch_dtype=torch.float16,
+                local_files_only=True,
+            )
+        else:
+            raise
     transformer.eval()
     transformer.to(dtype=torch.float16)
     replaced_count = _replace_rmsnorm_modules(transformer)
@@ -885,14 +912,58 @@ def export_vae_decoder(
     return metadata
 
 
+WAN_EXPORT_PROFILES: dict[str, dict[str, Any]] = {
+    "full-480p": {
+        "height": 480,
+        "width": 832,
+        "num_frames": 17,
+        "max_seq_len": 128,
+        "note": "Текущий полный 480p baseline для Wan 2.1 1.3B.",
+    },
+    "aihub-compact": {
+        "height": 256,
+        "width": 448,
+        "num_frames": 9,
+        "max_seq_len": 128,
+        "note": "Рекомендуемый следующий компактный AI Hub-кандидат: меньше spatial/temporal токенов при сохранении разумного smoke-test сценария.",
+    },
+    "aihub-mini": {
+        "height": 256,
+        "width": 256,
+        "num_frames": 5,
+        "max_seq_len": 128,
+        "note": "Самый маленький smoke-test профиль для проверки export/package/compile цепочки без претензии на качество.",
+    },
+}
+
+
+def _print_profile_list() -> None:
+    print("Available Wan export profiles:")
+    for name, info in WAN_EXPORT_PROFILES.items():
+        print(
+            f"- {name}: {info['width']}x{info['height']}, "
+            f"{info['num_frames']} frames, seq {info['max_seq_len']}"
+        )
+        note = str(info.get("note", "")).strip()
+        if note:
+            print(f"  {note}")
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Export Wan 2.1 1.3B components to fixed-shape ONNX for phone QNN experiments.")
     ap.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    ap.add_argument("--height", type=int, default=480)
-    ap.add_argument("--width", type=int, default=832)
-    ap.add_argument("--num-frames", type=int, default=17)
-    ap.add_argument("--max-seq-len", type=int, default=128)
+    ap.add_argument(
+        "--profile",
+        choices=sorted(WAN_EXPORT_PROFILES.keys()),
+        default="full-480p",
+        help="Named fixed-shape export preset. Explicit --height/--width/--num-frames override the selected profile.",
+    )
+    ap.add_argument("--list-profiles", action="store_true", help="Print available named export profiles and exit.")
+    ap.add_argument("--height", type=int, default=None)
+    ap.add_argument("--width", type=int, default=None)
+    ap.add_argument("--num-frames", type=int, default=None)
+    ap.add_argument("--max-seq-len", type=int, default=None)
     ap.add_argument("--opset", type=int, default=17)
     ap.add_argument("--exporter", choices=["torch_export", "legacy"], default="legacy")
     ap.add_argument("--export-device", choices=["auto", "cpu", "cuda"], default="auto")
@@ -929,9 +1000,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    if args.height % 16 != 0 or args.width % 16 != 0:
+    if args.list_profiles:
+        _print_profile_list()
+        return
+
+    profile = WAN_EXPORT_PROFILES[args.profile]
+    height = int(args.height if args.height is not None else profile["height"])
+    width = int(args.width if args.width is not None else profile["width"])
+    num_frames = int(args.num_frames if args.num_frames is not None else profile["num_frames"])
+    max_seq_len = int(args.max_seq_len if args.max_seq_len is not None else profile["max_seq_len"])
+
+    if height % 16 != 0 or width % 16 != 0:
         raise SystemExit("height and width must be divisible by 16")
-    if (args.num_frames - 1) % 4 != 0:
+    if (num_frames - 1) % 4 != 0:
         raise SystemExit("num_frames must satisfy (num_frames - 1) % 4 == 0")
     if not args.model_dir.exists():
         raise SystemExit(f"Model dir not found: {args.model_dir}")
@@ -941,11 +1022,15 @@ def main() -> None:
 
     export_device = _resolve_export_device(args.export_device)
     print(f"[info] export device: {export_device}")
+    print(f"[info] export profile: {args.profile} ({width}x{height}, {num_frames} frames, seq {max_seq_len})")
+    profile_note = str(profile.get("note", "")).strip()
+    if profile_note:
+        print(f"[info] profile note: {profile_note}")
     if args.cpu_threads and args.cpu_threads > 0:
         print(f"[info] torch CPU threads: {args.cpu_threads}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    run_tag = f"wan_t2v_1p3b_{args.width}x{args.height}_{args.num_frames}f_seq{args.max_seq_len}"
+    run_tag = f"wan_t2v_1p3b_{width}x{height}_{num_frames}f_seq{max_seq_len}"
     run_root = args.out_dir / run_tag
     run_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_root / "export_manifest.json"
@@ -955,15 +1040,29 @@ def main() -> None:
         manifest = {
             "run_tag": run_tag,
             "model_dir": str(args.model_dir),
-            "height": args.height,
-            "width": args.width,
-            "num_frames": args.num_frames,
-            "max_sequence_length": args.max_seq_len,
+            "profile": args.profile,
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+            "max_sequence_length": max_seq_len,
             "opset": args.opset,
             "exporter": args.exporter,
             "export_device": str(export_device),
             "components": {},
         }
+
+    manifest.update(
+        {
+            "profile": args.profile,
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+            "max_sequence_length": max_seq_len,
+            "opset": args.opset,
+            "exporter": args.exporter,
+            "export_device": str(export_device),
+        }
+    )
 
     if args.component in {"all", "transformer"}:
         transformer_dir = run_root / "transformer"
@@ -976,10 +1075,10 @@ def main() -> None:
                 device=export_device,
                 transformer_interface=args.transformer_interface,
                 patch_embedding_mode=args.transformer_patch_mode,
-                height=args.height,
-                width=args.width,
-                num_frames=args.num_frames,
-                max_sequence_length=args.max_seq_len,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                max_sequence_length=max_seq_len,
                 opset=args.opset,
                 exporter=args.exporter,
                 do_constant_folding=args.do_constant_folding,
@@ -996,10 +1095,10 @@ def main() -> None:
                 device=torch.device("cpu"),
                 transformer_interface=args.transformer_interface,
                 patch_embedding_mode=args.transformer_patch_mode,
-                height=args.height,
-                width=args.width,
-                num_frames=args.num_frames,
-                max_sequence_length=args.max_seq_len,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                max_sequence_length=max_seq_len,
                 opset=args.opset,
                 exporter=args.exporter,
                 do_constant_folding=args.do_constant_folding,
@@ -1024,9 +1123,9 @@ def main() -> None:
                 args.model_dir,
                 vae_path,
                 device=export_device,
-                height=args.height,
-                width=args.width,
-                num_frames=args.num_frames,
+                height=height,
+                width=width,
+                num_frames=num_frames,
                 opset=args.opset,
                 exporter=args.exporter,
                 do_constant_folding=args.do_constant_folding,
@@ -1041,9 +1140,9 @@ def main() -> None:
                 args.model_dir,
                 vae_path,
                 device=torch.device("cpu"),
-                height=args.height,
-                width=args.width,
-                num_frames=args.num_frames,
+                height=height,
+                width=width,
+                num_frames=num_frames,
                 opset=args.opset,
                 exporter=args.exporter,
                 do_constant_folding=args.do_constant_folding,

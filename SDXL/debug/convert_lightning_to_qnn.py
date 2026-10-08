@@ -224,7 +224,9 @@ def step5_qnn_convert(mode: str, qnn_out: Path, calib_out: Path, args):
     ]
 
     applied_int8_defaults: dict[str, object] = {}
+    applied_w8a16_defaults: dict[str, object] = {}
     use_per_channel_quantization = args.use_per_channel_quantization
+    param_quantizer_schema = args.param_quantizer_schema
     bias_bitwidth = args.bias_bitwidth
     act_quantizer_calibration = args.act_quantizer_calibration
     percentile_calibration_value = args.percentile_calibration_value
@@ -240,6 +242,14 @@ def step5_qnn_convert(mode: str, qnn_out: Path, calib_out: Path, args):
             "--weights_bitwidth", "8",
         ]
         label = "QNN ONNX → model (W8A16)"
+        # Jeweler precision: enforce per-channel weight quantization and symmetric schema
+        # to eliminate cross-attention degradation and the 3D-render plastic artifact.
+        if not use_per_channel_quantization and getattr(args, "w8a16_per_channel_default", True):
+            use_per_channel_quantization = True
+            applied_w8a16_defaults["use_per_channel_quantization"] = True
+        if param_quantizer_schema is None:
+            param_quantizer_schema = "symmetric"
+            applied_w8a16_defaults["param_quantizer_schema"] = "symmetric"
     elif mode == "int8":
         cmd += [
             "--input_list", str(input_list_file),
@@ -261,6 +271,8 @@ def step5_qnn_convert(mode: str, qnn_out: Path, calib_out: Path, args):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+    if applied_w8a16_defaults:
+        print(f"[w8a16 defaults] applied jeweler-precision preset: {applied_w8a16_defaults}")
     if applied_int8_defaults:
         print(f"[int8 defaults] applied gentle preset: {applied_int8_defaults}")
 
@@ -278,10 +290,12 @@ def step5_qnn_convert(mode: str, qnn_out: Path, calib_out: Path, args):
         cmd += ["--param_quantizer_calibration", args.param_quantizer_calibration]
     if args.act_quantizer_schema:
         cmd += ["--act_quantizer_schema", args.act_quantizer_schema]
-    if args.param_quantizer_schema:
-        cmd += ["--param_quantizer_schema", args.param_quantizer_schema]
+    if param_quantizer_schema:
+        cmd += ["--param_quantizer_schema", param_quantizer_schema]
     if percentile_calibration_value is not None:
         cmd += ["--percentile_calibration_value", str(percentile_calibration_value)]
+    if getattr(args, "quantization_overrides", None):
+        cmd += ["--quantization_overrides", str(args.quantization_overrides)]
     if args.quantizer_log:
         cmd += ["--quantizer_log", args.quantizer_log]
     if args.quantizer_log_level:
@@ -382,6 +396,12 @@ def main():
                     help="Optional quantizer v2 log file path")
     ap.add_argument("--quantizer-log-level", type=str, default=None,
                     help="Optional quantizer v2 log level")
+    ap.add_argument("--quantization-overrides", type=str, default=None,
+                    help="Optional JSON file path with per-tensor quantization overrides for QNN converter")
+    ap.add_argument("--w8a16-per-channel-default", dest="w8a16_per_channel_default", action="store_true", default=True,
+                    help="Auto-enable per-channel weight quantization for W8A16")
+    ap.add_argument("--no-w8a16-per-channel-default", dest="w8a16_per_channel_default", action="store_false",
+                    help="Disable automatic per-channel weight quantization for W8A16")
     ap.add_argument("--int8-gentle-defaults", dest="int8_gentle_defaults", action="store_true", default=True,
                     help="For --mode int8, auto-apply a safer preset when explicit quantizer flags are missing")
     ap.add_argument("--no-int8-gentle-defaults", dest="int8_gentle_defaults", action="store_false",
