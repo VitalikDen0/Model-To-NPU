@@ -73,6 +73,7 @@ typedef int   (*rpcmem_to_fd_fn_t)(void* po);
 typedef void  (*rpcmem_init_fn_t)(void);
 typedef void  (*rpcmem_deinit_fn_t)(void);
 
+static const char* g_rpc_lib_path = NULL;
 static void* g_rpcmem_lib = NULL;
 static rpcmem_alloc_fn_t  g_rpcmem_alloc  = NULL;
 static rpcmem_free_fn_t   g_rpcmem_free   = NULL;
@@ -81,10 +82,63 @@ static rpcmem_init_fn_t   g_rpcmem_init   = NULL;
 static rpcmem_deinit_fn_t g_rpcmem_deinit = NULL;
 static int g_rpcmem_available = 0;
 
-static void init_rpcmem(const char* backend_path) {
-    char path[1024];
-    // 1. Try in the same directory as backend_path (e.g. <dir>/libcdsprpc.so)
+static void setup_dsp_environment(const char* backend_path, const char* base_dir) {
+    char adsp_buf[4096];
+    char ld_buf[4096];
+    char backend_dir[512] = "";
     if (backend_path) {
+        const char* slash = strrchr(backend_path, '/');
+        if (slash) {
+            size_t len = (size_t)(slash - backend_path);
+            if (len < sizeof(backend_dir) - 1) {
+                memcpy(backend_dir, backend_path, len);
+                backend_dir[len] = '\0';
+            }
+        }
+    }
+
+    /* ADSP_LIBRARY_PATH: semicolon-separated paths used by FastRPC / cDSP loader */
+    snprintf(adsp_buf, sizeof(adsp_buf),
+        "%s;%s/lib;/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib;/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib;/data/local/tmp/sdxl_test/lib;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp",
+        backend_dir[0] ? backend_dir : "/sdcard/Download/sdxl_qnn/lib",
+        base_dir ? base_dir : "/sdcard/Download/sdxl_qnn");
+
+    const char* prev_adsp = getenv("ADSP_LIBRARY_PATH");
+    if (prev_adsp && prev_adsp[0]) {
+        size_t cur_len = strlen(adsp_buf);
+        snprintf(adsp_buf + cur_len, sizeof(adsp_buf) - cur_len, ";%s", prev_adsp);
+    }
+    setenv("ADSP_LIBRARY_PATH", adsp_buf, 1);
+    fprintf(stderr, "[server] ADSP_LIBRARY_PATH: %s\n", adsp_buf);
+
+    /* LD_LIBRARY_PATH: colon-separated paths used by bionic dynamic linker */
+    snprintf(ld_buf, sizeof(ld_buf),
+        "%s:%s/lib:/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib:/vendor/lib64:/system/lib64",
+        backend_dir[0] ? backend_dir : "/sdcard/Download/sdxl_qnn/lib",
+        base_dir ? base_dir : "/sdcard/Download/sdxl_qnn");
+    const char* prev_ld = getenv("LD_LIBRARY_PATH");
+    if (prev_ld && prev_ld[0]) {
+        size_t cur_len = strlen(ld_buf);
+        snprintf(ld_buf + cur_len, sizeof(ld_buf) - cur_len, ":%s", prev_ld);
+    }
+    setenv("LD_LIBRARY_PATH", ld_buf, 1);
+}
+
+static void init_rpcmem(const char* backend_path, const char* base_dir) {
+    char path[1024];
+
+    /* 1. Explicit --rpc_lib argument */
+    if (g_rpc_lib_path && g_rpc_lib_path[0]) {
+        g_rpcmem_lib = dlopen(g_rpc_lib_path, RTLD_NOW | RTLD_GLOBAL);
+        if (g_rpcmem_lib) {
+            fprintf(stderr, "[server] rpcmem: loaded from --rpc_lib: %s\n", g_rpc_lib_path);
+        } else {
+            fprintf(stderr, "[server] rpcmem: dlopen(%s) failed: %s\n", g_rpc_lib_path, dlerror());
+        }
+    }
+
+    /* 2. Same directory as backend_path (<backend_dir>/libcdsprpc.so) */
+    if (!g_rpcmem_lib && backend_path) {
         const char* slash = strrchr(backend_path, '/');
         if (slash) {
             size_t dir_len = (size_t)(slash - backend_path);
@@ -99,28 +153,60 @@ static void init_rpcmem(const char* backend_path) {
             }
         }
     }
-    // 2. Fallbacks
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/lib64/libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
+
+    /* 3. Base directory lib (<base_dir>/lib/libcdsprpc.so) */
+    if (!g_rpcmem_lib && base_dir) {
+        snprintf(path, sizeof(path), "%s/lib/libcdsprpc.so", base_dir);
+        g_rpcmem_lib = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+        if (g_rpcmem_lib) {
+            fprintf(stderr, "[server] rpcmem: loaded %s\n", path);
+        }
+    }
+
+    /* 4. Candidate application internal payload paths */
     if (!g_rpcmem_lib) {
-        fprintf(stderr, "[server] rpcmem: libcdsprpc.so not found, trying librpcmem.so\n");
-        if (backend_path) {
-            const char* slash = strrchr(backend_path, '/');
-            if (slash) {
-                size_t dir_len = (size_t)(slash - backend_path);
-                if (dir_len < sizeof(path) - 32) {
-                    memcpy(path, backend_path, dir_len);
-                    path[dir_len] = '\0';
-                    strcat(path, "/librpcmem.so");
-                    g_rpcmem_lib = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+        const char* app_paths[] = {
+            "/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib/libcdsprpc.so",
+            "/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/lib/libcdsprpc.so",
+            "/data/local/tmp/sdxl_test/lib/libcdsprpc.so",
+            NULL
+        };
+        for (int i = 0; !g_rpcmem_lib && app_paths[i]; ++i) {
+            if (access(app_paths[i], R_OK) == 0) {
+                g_rpcmem_lib = dlopen(app_paths[i], RTLD_NOW | RTLD_GLOBAL);
+                if (g_rpcmem_lib) {
+                    fprintf(stderr, "[server] rpcmem: loaded %s\n", app_paths[i]);
                 }
             }
         }
-        if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("librpcmem.so", RTLD_NOW | RTLD_GLOBAL);
-        if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/librpcmem.so", RTLD_NOW | RTLD_GLOBAL);
     }
+
+    /* 5. System dynamic linker resolution */
+    if (!g_rpcmem_lib) {
+        g_rpcmem_lib = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
+        if (g_rpcmem_lib) {
+            fprintf(stderr, "[server] rpcmem: loaded libcdsprpc.so via system linker\n");
+        }
+    }
+
+    /* 6. Vendor fallbacks */
+    if (!g_rpcmem_lib) {
+        const char* vendor_paths[] = {
+            "/vendor/lib64/libcdsprpc.so",
+            "/system/vendor/lib64/libcdsprpc.so",
+            "/system/lib64/libcdsprpc.so",
+            "/vendor/lib64/librpcmem.so",
+            "librpcmem.so",
+            NULL
+        };
+        for (int i = 0; !g_rpcmem_lib && vendor_paths[i]; ++i) {
+            g_rpcmem_lib = dlopen(vendor_paths[i], RTLD_NOW | RTLD_GLOBAL);
+            if (g_rpcmem_lib) {
+                fprintf(stderr, "[server] rpcmem: loaded %s\n", vendor_paths[i]);
+            }
+        }
+    }
+
     if (!g_rpcmem_lib) {
         fprintf(stderr, "[server] rpcmem: not available (%s), using regular malloc\n", dlerror());
         return;
@@ -369,8 +455,9 @@ static int find_slot(const char* id) {
 /*  QNN initialization                                                       */
 /* ========================================================================= */
 
-static int init_qnn(const char* backend_path, const char* system_path) {
-    init_rpcmem(backend_path);
+static int init_qnn(const char* backend_path, const char* system_path, const char* base_dir) {
+    setup_dsp_environment(backend_path, base_dir);
+    init_rpcmem(backend_path, base_dir);
     /* Load backend library */
     g_backendLib = dlopen(backend_path, RTLD_NOW | RTLD_LOCAL);
     if (!g_backendLib) {
@@ -3656,7 +3743,7 @@ static int file_exists_nonempty(const char* path) {
  * Searches <base_dir>/context/ for the tightest compiled QNN context binary (Wg >= req_W, Hg >= req_H).
  * Falls back to the default 1024x1024 context binary if no resolution-specific binary is found.
  */
-static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H,
+static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H, const char* lora_slot,
                                  char* out_unet_path, char* out_vae_path) {
     static const int buckets[][2] = {
         {768, 768},
@@ -3668,13 +3755,42 @@ static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H,
         {1536, 1536}
     };
     const int num_buckets = (int)(sizeof(buckets) / sizeof(buckets[0]));
+    out_unet_path[0] = '\0';
+    out_vae_path[0] = '\0';
+
+    /* Optional: Check LoRA slot context */
+    if (lora_slot && lora_slot[0] && strcmp(lora_slot, "None") != 0) {
+        char cand_l[MAX_PATH_LEN];
+        snprintf(cand_l, sizeof(cand_l), "%s/context/lora_slots/%s/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, lora_slot, req_W, req_H);
+        if (file_exists_nonempty(cand_l)) {
+            strcpy(out_unet_path, cand_l);
+            fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", cand_l);
+        } else {
+            snprintf(cand_l, sizeof(cand_l), "%s/context/lora_slots/%s/unet_lightning8step.serialized.bin.bin", base_dir, lora_slot);
+            if (file_exists_nonempty(cand_l)) {
+                strcpy(out_unet_path, cand_l);
+                fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", cand_l);
+            } else {
+                snprintf(cand_l, sizeof(cand_l), "%s/context/%s/unet_lightning8step.serialized.bin.bin", base_dir, lora_slot);
+                if (file_exists_nonempty(cand_l)) {
+                    strcpy(out_unet_path, cand_l);
+                    fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", cand_l);
+                } else if (file_exists_nonempty(lora_slot)) {
+                    strcpy(out_unet_path, lora_slot);
+                    fprintf(stderr, "[server] LoRA: selected direct context '%s'\n", lora_slot);
+                } else {
+                    fprintf(stderr, "[server] LoRA: slot '%s' context not found, using base model\n", lora_slot);
+                }
+            }
+        }
+    }
 
     /* 1. Check exact resolution match first */
     char cand_u[MAX_PATH_LEN], cand_v[MAX_PATH_LEN];
     snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, req_W, req_H);
     snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder_%dx%d.serialized.bin.bin", base_dir, req_W, req_H);
     if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
-        strcpy(out_unet_path, cand_u);
+        if (!out_unet_path[0]) strcpy(out_unet_path, cand_u);
         strcpy(out_vae_path, cand_v);
         return;
     }
@@ -3709,13 +3825,15 @@ static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H,
     }
 
     if (best_u[0] && best_v[0]) {
-        strcpy(out_unet_path, best_u);
+        if (!out_unet_path[0]) strcpy(out_unet_path, best_u);
         strcpy(out_vae_path, best_v);
         return;
     }
 
     /* 3. Default fallback */
-    snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+    if (!out_unet_path[0]) {
+        snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+    }
     snprintf(out_vae_path,  MAX_PATH_LEN, "%s/context/vae_decoder.serialized.bin.bin", base_dir);
 }
 
@@ -3803,7 +3921,8 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
                                    const char* prompt, const char* neg_prompt,
                                    uint32_t seed, int steps, float cfg_scale, int cfg_cutoff_arg,
                                    int cfg_cache_mode, int req_width, int req_height, int pad_mode,
-                                   const char* unet_mode, const char* out_png_path) {
+                                   const char* unet_mode, const char* lora_slot, float lora_scale,
+                                   const char* out_png_path) {
     double t_total0 = now_ms();
 
     /* Validate & snap requested resolution to multiples of 8 within [512x512, 1536x1536] pixel budget */
@@ -3844,13 +3963,16 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
         }
     }
 
-    /* Resolve tightest covering context bucket */
+    /* Resolve tightest covering context bucket (with optional LoRA) */
     char unet_bin_path[MAX_PATH_LEN], vae_bin_path[MAX_PATH_LEN];
-    resolve_bucket_paths(base_dir, width, height, unet_bin_path, vae_bin_path);
+    resolve_bucket_paths(base_dir, width, height, lora_slot, unet_bin_path, vae_bin_path);
 
     fprintf(stderr, "================================================\n");
     fprintf(stderr, "[SDXL-NPU Standalone C Engine]\n");
     fprintf(stderr, "Prompt:     %s\n", prompt);
+    if (lora_slot && lora_slot[0] && strcmp(lora_slot, "None") != 0) {
+        fprintf(stderr, "LoRA:       %s (weight=%.2f)\n", lora_slot, lora_scale);
+    }
     fprintf(stderr, "Mode:       %s (steps=%d, cfg=%.2f, cutoff=%d/%d [%s], seed=%u)\n",
             unet_mode, steps, cfg_scale, cfg_cutoff, steps, cache_name, seed);
     fprintf(stderr, "Target Res: %dx%d (%.2f MP, pad=%s)\n",
@@ -3875,6 +3997,20 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
         snprintf(vocab_path, sizeof(vocab_path), "%s/tokenizer/vocab.json", base_dir);
         snprintf(merges_path, sizeof(merges_path), "%s/tokenizer/merges.txt", base_dir);
         if (access(vocab_path, R_OK) == 0 && access(merges_path, R_OK) == 0) tok_ok = 1;
+    }
+    if (!tok_ok) {
+        const char* app_tok_dirs[] = {
+            "/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/tokenizer",
+            "/data/user/0/com.sdxlnpu.app/files/termux_bundle/runtime_payload/phone_gen/tokenizer",
+            "/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/tokenizer",
+            "/data/data/com.sdxlnpu.app/files/termux_bundle/runtime_payload/phone_gen/tokenizer",
+            NULL
+        };
+        for (int i = 0; !tok_ok && app_tok_dirs[i]; ++i) {
+            snprintf(vocab_path, sizeof(vocab_path), "%s/vocab.json", app_tok_dirs[i]);
+            snprintf(merges_path, sizeof(merges_path), "%s/merges.txt", app_tok_dirs[i]);
+            if (access(vocab_path, R_OK) == 0 && access(merges_path, R_OK) == 0) tok_ok = 1;
+        }
     }
     if (!tok_ok) {
         snprintf(vocab_path, sizeof(vocab_path), "%s/vocab.json", base_dir);
@@ -4333,6 +4469,9 @@ static void usage(const char* prog) {
         "  --profile               Print NPU hardware utilization & host bottleneck audit\n"
         "  --legacy_temb           Disable NEON + 64KB block-doubling RPCMEM optimization (for A/B test)\n"
         "  --mode <mono|split>     UNet mode: mono (W8A16 monolithic, default) or split\n"
+        "  --lora <name|path>      LoRA slot name or direct context binary path\n"
+        "  --lora_scale <float>    LoRA strength scale (default: 1.0)\n"
+        "  --rpc_lib <path>        Path to libcdsprpc.so (for FastRPC/rpcmem initialization)\n"
         "  --base_dir <path>       SDXL base dir (default: /sdcard/Download/sdxl_qnn)\n"
         "  --out <png_path>        Output PNG file path\n"
         "\nServer Options:\n"
@@ -4349,6 +4488,8 @@ int main(int argc, char** argv) {
     const char* neg_prompt = NULL;
     const char* tokenizer_dir = NULL;
     const char* unet_mode = "mono";
+    const char* lora_slot = NULL;
+    float lora_scale = 1.0f;
     const char* base_dir = "/sdcard/Download/sdxl_qnn";
     const char* out_png = "/sdcard/Download/sdxl_qnn/outputs/standalone_out.png";
     uint32_t seed = 42;
@@ -4417,6 +4558,12 @@ int main(int argc, char** argv) {
             g_use_legacy_temb = 1;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             unet_mode = argv[++i];
+        } else if ((strcmp(argv[i], "--lora") == 0 || strcmp(argv[i], "--lora_slot") == 0) && i + 1 < argc) {
+            lora_slot = argv[++i];
+        } else if (strcmp(argv[i], "--lora_scale") == 0 && i + 1 < argc) {
+            lora_scale = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--rpc_lib") == 0 && i + 1 < argc) {
+            g_rpc_lib_path = argv[++i];
         } else if (strcmp(argv[i], "--tokenizer_dir") == 0 && i + 1 < argc) {
             tokenizer_dir = argv[++i];
         } else if (strcmp(argv[i], "--base_dir") == 0 && i + 1 < argc) {
@@ -4449,7 +4596,7 @@ int main(int argc, char** argv) {
 
     /* Init QNN */
     fprintf(stderr, "[server] Initializing QNN...\n");
-    if (init_qnn(backend_path, system_path) != 0) {
+    if (init_qnn(backend_path, system_path, base_dir) != 0) {
         fprintf(stderr, "[server] QNN initialization failed\n");
         return 1;
     }
@@ -4461,7 +4608,7 @@ int main(int argc, char** argv) {
     if (prompt != NULL) {
         int rc = run_standalone_generate(base_dir, tokenizer_dir, prompt, neg_prompt, seed, steps, cfg_scale,
                                          cfg_cutoff, cfg_cache_mode, req_width, req_height,
-                                         pad_mode, unet_mode, out_png);
+                                         pad_mode, unet_mode, lora_slot, lora_scale, out_png);
         cleanup_all();
         return rc;
     }

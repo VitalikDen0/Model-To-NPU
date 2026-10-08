@@ -125,6 +125,10 @@ public class MainActivity extends AppCompatActivity {
     private MaterialButton saveButton;
     private MaterialButton stopButton;
     private Spinner loraSpinner;
+    private View loraScaleContainer;
+    private TextView loraScaleLabel;
+    private SeekBar loraScaleSeekBar;
+    private float loraScale = 1.0f;
     private MaterialButton copyErrorButton;
     private ProgressBar progressBar;
     private TextView statusText;
@@ -236,6 +240,27 @@ public class MainActivity extends AppCompatActivity {
         saveButton = findViewById(R.id.saveButton);
         stopButton = findViewById(R.id.stopButton);
         loraSpinner = findViewById(R.id.loraSpinner);
+        loraScaleContainer = findViewById(R.id.loraScaleContainer);
+        loraScaleLabel = findViewById(R.id.loraScaleLabel);
+        loraScaleSeekBar = findViewById(R.id.loraScaleSeekBar);
+        if (loraScaleSeekBar != null) {
+            loraScaleSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    loraScale = progress * 0.05f;
+                    if (loraScaleLabel != null) {
+                        loraScaleLabel.setText(String.format(Locale.US, "Вес LoRA: %.2f", loraScale));
+                    }
+                }
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        }
+        if (progressiveCfg != null) {
+            progressiveCfg.setChecked(true);
+        }
         copyErrorButton = findViewById(R.id.copyErrorButton);
         progressBar = findViewById(R.id.progressBar);
         statusText = findViewById(R.id.statusText);
@@ -834,7 +859,23 @@ public class MainActivity extends AppCompatActivity {
         try {
             String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
             if (activeBaseDir != null && !activeBaseDir.isEmpty()) {
-                // 1. Scan context/
+                // 1. Scan loras/ folder
+                File lorasDir = new File(activeBaseDir, "loras");
+                if (lorasDir.exists() && lorasDir.isDirectory()) {
+                    File[] loraFiles = lorasDir.listFiles();
+                    if (loraFiles != null) {
+                        for (File f : loraFiles) {
+                            String name = f.getName();
+                            if (f.isDirectory() && isValidLoraDirName(name)) {
+                                if (!items.contains(name)) items.add(name);
+                            } else if (f.isFile() && (name.endsWith(".safetensors") || name.endsWith(".bin") || name.endsWith(".bin.bin"))) {
+                                if (!items.contains(name)) items.add(name);
+                            }
+                        }
+                    }
+                }
+
+                // 2. Scan context/
                 File contextDir = new File(activeBaseDir, "context");
                 if (contextDir.exists() && contextDir.isDirectory()) {
                     File[] subDirs = contextDir.listFiles(File::isDirectory);
@@ -850,7 +891,7 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
-                    // 2. Scan context/lora_slots/
+                    // 3. Scan context/lora_slots/
                     File loraSlotsDir = new File(contextDir, "lora_slots");
                     if (loraSlotsDir.exists() && loraSlotsDir.isDirectory()) {
                         File[] loraDirs = loraSlotsDir.listFiles(File::isDirectory);
@@ -874,6 +915,20 @@ public class MainActivity extends AppCompatActivity {
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, items);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         loraSpinner.setAdapter(adapter);
+
+        loraSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                String item = (String) parent.getItemAtPosition(position);
+                boolean hasLora = item != null && !item.equals("None") && !item.equals("Без LoRA") && !item.isEmpty();
+                if (loraScaleContainer != null) {
+                    loraScaleContainer.setVisibility(hasLora ? View.VISIBLE : View.GONE);
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
 
         // Restore previous selection if it's still in the items list
         if (selectedLora != null) {
@@ -1604,9 +1659,10 @@ public class MainActivity extends AppCompatActivity {
         latestProgress = 0;
         renderStatus();
 
+        final float finalLoraScale = loraScale;
         executor.execute(() -> {
             try {
-                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight, isPreloadOnly, frames, fps, finalLoraSlot);
+                runPipeline(prompt, seed, steps, cfg, neg, stretch, preview, progCfg, outName, finalWidth, finalHeight, isPreloadOnly, frames, fps, finalLoraSlot, finalLoraScale);
             } catch (Exception e) {
                 Log.e(TAG, "Pipeline execution failed: " + e.getMessage(), e);
                 isGenerating = false;
@@ -1723,7 +1779,8 @@ public class MainActivity extends AppCompatActivity {
     private void runPipeline(String prompt, long seed, int steps,
                              float cfg, String neg, boolean stretch,
                              boolean preview, boolean progCfg, String outName,
-                             int imgWidth, int imgHeight, boolean isPreloadOnly, int frames, int fps, String loraSlot)
+                             int imgWidth, int imgHeight, boolean isPreloadOnly, int frames, int fps,
+                             String loraSlot, float loraScaleVal)
             throws IOException, InterruptedException {
         String modelFamily = getSelectedModelFamily();
         boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
@@ -1784,6 +1841,21 @@ public class MainActivity extends AppCompatActivity {
                 systemLib = new File(extLibDir, "libQnnSystem.so");
             }
 
+            File rpcLib = null;
+            if (bundledLibDir != null && new File(bundledLibDir, "libcdsprpc.so").isFile()) {
+                rpcLib = new File(bundledLibDir, "libcdsprpc.so");
+            } else if (new File(extLibDir, "libcdsprpc.so").isFile()) {
+                rpcLib = new File(extLibDir, "libcdsprpc.so");
+            }
+            if (bundledLibDir != null && new File(bundledLibDir, "libcdsprpc.so").isFile()) {
+                File targetRpc = new File(extLibDir, "libcdsprpc.so");
+                if (!targetRpc.isFile() && extLibDir.exists() && extLibDir.canWrite()) {
+                    try {
+                        copyFile(new File(bundledLibDir, "libcdsprpc.so"), targetRpc);
+                    } catch (Exception ignored) {}
+                }
+            }
+
             File bundledTokDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "tokenizer") : null;
             if (bundledTokDir == null || !bundledTokDir.isDirectory()) {
                 bundledTokDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "phone_gen/tokenizer") : null;
@@ -1820,6 +1892,9 @@ public class MainActivity extends AppCompatActivity {
                 .append(" --backend \"").append(shellEscape(backendLib.getAbsolutePath())).append("\"")
                 .append(" --system_lib \"").append(shellEscape(systemLib.getAbsolutePath())).append("\"")
                 .append(" --base_dir \"").append(shellEscape(activeBaseDir)).append("\"");
+            if (rpcLib != null && rpcLib.isFile()) {
+                script.append(" --rpc_lib \"").append(shellEscape(rpcLib.getAbsolutePath())).append("\"");
+            }
             if (tokenizerDir != null && tokenizerDir.exists()) {
                 script.append(" --tokenizer_dir \"").append(shellEscape(tokenizerDir.getAbsolutePath())).append("\"");
             }
@@ -1834,6 +1909,12 @@ public class MainActivity extends AppCompatActivity {
             }
             if (cfg > 1.0f && !neg.isEmpty()) {
                 script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+            }
+            if (loraSlot != null && !loraSlot.isEmpty() && !"None".equalsIgnoreCase(loraSlot) && !"Без LoRA".equalsIgnoreCase(loraSlot)) {
+                script.append(" --lora \"").append(shellEscape(loraSlot)).append("\"");
+                if (Math.abs(loraScaleVal - 1.0f) > 0.01f) {
+                    script.append(" --lora_scale ").append(String.format(Locale.US, "%.2f", loraScaleVal));
+                }
             }
             script.append(" 2>&1\n");
         } else {
@@ -2592,6 +2673,17 @@ public class MainActivity extends AppCompatActivity {
         String normalized = value.trim();
         if (!normalized.isEmpty()) {
             target.add(normalized);
+        }
+    }
+
+    private static void copyFile(File src, File dst) throws IOException {
+        try (java.io.InputStream in = new FileInputStream(src);
+             OutputStream out = new java.io.FileOutputStream(dst)) {
+            byte[] buf = new byte[64 * 1024];
+            int len;
+            while ((len = in.read(buf)) > 0) {
+                out.write(buf, 0, len);
+            }
         }
     }
 

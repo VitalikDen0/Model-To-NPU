@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NPU Gen</string>
-    <string name="generate">Генерировать</string>
-    <string name="stop">Стоп</string>
+    <string name="app_name">SDXL NPU</string>
+    <string name="generate">ГЕНЕРАЦИЯ (NPU)</string>
+    <string name="stop">СТОП</string>
     <string name="prompt_hint">Промпт</string>
     <string name="neg_prompt_hint">Негативный промпт (для CFG > 1.0)</string>
-    <string name="seed_hint">Seed (пусто = случайный)</string>
+    <string name="seed_hint">Seed (пусто = random)</string>
     <string name="save">Сохранить в галерею</string>
     <string name="contrast_stretch">Коррекция яркости (VAE)</string>
     <string name="live_preview">Live Preview (TAESD)</string>
-    <string name="progressive_cfg">Progressive CFG (dCache ~7с)</string>
-    <string name="progressive_cfg_desc">5 шагов full CFG + 3 шага delta-cache. Ускорение генерации до ~7.0с без потери качества.</string>
-    <string name="wan21_basic_debug">WAN 2.1 runtime probe (не генерация)</string>
+    <string name="progressive_cfg">Progressive CFG (dCache)</string>
+    <string name="progressive_cfg_desc">5 шагов CFG + кэш дельты шума. Ускорение 1.6× без потери детализации.</string>
+    <string name="wan21_basic_debug">WAN 2.1 runtime probe</string>
     <string name="model_family_tab_sdxl">SDXL</string>
     <string name="model_family_tab_wan">WAN 2.1</string>
     <string name="status_preview" formatted="false">Preview step %d/%d…</string>
@@ -20,9 +20,9 @@
     <string name="status_unet" formatted="false">UNet denoising (%d/%d)…</string>
     <string name="status_vae">VAE decoding…</string>
     <string name="status_done" formatted="false">Готово! %s</string>
-    <string name="status_error_short">Ошибка генерации. Нажмите кнопку внизу, чтобы скопировать детали.</string>
+    <string name="status_error_short">Ошибка генерации. Нажмите кнопку внизу, чтобы скопировать лог.</string>
     <string name="image_desc">Сгенерированное изображение</string>
-    <string name="copy_error">Скопировать ошибку</string>
+    <string name="copy_error">Скопировать детали ошибки</string>
     <string name="error_copied">Текст ошибки скопирован</string>
     <string name="settings">Настройки</string>
     <string name="settings_title">Настройки моделей</string>
@@ -37,5 +37,5 @@
     <string name="size_preset_label">Пресет:</string>
     <string name="size_preset_custom">Свой размер</string>
     <string name="size_preset_format" formatted="false">%1$d×%2$d</string>
-    <string name="resolution_label">WxH:</string>
+    <string name="resolution_label">Разрешение:</string>
 </resources>

@@ -1,26 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg_main">#0B0D11</color>
-    <color name="surface_card">#151821</color>
-    <color name="surface_card_secondary">#1B1F2B</color>
-    <color name="surface_input">#1A1D27</color>
-    <color name="border_card">#282E3D</color>
-    <color name="border_focused">#6366F1</color>
+    <color name="bg_main">#08090C</color>
+    <color name="surface_card">#111318</color>
+    <color name="surface_card_secondary">#171A22</color>
+    <color name="surface_input">#13161D</color>
+    <color name="border_card">#222733</color>
+    <color name="border_focused">#38BDF8</color>
 
-    <color name="primary">#6366F1</color>
-    <color name="primary_variant">#4F46E5</color>
-    <color name="primary_light">#818CF8</color>
-    <color name="accent_violet">#8B5CF6</color>
-    <color name="accent_pink">#EC4899</color>
+    <color name="primary">#0284C7</color>
+    <color name="primary_variant">#0369A1</color>
+    <color name="primary_light">#38BDF8</color>
+    <color name="accent_violet">#0EA5E9</color>
+    <color name="accent_pink">#38BDF8</color>
 
-    <color name="text_primary">#F8FAFC</color>
+    <color name="text_primary">#F1F5F9</color>
     <color name="text_secondary">#94A3B8</color>
-    <color name="text_hint">#64748B</color>
+    <color name="text_hint">#475569</color>
 
     <color name="status_green">#10B981</color>
     <color name="status_amber">#F59E0B</color>
-    <color name="status_red">#EF4444</color>
+    <color name="status_red">#F43F5E</color>
 
-    <color name="badge_bg">#202636</color>
-    <color name="badge_text">#A5B4FC</color>
+    <color name="badge_bg">#161B24</color>
+    <color name="badge_text">#38BDF8</color>
 </resources>
