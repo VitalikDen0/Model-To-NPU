@@ -81,18 +81,48 @@ static rpcmem_init_fn_t   g_rpcmem_init   = NULL;
 static rpcmem_deinit_fn_t g_rpcmem_deinit = NULL;
 static int g_rpcmem_available = 0;
 
-static void init_rpcmem(void) {
-    g_rpcmem_lib = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
-    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/lib64/libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
+static void init_rpcmem(const char* backend_path) {
+    char path[1024];
+    // 1. Try in the same directory as backend_path (e.g. <dir>/libcdsprpc.so)
+    if (backend_path) {
+        const char* slash = strrchr(backend_path, '/');
+        if (slash) {
+            size_t dir_len = (size_t)(slash - backend_path);
+            if (dir_len < sizeof(path) - 32) {
+                memcpy(path, backend_path, dir_len);
+                path[dir_len] = '\0';
+                strcat(path, "/libcdsprpc.so");
+                g_rpcmem_lib = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+                if (g_rpcmem_lib) {
+                    fprintf(stderr, "[server] rpcmem: loaded %s\n", path);
+                }
+            }
+        }
+    }
+    // 2. Fallbacks
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/lib64/libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
     if (!g_rpcmem_lib) {
         fprintf(stderr, "[server] rpcmem: libcdsprpc.so not found, trying librpcmem.so\n");
-        g_rpcmem_lib = dlopen("librpcmem.so", RTLD_NOW | RTLD_LOCAL);
-        if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/librpcmem.so", RTLD_NOW | RTLD_LOCAL);
+        if (backend_path) {
+            const char* slash = strrchr(backend_path, '/');
+            if (slash) {
+                size_t dir_len = (size_t)(slash - backend_path);
+                if (dir_len < sizeof(path) - 32) {
+                    memcpy(path, backend_path, dir_len);
+                    path[dir_len] = '\0';
+                    strcat(path, "/librpcmem.so");
+                    g_rpcmem_lib = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+                }
+            }
+        }
+        if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("librpcmem.so", RTLD_NOW | RTLD_GLOBAL);
+        if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/librpcmem.so", RTLD_NOW | RTLD_GLOBAL);
     }
     if (!g_rpcmem_lib) {
-        fprintf(stderr, "[server] rpcmem: not available, using regular malloc\n");
+        fprintf(stderr, "[server] rpcmem: not available (%s), using regular malloc\n", dlerror());
         return;
     }
     g_rpcmem_alloc  = (rpcmem_alloc_fn_t)dlsym(g_rpcmem_lib, "rpcmem_alloc");
@@ -340,7 +370,7 @@ static int find_slot(const char* id) {
 /* ========================================================================= */
 
 static int init_qnn(const char* backend_path, const char* system_path) {
-    init_rpcmem();
+    init_rpcmem(backend_path);
     /* Load backend library */
     g_backendLib = dlopen(backend_path, RTLD_NOW | RTLD_LOCAL);
     if (!g_backendLib) {
