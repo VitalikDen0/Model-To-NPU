@@ -54,8 +54,9 @@ The world's first fully functional on-device **Stable Diffusion XL (SDXL)** pipe
     <td width="50%"><img src="https://github.com/user-attachments/assets/4bc1ac51-a98e-4931-a3e9-247327e0bbe5" alt="SDXL on phone sample 2" width="100%"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" alt="SDXL on phone sample 3" width="100%"></td>
-    <td width="50%"><img src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" alt="SDXL on phone sample 4" width="100%"></td>
+    <td width="33%"><img src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" alt="SDXL on phone sample 3" width="100%"></td>
+    <td width="33%"><img src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" alt="SDXL on phone sample 4" width="100%"></td>
+    <td width="33%"><img src="https://github.com/user-attachments/assets/99c1cdb8-1240-4251-b7fe-89d702a4e8e7" alt="SDXL on phone sample 5" width="100%">
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
