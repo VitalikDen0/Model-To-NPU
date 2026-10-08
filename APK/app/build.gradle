@@ -4,8 +4,8 @@ plugins {
     id 'com.android.application'
 }
 
-def apkVersionCode = 37
-def apkVersionName = "0.5.1"
+def apkVersionCode = 38
+def apkVersionName = "0.6.0"
 def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
 def resolveExistingDir = { candidate ->
     if (candidate == null) {
@@ -132,9 +132,8 @@ tasks.register("stageBundledTermuxAssets") {
     outputs.dir(bundledTermuxAssetsDir)
     doLast {
         delete(bundledTermuxAssetsDir)
-        if (bundledLocalToolsDir == null) {
-            logger.warn("Bundled Termux assets disabled: local_tools directory was not found")
-        } else {
+        boolean bundleTermux = project.hasProperty("bundleTermux") && project.property("bundleTermux").toString() == "true"
+        if (bundleTermux && bundledLocalToolsDir != null) {
             logger.lifecycle("Bundling Termux offline assets from ${bundledLocalToolsDir}")
 
             copy {
@@ -155,6 +154,8 @@ tasks.register("stageBundledTermuxAssets") {
                     into "termux_bundle/scripts"
                 }
             }
+        } else {
+            logger.lifecycle("Termux debs packaging skipped (native C-engine active, APK size optimized)")
         }
 
         if (bundledRepoRoot == null) {
@@ -170,6 +171,10 @@ tasks.register("stageBundledTermuxAssets") {
                 }
                 from(new File(bundledRepoRoot, "phone_runtime_accel.py")) {
                     into "termux_bundle/runtime_payload/phone_gen"
+                }
+                from(new File(bundledRepoRoot, "tokenizer")) {
+                    into "termux_bundle/runtime_payload/tokenizer"
+                    include "vocab.json", "merges.txt"
                 }
                 from(new File(bundledRepoRoot, "tokenizer")) {
                     into "termux_bundle/runtime_payload/phone_gen/tokenizer"
@@ -332,8 +337,8 @@ tasks.register("stageBundledTermuxAssets") {
             logger.lifecycle("Bundled runtime payload fingerprint: ${payloadVersionFile.text.trim()}")
         }
 
-        // Bundle pre-built Python 3.13 + numpy + PIL runtime (no-root path)
-        if (bundledLocalToolsDir != null) {
+        // Bundle pre-built Python 3.13 + numpy + PIL runtime (only if legacy bundleTermux is requested)
+        if (bundleTermux && bundledLocalToolsDir != null) {
             def pyRuntimeZip = new File(bundledLocalToolsDir, "py_runtime/py_runtime.zip")
             if (pyRuntimeZip.isFile()) {
                 copy {

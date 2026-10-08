@@ -23,7 +23,7 @@ final class RuntimeBootstrap {
     private static final String RUNTIME_PAYLOAD_DIR = "runtime_payload";
     private static final String VERSION_MARKER = ".bundle_version";
     private static final String RUNTIME_PAYLOAD_VERSION_MARKER = "runtime_payload_version.txt";
-    private static final String BUNDLE_LAYOUT_VERSION = "termux-bundle-v3";
+    private static final String BUNDLE_LAYOUT_VERSION = "native-bundle-v0.6.0";
     private static final int COPY_BUFFER_SIZE = 1024 * 1024;
 
     private RuntimeBootstrap() {
@@ -184,19 +184,14 @@ final class RuntimeBootstrap {
 
     static String describeBundledAssets(Context context) {
         if (!hasBundledAssets(context)) {
-            return "Bundled offline runtime: not packaged in this APK build";
+            return "Встроенный runtime: не упакован в этот APK";
         }
         try {
-            String[] debs = context.getAssets().list(ASSET_ROOT + "/debs");
-            String[] scripts = context.getAssets().list(ASSET_ROOT + "/scripts");
             String[] runtimePayload = context.getAssets().list(ASSET_ROOT + "/" + RUNTIME_PAYLOAD_DIR);
-            int debCount = debs != null ? debs.length : 0;
-            int scriptCount = scripts != null ? scripts.length : 0;
             int runtimePayloadCount = runtimePayload != null ? runtimePayload.length : 0;
-            return "Bundled offline runtime: " + debCount + " debs, " + scriptCount
-                + " scripts, runtime payload=" + runtimePayloadCount;
+            return "Встроенный runtime: Native NPU C-Engine (Zero-Root) v0.6.0 (payload=" + runtimePayloadCount + ")";
         } catch (IOException e) {
-            return "Bundled offline runtime: available, but asset listing failed (" + e.getMessage() + ")";
+            return "Встроенный runtime: ошибка чтения ассетов (" + e.getMessage() + ")";
         }
     }
 
