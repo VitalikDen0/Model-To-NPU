@@ -83,9 +83,13 @@ static int g_rpcmem_available = 0;
 
 static void init_rpcmem(void) {
     g_rpcmem_lib = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/vendor/lib64/libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
+    if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/system/lib64/libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
     if (!g_rpcmem_lib) {
         fprintf(stderr, "[server] rpcmem: libcdsprpc.so not found, trying librpcmem.so\n");
         g_rpcmem_lib = dlopen("librpcmem.so", RTLD_NOW | RTLD_LOCAL);
+        if (!g_rpcmem_lib) g_rpcmem_lib = dlopen("/vendor/lib64/librpcmem.so", RTLD_NOW | RTLD_LOCAL);
     }
     if (!g_rpcmem_lib) {
         fprintf(stderr, "[server] rpcmem: not available, using regular malloc\n");
