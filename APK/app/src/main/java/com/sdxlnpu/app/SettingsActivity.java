@@ -44,7 +44,10 @@ public class SettingsActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_settings);
 
-        if (getSupportActionBar() != null) {
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.settingsToolbar);
+        if (toolbar != null) {
+            toolbar.setNavigationOnClickListener(v -> finish());
+        } else if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
             getSupportActionBar().setTitle(R.string.settings_title);
         }

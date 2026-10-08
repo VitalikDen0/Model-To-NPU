@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_main">#0B0D11</color>
+    <color name="surface_card">#151821</color>
+    <color name="surface_card_secondary">#1B1F2B</color>
+    <color name="surface_input">#1A1D27</color>
+    <color name="border_card">#282E3D</color>
+    <color name="border_focused">#6366F1</color>
+
+    <color name="primary">#6366F1</color>
+    <color name="primary_variant">#4F46E5</color>
+    <color name="primary_light">#818CF8</color>
+    <color name="accent_violet">#8B5CF6</color>
+    <color name="accent_pink">#EC4899</color>
+
+    <color name="text_primary">#F8FAFC</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_hint">#64748B</color>
+
+    <color name="status_green">#10B981</color>
+    <color name="status_amber">#F59E0B</color>
+    <color name="status_red">#EF4444</color>
+
+    <color name="badge_bg">#202636</color>
+    <color name="badge_text">#A5B4FC</color>
+</resources>

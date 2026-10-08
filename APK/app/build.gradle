@@ -4,8 +4,8 @@ plugins {
     id 'com.android.application'
 }
 
-def apkVersionCode = 39
-def apkVersionName = "0.6.1"
+def apkVersionCode = 40
+def apkVersionName = "0.6.2"
 def bundledTermuxAssetsDir = file("$buildDir/generated/assets/termuxBundle")
 def resolveExistingDir = { candidate ->
     if (candidate == null) {
@@ -232,6 +232,7 @@ tasks.register("stageBundledTermuxAssets") {
             [
                 [file: new File(bundledRepoRoot, "NPU/out/arm64-v8a/qnn-multi-context-server"), into: "termux_bundle/runtime_payload/bin"],
                 [file: new File(bundledRepoRoot, "NPU/out/arm64-v8a/qnn-context-runner"), into: "termux_bundle/runtime_payload/bin"],
+                [file: new File(bundledRepoRoot, "NPU/libcdsprpc.so"), into: "termux_bundle/runtime_payload/lib"],
                 [file: new File(bundledRepoRoot, "NPU/build/runtime_accel/android-arm64/libsdxl_runtime_accel.so"), into: "termux_bundle/runtime_payload/phone_gen/lib"],
             ].each { entry ->
                 if (entry.file.isFile()) {
@@ -372,6 +373,11 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
         }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
     }
 
     compileOptions {

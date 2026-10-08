@@ -246,6 +246,30 @@ public class MainActivity extends AppCompatActivity {
         previewExecutor = Executors.newSingleThreadExecutor();
         mainHandler = new Handler(Looper.getMainLooper());
 
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.topAppBar);
+        if (toolbar != null) {
+            setSupportActionBar(toolbar);
+        }
+
+        View randomSeedBtn = findViewById(R.id.randomSeedButton);
+        if (randomSeedBtn != null) {
+            randomSeedBtn.setOnClickListener(v -> {
+                int rnd = (int) (Math.random() * 900000 + 100000);
+                seedInput.setText(String.valueOf(rnd));
+            });
+        }
+
+        View chip1024 = findViewById(R.id.chip1024);
+        if (chip1024 != null) chip1024.setOnClickListener(v -> { widthInput.setText("1024"); heightInput.setText("1024"); });
+        View chip832 = findViewById(R.id.chip832x1216);
+        if (chip832 != null) chip832.setOnClickListener(v -> { widthInput.setText("832"); heightInput.setText("1216"); });
+        View chip1216 = findViewById(R.id.chip1216x832);
+        if (chip1216 != null) chip1216.setOnClickListener(v -> { widthInput.setText("1216"); heightInput.setText("832"); });
+        View chip768 = findViewById(R.id.chip768x1024);
+        if (chip768 != null) chip768.setOnClickListener(v -> { widthInput.setText("768"); heightInput.setText("1024"); });
+        View chip1344 = findViewById(R.id.chip1344x1728);
+        if (chip1344 != null) chip1344.setOnClickListener(v -> { widthInput.setText("1344"); heightInput.setText("1728"); });
+
         loadSettings();
         configureModelFamilyTabs();
         configureSizePresetSpinner();
@@ -666,7 +690,7 @@ public class MainActivity extends AppCompatActivity {
         heightInput.setText(height != null ? height : defaultHeight);
         contrastStretch.setChecked(contrast != null ? contrast : true);
         livePreview.setChecked(preview != null ? preview : false);
-        progressiveCfg.setChecked(progCfg != null ? progCfg : false);
+        progressiveCfg.setChecked(progCfg != null ? progCfg : true);
         if (framesSeekBar != null) {
             framesSeekBar.setProgress(frames != null ? frames : 81);
             if (framesLabel != null) framesLabel.setText(String.format(Locale.US, "Frames: %d", framesSeekBar.getProgress()));
@@ -1723,10 +1747,8 @@ public class MainActivity extends AppCompatActivity {
                 + ", root=" + useRootShell
                 + ", python=" + pythonCommand);
         } else {
-            Log.i(TAG, "runtimePlan: using Native C-Engine: " + nativeServerBin.getAbsolutePath());
-            String su = findAvailableSuOrNull();
-            useRootShell = (su != null);
-            Log.i(TAG, "runtimePlan: native engine root detected = " + useRootShell + " (su: " + su + ")");
+            Log.i(TAG, "runtimePlan: using Native C-Engine (Zero-Root): " + nativeServerBin.getAbsolutePath());
+            useRootShell = false;
         }
 
         if (baseRedirectWarning != null) {
@@ -1784,25 +1806,15 @@ public class MainActivity extends AppCompatActivity {
             String outPngPath = outPngFile.getAbsolutePath();
 
             script.append("#!/system/bin/sh\n");
-            if (useRootShell) {
-                script.append("# Ensure FastRPC and DSP device access\n");
-                script.append("chmod 666 /dev/fastrpc-cdsp 2>/dev/null || true\n");
-                script.append("chmod 666 /dev/ion 2>/dev/null || true\n");
-                script.append("chmod 666 /dev/dma_heap/* 2>/dev/null || true\n");
-                if (bundledRuntimePayloadDir != null) {
-                    script.append("chmod -R 755 \"").append(shellEscape(bundledRuntimePayloadDir.getAbsolutePath())).append("\" 2>/dev/null || true\n");
-                }
-            }
             script.append("export LD_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
                 .append(":")
                 .append(shellEscape(activeBaseDir)).append("/lib")
-                .append(":/data/local/tmp/sdxl_test/lib")
-                .append(":$LD_LIBRARY_PATH:/vendor/lib64:/system/lib64\"\n");
+                .append(":/data/local/tmp/sdxl_test/lib\"\n");
             script.append("export ADSP_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
                 .append(";")
                 .append(shellEscape(activeBaseDir)).append("/lib")
                 .append(";/data/local/tmp/sdxl_test/lib")
-                .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp\"\n");
+                .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp\"\n");
             script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
             script.append("exec \"").append(shellEscape(nativeServerBin.getAbsolutePath())).append("\"")
                 .append(" --backend \"").append(shellEscape(backendLib.getAbsolutePath())).append("\"")

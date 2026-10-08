@@ -1,109 +1,147 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="16dp">
+    android:orientation="vertical"
+    android:background="@color/bg_main">
 
-    <LinearLayout
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/settingsToolbar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical">
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/bg_main"
+        app:title="@string/settings_title"
+        app:titleTextColor="@color/text_primary"
+        app:navigationIcon="?attr/homeAsUpIndicator"
+        app:navigationIconTint="@color/text_primary"
+        app:elevation="0dp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/settings_desc"
-            android:textColor="?android:attr/textColorSecondary"
-            android:layout_marginBottom="16dp" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp">
 
-        <!-- Base directory -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/settings_base_dir_hint">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/baseDirInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textNoSuggestions"
-                android:fontFamily="monospace"
-                android:textSize="14sp" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- Root base directory (root mode) -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:hint="@string/settings_root_base_dir_hint">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/rootBaseDirInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textNoSuggestions"
-                android:fontFamily="monospace"
-                android:textSize="14sp" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- Python path -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:hint="@string/settings_python_hint">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/pythonPathInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textNoSuggestions"
-                android:fontFamily="monospace"
-                android:textSize="14sp" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- Info -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/settings_structure_info"
-            android:textSize="12sp"
-            android:fontFamily="monospace"
-            android:textColor="?android:attr/textColorSecondary" />
-
-        <!-- Verify button -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/verifyButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/settings_verify"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
-
-        <!-- Save / Reset buttons -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="8dp">
+            android:orientation="vertical">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/saveSettingsButton"
-                android:layout_width="0dp"
+            <TextView
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/settings_save" />
+                android:text="@string/settings_desc"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:layout_marginBottom="16dp" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/resetSettingsButton"
-                android:layout_width="wrap_content"
+            <!-- Base directory -->
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/ModernTextInput"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="@string/settings_reset"
-                style="@style/Widget.MaterialComponents.Button.TextButton" />
+                android:hint="@string/settings_base_dir_hint">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/baseDirInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textNoSuggestions"
+                    android:textColor="@color/text_primary"
+                    android:fontFamily="monospace"
+                    android:textSize="13sp" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <!-- Root base directory (root mode) -->
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/ModernTextInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:hint="@string/settings_root_base_dir_hint">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/rootBaseDirInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textNoSuggestions"
+                    android:textColor="@color/text_primary"
+                    android:fontFamily="monospace"
+                    android:textSize="13sp" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <!-- Python path -->
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/ModernTextInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:hint="@string/settings_python_hint">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/pythonPathInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textNoSuggestions"
+                    android:textColor="@color/text_primary"
+                    android:fontFamily="monospace"
+                    android:textSize="13sp" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <!-- Info -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:padding="12dp"
+                android:background="@color/surface_card"
+                android:text="@string/settings_structure_info"
+                android:textSize="11sp"
+                android:fontFamily="monospace"
+                android:textColor="@color/text_secondary" />
+
+            <!-- Verify button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/verifyButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="20dp"
+                android:text="@string/settings_verify"
+                android:textColor="@color/primary_light"
+                app:strokeColor="@color/primary"
+                app:cornerRadius="14dp" />
+
+            <!-- Save / Reset buttons -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="12dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/saveSettingsButton"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:text="@string/settings_save"
+                    android:textColor="#FFFFFF"
+                    app:backgroundTint="@color/primary"
+                    app:cornerRadius="14dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/resetSettingsButton"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/settings_reset"
+                    android:textColor="@color/text_secondary"
+                    app:cornerRadius="14dp" />
+            </LinearLayout>
+
         </LinearLayout>
-
-    </LinearLayout>
-</ScrollView>
+    </ScrollView>
+</LinearLayout>
