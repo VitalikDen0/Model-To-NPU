@@ -12,9 +12,9 @@
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="@color/bg_main"
-        app:title="SDXL NPU Gen"
+        app:title="SDXL NPU ENGINE"
         app:titleTextColor="@color/text_primary"
-        app:subtitle="Snapdragon 8 Elite • Zero-Root"
+        app:subtitle="Snapdragon 8 Elite • Zero-Root Direct DSP"
         app:subtitleTextColor="@color/primary_light"
         app:elevation="0dp" />
 
@@ -29,30 +29,30 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingBottom="32dp">
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="28dp">
 
             <!-- Model Tabs -->
             <com.google.android.material.tabs.TabLayout
                 android:id="@+id/modelFamilyTabs"
                 android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginBottom="12dp"
+                android:layout_height="40dp"
+                android:layout_marginBottom="10dp"
                 android:background="@color/surface_card"
-                app:tabIndicatorColor="@color/primary"
-                app:tabIndicatorHeight="3dp"
+                app:tabIndicatorColor="@color/primary_light"
+                app:tabIndicatorHeight="2dp"
                 app:tabSelectedTextColor="@color/text_primary"
                 app:tabTextColor="@color/text_secondary"
                 app:tabMode="fixed" />
 
-            <!-- CARD 1: Prompt & Creativity -->
+            <!-- CARD 1: Prompt & LoRA -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/surface_card"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="10dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/border_card"
                 app:strokeWidth="1dp">
@@ -61,16 +61,17 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="14dp">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="🎨 Промпт"
-                        android:textSize="14sp"
+                        android:text="ПРОМПТ"
+                        android:textSize="12sp"
                         android:textStyle="bold"
+                        android:letterSpacing="0.08"
                         android:textColor="@color/primary_light"
-                        android:layout_marginBottom="8dp" />
+                        android:layout_marginBottom="6dp" />
 
                     <com.google.android.material.textfield.TextInputLayout
                         style="@style/ModernTextInput"
@@ -93,7 +94,7 @@
                         style="@style/ModernTextInput"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="6dp"
                         android:hint="@string/neg_prompt_hint">
 
                         <com.google.android.material.textfield.TextInputEditText
@@ -106,12 +107,12 @@
                             android:text="lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry" />
                     </com.google.android.material.textfield.TextInputLayout>
 
-                    <!-- Seed Row with Randomize Button -->
+                    <!-- Seed Row with RND Button -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="6dp"
                         android:gravity="center_vertical">
 
                         <com.google.android.material.textfield.TextInputLayout
@@ -131,43 +132,89 @@
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/randomSeedButton"
-                            android:layout_width="48dp"
+                            android:layout_width="60dp"
                             android:layout_height="52dp"
-                            android:layout_marginStart="8dp"
-                            android:text="🎲"
-                            android:textSize="18sp"
+                            android:layout_marginStart="6dp"
+                            android:text="RND"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
                             android:padding="0dp"
-                            app:cornerRadius="14dp"
+                            app:cornerRadius="8dp"
                             app:backgroundTint="@color/surface_card_secondary"
                             app:strokeColor="@color/border_card"
-                            app:strokeWidth="1dp" />
+                            app:strokeWidth="1dp"
+                            android:textColor="@color/primary_light" />
                     </LinearLayout>
 
-                    <!-- LoRA Slot (optional) -->
-                    <com.google.android.material.textfield.TextInputLayout
-                        style="@style/ModernTextInput"
+                    <!-- LoRA Section -->
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="@color/border_card"
+                        android:layout_marginTop="10dp"
+                        android:layout_marginBottom="8dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="LORA АДАПТЕР"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.08"
+                        android:textColor="@color/primary_light"
+                        android:layout_marginBottom="6dp" />
+
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:hint="LoRA Slot (optional)">
+                        android:background="@color/surface_input"
+                        android:padding="2dp">
 
                         <Spinner
                             android:id="@+id/loraSpinner"
                             android:layout_width="match_parent"
+                            android:layout_height="44dp" />
+                    </LinearLayout>
+
+                    <!-- LoRA Scale Slider -->
+                    <LinearLayout
+                        android:id="@+id/loraScaleContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginTop="8dp">
+
+                        <TextView
+                            android:id="@+id/loraScaleLabel"
+                            android:layout_width="120dp"
                             android:layout_height="wrap_content"
-                            android:minHeight="48dp" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                            android:text="Вес LoRA: 1.00"
+                            android:textSize="13sp"
+                            android:textColor="@color/text_primary" />
+
+                        <SeekBar
+                            android:id="@+id/loraScaleSeekBar"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:min="0"
+                            android:max="30"
+                            android:progress="20"
+                            android:progressTint="@color/primary_light"
+                            android:thumbTint="@color/primary_light" />
+                    </LinearLayout>
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- CARD 2: Acceleration & Parameters -->
+            <!-- CARD 2: Sampling & Parameters -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/surface_card"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="10dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/border_card"
                 app:strokeWidth="1dp">
@@ -176,16 +223,17 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="14dp">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="⚡ Ускорение и параметры"
-                        android:textSize="14sp"
+                        android:text="ПАРАМЕТРЫ СЭМПЛИРОВАНИЯ"
+                        android:textSize="12sp"
                         android:textStyle="bold"
+                        android:letterSpacing="0.08"
                         android:textColor="@color/primary_light"
-                        android:layout_marginBottom="12dp" />
+                        android:layout_marginBottom="10dp" />
 
                     <!-- Steps Slider -->
                     <LinearLayout
@@ -200,7 +248,7 @@
                             android:layout_width="90dp"
                             android:layout_height="wrap_content"
                             android:text="Steps: 8"
-                            android:textStyle="bold"
+                            android:textSize="13sp"
                             android:textColor="@color/text_primary" />
 
                         <SeekBar
@@ -211,7 +259,7 @@
                             android:min="1"
                             android:max="50"
                             android:progress="8"
-                            android:progressTint="@color/primary"
+                            android:progressTint="@color/primary_light"
                             android:thumbTint="@color/primary_light" />
                     </LinearLayout>
 
@@ -221,14 +269,14 @@
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="center_vertical"
-                        android:layout_marginBottom="12dp">
+                        android:layout_marginBottom="10dp">
 
                         <TextView
                             android:id="@+id/cfgLabel"
                             android:layout_width="90dp"
                             android:layout_height="wrap_content"
                             android:text="CFG: 3.5"
-                            android:textStyle="bold"
+                            android:textSize="13sp"
                             android:textColor="@color/text_primary" />
 
                         <SeekBar
@@ -239,7 +287,7 @@
                             android:min="10"
                             android:max="70"
                             android:progress="35"
-                            android:progressTint="@color/primary"
+                            android:progressTint="@color/primary_light"
                             android:thumbTint="@color/primary_light" />
                     </LinearLayout>
 
@@ -273,7 +321,7 @@
                                 android:min="1"
                                 android:max="129"
                                 android:progress="81"
-                                android:progressTint="@color/primary"
+                                android:progressTint="@color/primary_light"
                                 android:thumbTint="@color/primary_light" />
                         </LinearLayout>
 
@@ -299,7 +347,7 @@
                                 android:min="8"
                                 android:max="30"
                                 android:progress="16"
-                                android:progressTint="@color/primary"
+                                android:progressTint="@color/primary_light"
                                 android:thumbTint="@color/primary_light" />
                         </LinearLayout>
                     </LinearLayout>
@@ -315,39 +363,28 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
+                        android:orientation="vertical">
 
                         <CheckBox
                             android:id="@+id/progressiveCfg"
-                            android:layout_width="0dp"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
                             android:text="@string/progressive_cfg"
                             android:textStyle="bold"
+                            android:textSize="13sp"
                             android:textColor="@color/text_primary"
-                            android:buttonTint="@color/primary"
+                            android:buttonTint="@color/primary_light"
                             android:checked="true" />
 
                         <TextView
-                            android:layout_width="wrap_content"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="~7.0s"
-                            android:textStyle="bold"
-                            android:textColor="@color/status_green"
-                            android:background="@color/badge_bg"
-                            android:paddingHorizontal="8dp"
-                            android:paddingVertical="2dp" />
+                            android:text="@string/progressive_cfg_desc"
+                            android:textSize="11sp"
+                            android:textColor="@color/text_secondary"
+                            android:layout_marginStart="32dp"
+                            android:layout_marginBottom="6dp" />
                     </LinearLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/progressive_cfg_desc"
-                        android:textSize="12sp"
-                        android:textColor="@color/text_secondary"
-                        android:layout_marginStart="32dp"
-                        android:layout_marginBottom="8dp" />
 
                     <!-- Other toggles row -->
                     <LinearLayout
@@ -361,8 +398,9 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:text="@string/contrast_stretch"
+                            android:textSize="12sp"
                             android:textColor="@color/text_primary"
-                            android:buttonTint="@color/primary"
+                            android:buttonTint="@color/primary_light"
                             android:checked="true" />
 
                         <CheckBox
@@ -371,21 +409,22 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:text="@string/live_preview"
+                            android:textSize="12sp"
                             android:textColor="@color/text_secondary"
-                            android:buttonTint="@color/primary"
+                            android:buttonTint="@color/primary_light"
                             android:checked="false" />
                     </LinearLayout>
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- CARD 3: Resolution & Aspect Ratio -->
+            <!-- CARD 3: Resolution & Format -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
+                android:layout_marginBottom="12dp"
                 app:cardBackgroundColor="@color/surface_card"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="10dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/border_card"
                 app:strokeWidth="1dp">
@@ -394,14 +433,15 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="14dp">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="📐 Разрешение и формат"
-                        android:textSize="14sp"
+                        android:text="ФОРМАТ И РАЗРЕШЕНИЕ"
+                        android:textSize="12sp"
                         android:textStyle="bold"
+                        android:letterSpacing="0.08"
                         android:textColor="@color/primary_light"
                         android:layout_marginBottom="8dp" />
 
@@ -421,50 +461,50 @@
                                 android:id="@+id/chip1024"
                                 style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="wrap_content"
-                                android:layout_height="38dp"
+                                android:layout_height="36dp"
                                 android:text="1:1 (1024×1024)"
-                                android:textSize="12sp"
-                                app:cornerRadius="12dp"
+                                android:textSize="11sp"
+                                app:cornerRadius="8dp"
                                 android:layout_marginEnd="6dp" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/chip832x1216"
                                 style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="wrap_content"
-                                android:layout_height="38dp"
+                                android:layout_height="36dp"
                                 android:text="2:3 (832×1216)"
-                                android:textSize="12sp"
-                                app:cornerRadius="12dp"
+                                android:textSize="11sp"
+                                app:cornerRadius="8dp"
                                 android:layout_marginEnd="6dp" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/chip1216x832"
                                 style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="wrap_content"
-                                android:layout_height="38dp"
+                                android:layout_height="36dp"
                                 android:text="3:2 (1216×832)"
-                                android:textSize="12sp"
-                                app:cornerRadius="12dp"
+                                android:textSize="11sp"
+                                app:cornerRadius="8dp"
                                 android:layout_marginEnd="6dp" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/chip768x1024"
                                 style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="wrap_content"
-                                android:layout_height="38dp"
+                                android:layout_height="36dp"
                                 android:text="3:4 (768×1024)"
-                                android:textSize="12sp"
-                                app:cornerRadius="12dp"
+                                android:textSize="11sp"
+                                app:cornerRadius="8dp"
                                 android:layout_marginEnd="6dp" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/chip1344x1728"
                                 style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="wrap_content"
-                                android:layout_height="38dp"
+                                android:layout_height="36dp"
                                 android:text="HD (1344×1728)"
-                                android:textSize="12sp"
-                                app:cornerRadius="12dp" />
+                                android:textSize="11sp"
+                                app:cornerRadius="8dp" />
                         </LinearLayout>
                     </HorizontalScrollView>
 
@@ -495,9 +535,9 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text=" × "
-                            android:textSize="18sp"
+                            android:textSize="16sp"
                             android:textColor="@color/text_secondary"
-                            android:paddingHorizontal="8dp" />
+                            android:paddingHorizontal="6dp" />
 
                         <com.google.android.material.textfield.TextInputLayout
                             style="@style/ModernTextInput"
@@ -531,14 +571,15 @@
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/generateButton"
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:text="✨  Генерировать (SDXL NPU)"
-                android:textSize="17sp"
+                android:layout_height="52dp"
+                android:text="@string/generate"
+                android:textSize="15sp"
                 android:textStyle="bold"
+                android:letterSpacing="0.04"
                 android:textColor="#FFFFFF"
-                app:cornerRadius="28dp"
+                app:cornerRadius="10dp"
                 app:backgroundTint="@color/primary"
-                app:elevation="4dp" />
+                app:elevation="2dp" />
 
             <!-- Secondary Controls Row -->
             <LinearLayout
@@ -553,10 +594,11 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Preload"
+                    android:text="PRELOAD"
+                    android:textSize="12sp"
                     android:textColor="@color/text_secondary"
                     app:strokeColor="@color/border_card"
-                    app:cornerRadius="14dp"
+                    app:cornerRadius="8dp"
                     android:layout_marginEnd="6dp" />
 
                 <com.google.android.material.button.MaterialButton
@@ -565,10 +607,11 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Unload"
+                    android:text="UNLOAD"
+                    android:textSize="12sp"
                     android:textColor="@color/text_secondary"
                     app:strokeColor="@color/border_card"
-                    app:cornerRadius="14dp" />
+                    app:cornerRadius="8dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/stopButton"
@@ -576,8 +619,9 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/stop"
+                    android:textSize="12sp"
                     android:textColor="@color/status_red"
-                    app:cornerRadius="14dp"
+                    app:cornerRadius="8dp"
                     android:layout_marginStart="6dp"
                     android:visibility="gone" />
             </LinearLayout>
@@ -586,11 +630,11 @@
             <ProgressBar
                 android:id="@+id/progressBar"
                 android:layout_width="match_parent"
-                android:layout_height="6dp"
-                android:layout_marginTop="12dp"
+                android:layout_height="4dp"
+                android:layout_marginTop="10dp"
                 style="?android:attr/progressBarStyleHorizontal"
                 android:max="100"
-                android:progressTint="@color/primary"
+                android:progressTint="@color/primary_light"
                 android:progressBackgroundTint="@color/badge_bg"
                 android:visibility="gone" />
 
@@ -601,16 +645,17 @@
                 android:layout_marginTop="6dp"
                 android:text="@string/status_idle"
                 android:textAlignment="center"
-                android:textSize="13sp"
+                android:textSize="12sp"
+                android:fontFamily="monospace"
                 android:textColor="@color/text_secondary" />
 
             <!-- CARD 4: Image Result & Actions -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="14dp"
                 app:cardBackgroundColor="@color/surface_card"
-                app:cardCornerRadius="20dp"
+                app:cardCornerRadius="10dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/border_card"
                 app:strokeWidth="1dp">
@@ -633,11 +678,11 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/saveButton"
                         android:layout_width="match_parent"
-                        android:layout_height="48dp"
+                        android:layout_height="44dp"
                         android:layout_marginTop="8dp"
                         android:text="@string/save"
-                        android:textSize="15sp"
-                        app:cornerRadius="14dp"
+                        android:textSize="14sp"
+                        app:cornerRadius="8dp"
                         app:backgroundTint="@color/surface_card_secondary"
                         app:strokeColor="@color/border_card"
                         app:strokeWidth="1dp"
@@ -664,9 +709,10 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:text="@string/copy_error"
+                        android:textSize="12sp"
                         android:textColor="@color/status_red"
                         app:strokeColor="@color/status_red"
-                        app:cornerRadius="14dp"
+                        app:cornerRadius="8dp"
                         android:visibility="gone" />
 
                 </LinearLayout>
