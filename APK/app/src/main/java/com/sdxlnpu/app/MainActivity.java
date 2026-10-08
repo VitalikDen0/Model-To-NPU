@@ -1827,11 +1827,20 @@ public class MainActivity extends AppCompatActivity {
         // Build shell script (multi-line — no nested-quote issues)
         StringBuilder script = new StringBuilder();
         if (useNativeEngine) {
+            boolean isStaged = nativeServerBin.getAbsolutePath().startsWith(RuntimeBootstrap.LOCAL_TMP_ENGINE_DIR);
+            File stagedLibDir = new File(RuntimeBootstrap.LOCAL_TMP_ENGINE_DIR, "lib");
             File bundledLibDir = bundledRuntimePayloadDir != null ? new File(bundledRuntimePayloadDir, "lib") : null;
             File extLibDir = new File(activeBaseDir, "lib");
-            String libDirPath = (bundledLibDir != null && new File(bundledLibDir, "libQnnHtp.so").isFile())
-                ? bundledLibDir.getAbsolutePath()
-                : extLibDir.getAbsolutePath();
+
+            String libDirPath;
+            if (isStaged && new File(stagedLibDir, "libQnnHtp.so").isFile()) {
+                libDirPath = stagedLibDir.getAbsolutePath();
+            } else if (bundledLibDir != null && new File(bundledLibDir, "libQnnHtp.so").isFile()) {
+                libDirPath = bundledLibDir.getAbsolutePath();
+            } else {
+                libDirPath = extLibDir.getAbsolutePath();
+            }
+
             File backendLib = new File(libDirPath, "libQnnHtp.so");
             if (!backendLib.isFile() && new File(extLibDir, "libQnnHtp.so").isFile()) {
                 backendLib = new File(extLibDir, "libQnnHtp.so");
@@ -1841,18 +1850,12 @@ public class MainActivity extends AppCompatActivity {
                 systemLib = new File(extLibDir, "libQnnSystem.so");
             }
 
-            File rpcLib = null;
-            if (bundledLibDir != null && new File(bundledLibDir, "libcdsprpc.so").isFile()) {
-                rpcLib = new File(bundledLibDir, "libcdsprpc.so");
-            } else if (new File(extLibDir, "libcdsprpc.so").isFile()) {
-                rpcLib = new File(extLibDir, "libcdsprpc.so");
-            }
-            if (bundledLibDir != null && new File(bundledLibDir, "libcdsprpc.so").isFile()) {
-                File targetRpc = new File(extLibDir, "libcdsprpc.so");
-                if (!targetRpc.isFile() && extLibDir.exists() && extLibDir.canWrite()) {
-                    try {
-                        copyFile(new File(bundledLibDir, "libcdsprpc.so"), targetRpc);
-                    } catch (Exception ignored) {}
+            File rpcLib = new File(libDirPath, "libcdsprpc.so");
+            if (!rpcLib.isFile()) {
+                if (bundledLibDir != null && new File(bundledLibDir, "libcdsprpc.so").isFile()) {
+                    rpcLib = new File(bundledLibDir, "libcdsprpc.so");
+                } else if (new File(extLibDir, "libcdsprpc.so").isFile()) {
+                    rpcLib = new File(extLibDir, "libcdsprpc.so");
                 }
             }
 
@@ -1881,11 +1884,11 @@ public class MainActivity extends AppCompatActivity {
             script.append("export LD_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
                 .append(":")
                 .append(shellEscape(activeBaseDir)).append("/lib")
-                .append(":/data/local/tmp/sdxl_test/lib\"\n");
+                .append(":/data/local/tmp/sdxl_app_engine/lib:/data/local/tmp/sdxl_test/lib\"\n");
             script.append("export ADSP_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
                 .append(";")
                 .append(shellEscape(activeBaseDir)).append("/lib")
-                .append(";/data/local/tmp/sdxl_test/lib")
+                .append(";/data/local/tmp/sdxl_app_engine/lib;/data/local/tmp/sdxl_test/lib")
                 .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp\"\n");
             script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
             script.append("exec \"").append(shellEscape(nativeServerBin.getAbsolutePath())).append("\"")
@@ -2746,21 +2749,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private File findNativeServerBinary(File bundledRuntimePayloadDir, String activeBaseDir) {
-        if (bundledRuntimePayloadDir != null) {
-            File bundledServer = new File(bundledRuntimePayloadDir, "bin/qnn-multi-context-server");
-            if (bundledServer.isFile()) {
-                bundledServer.setExecutable(true, false);
-                try {
-                    Runtime.getRuntime().exec(new String[]{"chmod", "755", bundledServer.getAbsolutePath()}).waitFor();
-                } catch (Exception ignored) {}
-                return bundledServer;
+        File stagedDir = RuntimeBootstrap.ensureStagedLocalTmpEngine(this);
+        if (stagedDir != null) {
+            File stagedServer = new File(stagedDir, "bin/qnn-multi-context-server");
+            if (stagedServer.isFile()) {
+                stagedServer.setExecutable(true, false);
+                return stagedServer;
             }
         }
         for (String candidate : new String[] {
-            activeBaseDir + "/bin/qnn-multi-context-server",
-            activeBaseDir + "/qnn-multi-context-server",
+            RuntimeBootstrap.LOCAL_TMP_ENGINE_DIR + "/bin/qnn-multi-context-server",
+            "/data/local/tmp/sdxl_app_engine/bin/qnn-multi-context-server",
             "/data/local/tmp/sdxl_test/qnn-multi-context-server",
-            "/data/local/tmp/sdxl_qnn/bin/qnn-multi-context-server"
+            "/data/local/tmp/sdxl_qnn/bin/qnn-multi-context-server",
+            activeBaseDir + "/bin/qnn-multi-context-server",
+            activeBaseDir + "/qnn-multi-context-server"
         }) {
             File f = new File(candidate);
             if (f.isFile()) {
@@ -2769,6 +2772,16 @@ public class MainActivity extends AppCompatActivity {
                     Runtime.getRuntime().exec(new String[]{"chmod", "755", f.getAbsolutePath()}).waitFor();
                 } catch (Exception ignored) {}
                 return f;
+            }
+        }
+        if (bundledRuntimePayloadDir != null) {
+            File bundledServer = new File(bundledRuntimePayloadDir, "bin/qnn-multi-context-server");
+            if (bundledServer.isFile()) {
+                bundledServer.setExecutable(true, false);
+                try {
+                    Runtime.getRuntime().exec(new String[]{"chmod", "755", bundledServer.getAbsolutePath()}).waitFor();
+                } catch (Exception ignored) {}
+                return bundledServer;
             }
         }
         return null;
