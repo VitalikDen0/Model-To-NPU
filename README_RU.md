@@ -48,9 +48,8 @@
 - Полностью автономный нативный движок на C (`qnn-multi-context-server`) управляет CLIP, монолитным UNet и VAE напрямую через C API QNN.
 - Запуск одной командой через ADB или прямо из нативного APK.
 
-### 5. 📲 Готовится обновление Android APK (до версии 0.6.0)
-- Нативное Android-приложение в каталоге `APK/` прямо сейчас обновляется до версии **0.6.0**.
-- В версии 0.6.0 старый стек на базе Termux/Python полностью заменяется на монолитный C-движок с удобным UI выбора любого разрешения и моментальной генерацией.
+### 5. 📲 Нативный Android APK (v0.6.4)
+- Автономное Android-приложение **Zero-Root & Zero-Termux** ([Релизы](https://github.com/VitalikDen0/Model-To-NPU/releases/tag/v0.6.4)) со встроенным монолитным C-движком, Progressive CFG (`dCache`), динамическим разрешением, селектором LoRA и строгим индустриальным тёмным интерфейсом.
 
 ---
 
@@ -78,24 +77,31 @@
 <!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>Ранний публичный скриншот — 273.6 с итого</b><br>
       <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Earlier phone-side proof screenshot at 273.6 seconds" width="100%">
     </td>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>Публичный маркер v0.2.0 — 100.8 с итого</b><br>
       <img src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" alt="Phone-side proof screenshot for v0.2.0 at 100.8 seconds" width="100%">
     </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>Скриншот v0.2.3 (Live Preview ON) — 78.0 с итого</b><br>
       <img src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" alt="Phone-side proof screenshot for v0.2.3 at 78.0 seconds" width="100%">
     </td>
+  </tr>
+</table>
+<table align="center">
+  <tr>
     <td width="50%" align="center">
       <b>Cold-start APK замер v0.4.7 — 34.6 с итого</b><br>
       <img src="https://github.com/user-attachments/assets/04b6e61a-79d6-4ce5-a7d6-158461ca97e6" alt="Current phone-side proof screenshot at 34.6 seconds (cold start)" width="100%"><br>
       <sub>Чистое время ускорителя: ~16.25 с.</sub>
+    </td>
+    <td width="50%" align="center">
+      <b>Zero-Root APK v0.6.4 — 20.38 с итого</b><br>
+      <img src="https://github.com/user-attachments/assets/99c1cdb8-1240-4251-b7fe-89d702a4e8e7" alt="Phone-side proof screenshot for v0.6.4 at 20.38 seconds (Zero-Root APK)" width="100%"><br>
+      <sub>CLIP: 158 мс · UNet (8 шагов, dCache): 11.28 с · VAE: 2.32 с.</sub>
     </td>
   </tr>
 </table>
@@ -103,7 +109,7 @@
 
 ### Эволюция скорости и телеметрия на OnePlus 13
 
-Хронология публичных подтверждений скорости: **273.6 с → 100.8 с → 78.0 с → 34.6 с → 11.59 с (чистый UNet 8 шагов)**!
+Хронология публичных подтверждений скорости: **273.6 с → 100.8 с → 78.0 с → 34.6 с → 20.38 с (11.28 с чистый UNet 8 шагов)**!
 
 ```text
 ================================================================================
@@ -163,9 +169,10 @@
 | **v0.2.5** | 75.6 с | 66.6 с | 2.8 с | 3.0 с | Нативный ускоритель, вызовы `qnn-net-run` |
 | **v0.3.0** | 30.4 с | 19.3 с | 2.8 с | 1.9 с | Persistent C-сервер, деление UNet (enc+dec) |
 | **v0.4.7** | 34.6 с | 14.2 с | 0.1 с | 1.8 с | Замер cold start APK (разделенный UNet) |
-| **v0.6.0-core** | **20.0–21.0 с** | **11.59 с** | **0.28 с** | **2.20 с** | **Монолитный W8A16, 72.7% NPU Roofline, 6 HVX потоков, Zero-Root/Termux** |
+| **v0.6.0-core** | 20.9 с | 11.59 с | 0.28 с | 2.20 с | Монолитный W8A16, 72.7% NPU Roofline, 6 HVX потоков |
+| **v0.6.4 (APK)** | **20.38 с** | **11.28 с** | **0.16 с** | **2.32 с** | **True Zero-Root & Zero-Termux APK, Progressive CFG (dCache), динамические LoRA** |
 
-> *Примечание: Время v0.6.0-core (~20–21 с) измерено при холодном старте с полной десериализацией 2.44 ГБ графа из UFS 4.0 flash. Последующие генерации без выгрузки контекста занимают ~14 секунд!*
+> *Примечание: Время v0.6.4 (20.38 с) измерено при холодном старте APK с полной десериализацией 2.44 ГБ графа из UFS 4.0 flash. Последующие генерации без выгрузки контекста занимают ~14 секунд!*
 
 ### Замеры динамического разрешения (Centered Spatial-CFG)
 
@@ -221,7 +228,7 @@ adb shell "LD_LIBRARY_PATH=/data/local/tmp/sdxl_qnn/lib /data/local/tmp/sdxl_qnn
 - `scripts/build_qnn_multi_context_server.py` — Скрипт автоматической сборки под Android NDK Clang.
 - `phone_generate.py` — Автономный Python-скрипт для тестов и валидации.
 - `PROJECT_STATE.md` — Подробный инженерный паспорт проекта, расчеты физического Roofline и архитектура.
-- `APK/` — Исходный код Android-приложения (готовится релиз 0.6.0).
+- `APK/` — Исходный код автономного Zero-Root Android-приложения (v0.6.4).
 - `SDXL/` — Скрипты квантования, калибровки и сборки ONNX-графов SDXL.
 - `WAN 2.1 1.3B/` — Исследовательский workspace под генерацию видео WAN 2.1.
 

@@ -40,8 +40,8 @@ The world's first fully functional on-device **Stable Diffusion XL (SDXL)** pipe
 - Standalone native C inference engine (`qnn-multi-context-server`) handles CLIP, Monolithic UNet, and VAE directly via QNN System & Backend APIs.
 - Can be executed with a single command via ADB or embedded into an Android APK.
 
-### 5. 📲 Upcoming Android APK Update (v0.6.0)
-- The Android application in `APK/` is being updated to version **0.6.0** to directly incorporate the native monolithic C-engine and dynamic resolution UI. Stay tuned!
+### 5. 📲 Native Android APK (v0.6.4)
+- Standalone **Zero-Root & Zero-Termux** Android application ([Releases](https://github.com/VitalikDen0/Model-To-NPU/releases/tag/v0.6.4)) packing the monolithic C-engine, Progressive CFG (`dCache`), Dynamic Resolution, Dynamic LoRA selector, and strict industrial dark UI.
 
 ---
 
@@ -54,9 +54,8 @@ The world's first fully functional on-device **Stable Diffusion XL (SDXL)** pipe
     <td width="50%"><img src="https://github.com/user-attachments/assets/4bc1ac51-a98e-4931-a3e9-247327e0bbe5" alt="SDXL on phone sample 2" width="100%"></td>
   </tr>
   <tr>
-    <td width="33%"><img src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" alt="SDXL on phone sample 3" width="100%"></td>
-    <td width="33%"><img src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" alt="SDXL on phone sample 4" width="100%"></td>
-    <td width="33%"><img src="https://github.com/user-attachments/assets/99c1cdb8-1240-4251-b7fe-89d702a4e8e7" alt="SDXL on phone sample 5" width="100%">
+    <td width="50%"><img src="https://github.com/user-attachments/assets/1c87282c-ccc2-4dc1-b003-0693dd0fa3d4" alt="SDXL on phone sample 3" width="100%"></td>
+    <td width="50%"><img src="https://github.com/user-attachments/assets/8f5e3d0d-ebe6-4cea-98f7-2b13b51a9ede" alt="SDXL on phone sample 4" width="100%"></td>
   </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
@@ -70,24 +69,31 @@ All gallery samples above are **1024×1024** outputs from the Lightning-merged S
 <!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>Earlier public screenshot — 273.6s total</b><br>
       <img src="https://github.com/user-attachments/assets/15c785f0-b7a3-4dac-8535-e14055bf3453" alt="Earlier phone-side proof screenshot at 273.6 seconds" width="100%">
     </td>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>v0.2.0 public marker — 100.8s total</b><br>
       <img src="https://github.com/user-attachments/assets/70988ed8-bf42-4235-8a70-19bf35db6574" alt="Phone-side proof screenshot for v0.2.0 at 100.8 seconds" width="100%">
     </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
+    <td width="33%" align="center">
       <b>v0.2.3 screenshot (Live Preview ON) — 78.0s total</b><br>
       <img src="https://github.com/user-attachments/assets/e36a584f-bb39-427a-805d-ea44e9a8b3a0" alt="Phone-side proof screenshot for v0.2.3 at 78.0 seconds" width="100%">
     </td>
+  </tr>
+</table>
+<table align="center">
+  <tr>
     <td width="50%" align="center">
       <b>v0.4.7 cold-start APK proof — 34.6s total</b><br>
       <img src="https://github.com/user-attachments/assets/04b6e61a-79d6-4ce5-a7d6-158461ca97e6" alt="Phone-side proof screenshot at 34.6 seconds (cold start)" width="100%"><br>
       <sub>Measured accelerator-visible time inside this run: ~16.25 s.</sub>
+    </td>
+    <td width="50%" align="center">
+      <b>v0.6.4 Zero-Root APK proof — 20.38s total</b><br>
+      <img src="https://github.com/user-attachments/assets/99c1cdb8-1240-4251-b7fe-89d702a4e8e7" alt="Phone-side proof screenshot for v0.6.4 at 20.38 seconds (Zero-Root APK)" width="100%"><br>
+      <sub>CLIP: 158 ms · UNet (8 steps, dCache): 11.28 s · VAE: 2.32 s.</sub>
     </td>
   </tr>
 </table>
@@ -95,7 +101,7 @@ All gallery samples above are **1024×1024** outputs from the Lightning-merged S
 
 ### On-Device Telemetry & Milestone Progression
 
-Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s → 11.59 s (UNet 8 steps)**!
+Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s → 20.38 s (11.28 s UNet 8 steps)**!
 
 ```text
 ================================================================================
@@ -147,9 +153,10 @@ Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s �
 | **v0.2.5** | 75.6 s | 66.6 s | 2.8 s | 3.0 s | Native accel helper, per-step `qnn-net-run` |
 | **v0.3.0** | 30.4 s | 19.3 s | 2.8 s | 1.9 s | Persistent QNN server, split UNet (enc+dec) |
 | **v0.4.7** | 34.6 s | 14.2 s | 0.1 s | 1.8 s | APK cold start marker (split UNet) |
-| **v0.6.0-core** | **20.0–21.0 s** | **11.59 s** | **0.28 s** | **2.20 s** | **Monolithic W8A16 UNet, 72.7% NPU Roofline, 6 HVX threads, Zero-Root/Termux** |
+| **v0.6.0-core** | 20.9 s | 11.59 s | 0.28 s | 2.20 s | Monolithic W8A16 UNet, 72.7% NPU Roofline, 6 HVX threads |
+| **v0.6.4 (APK)** | **20.38 s** | **11.28 s** | **0.16 s** | **2.32 s** | **True Zero-Root & Zero-Termux APK, Progressive CFG (dCache), Dynamic LoRA** |
 
-> *Note: v0.6.0-core total time (~20–21 s) is a cold-start measurement including deserializing 2.44 GiB of model weights from UFS 4.0 flash storage. Subsequent warm generations run in ~14 s total!*
+> *Note: v0.6.4 total time (20.38 s) is a cold-start APK measurement including deserializing 2.44 GiB of model weights from UFS 4.0 flash storage. Subsequent warm generations run in ~14 s total!*
 
 ### Dynamic Resolution Benchmarks (Centered Spatial-CFG)
 
@@ -205,7 +212,7 @@ adb shell "LD_LIBRARY_PATH=/data/local/tmp/sdxl_qnn/lib /data/local/tmp/sdxl_qnn
 - `scripts/build_qnn_multi_context_server.py` — Host build script compiling with Android NDK Clang.
 - `phone_generate.py` — Standalone Python entrypoint for debugging and evaluation.
 - `PROJECT_STATE.md` — Complete engineering record, hardware roofline calculations, and architectural notes.
-- `APK/` — Android Studio project for the native mobile app (v0.6.0 update in development).
+- `APK/` — Android Studio project for the standalone Zero-Root mobile app (v0.6.4).
 - `SDXL/` — SDXL conversion, calibration, and ONNX graph manipulation tools.
 - `WAN 2.1 1.3B/` — WAN research workspace and video diffusion tools.
 
