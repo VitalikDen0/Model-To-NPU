@@ -13,9 +13,10 @@ The world's first fully functional on-device **Stable Diffusion XL (SDXL)** pipe
 
 ## ⚡ What's New in v0.6.0-core
 
-### 1. 🚀 72.7% NPU Hardware Roofline Limit Achieved
+### 1. 🚀 72.7% LPDDR5X Memory Bandwidth Roofline Achieved
 - **7.13 TOPS sustained** across all 362 layers of SDXL 2.57B (W8A16) on Hexagon V79 HTP.
 - UNet single pass latency dropped to **880.3 ms** (down from ~956 ms and ~2411 ms historically).
+- **72.7% of uncompressed LPDDR5X DMA bandwidth ceiling** reached (~640 ms theoretical memory bottleneck at ~58 GB/s). Compute cores (HMX tensor & 1024-bit HVX vector units) maintain significant headroom.
 - 8-step generation UNet time dropped to **11.59 seconds**!
 - Total Cold Start generation (including model deserialization from UFS 4.0 flash) is **~20–21 seconds**. Subsequent warm generations take **~14 seconds**.
 - **Host overhead is virtually eliminated (< 0.7%)**: ARM64 NEON FP16 MLP FMA (3.4 ms), 64KB L1 double-buffer copy to RPCMEM (2.2 ms, ~49.2 GB/s), FastRPC transport (1.7 ms).
@@ -153,7 +154,7 @@ Public screenshot lineage so far: **273.6 s → 100.8 s → 78.0 s → 34.6 s �
 | **v0.2.5** | 75.6 s | 66.6 s | 2.8 s | 3.0 s | Native accel helper, per-step `qnn-net-run` |
 | **v0.3.0** | 30.4 s | 19.3 s | 2.8 s | 1.9 s | Persistent QNN server, split UNet (enc+dec) |
 | **v0.4.7** | 34.6 s | 14.2 s | 0.1 s | 1.8 s | APK cold start marker (split UNet) |
-| **v0.6.0-core** | 20.9 s | 11.59 s | 0.28 s | 2.20 s | Monolithic W8A16 UNet, 72.7% NPU Roofline, 6 HVX threads |
+| **v0.6.0-core** | 20.9 s | 11.59 s | 0.28 s | 2.20 s | Monolithic W8A16 UNet, 72.7% Memory Roofline, 6 HVX threads |
 | **v0.6.4 (APK)** | **20.38 s** | **11.28 s** | **0.16 s** | **2.32 s** | **True Zero-Root & Zero-Termux APK, Progressive CFG (dCache), Dynamic LoRA** |
 
 > *Note: v0.6.4 total time (20.38 s) is a cold-start APK measurement including deserializing 2.44 GiB of model weights from UFS 4.0 flash storage. Subsequent warm generations run in ~14 s total!*
@@ -211,7 +212,7 @@ adb shell "LD_LIBRARY_PATH=/data/local/tmp/sdxl_qnn/lib /data/local/tmp/sdxl_qnn
 - `NPU/qnn_multi_context_server.c` — The complete standalone C inference engine (NEON, RPCMEM, 6 HVX threads, Spatial-CFG).
 - `scripts/build_qnn_multi_context_server.py` — Host build script compiling with Android NDK Clang.
 - `phone_generate.py` — Standalone Python entrypoint for debugging and evaluation.
-- `PROJECT_STATE.md` — Complete engineering record, hardware roofline calculations, and architectural notes.
+- `PROJECT_STATE.md` — Complete engineering record, memory roofline calculations, and architectural notes.
 - `APK/` — Android Studio project for the standalone Zero-Root mobile app (v0.6.4).
 - `SDXL/` — SDXL conversion, calibration, and ONNX graph manipulation tools.
 - `WAN 2.1 1.3B/` — WAN research workspace and video diffusion tools.
