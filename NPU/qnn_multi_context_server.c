@@ -583,10 +583,29 @@ static void set_perf_mode(void) {
     rpc_poll.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_POLLING_TIME;
     rpc_poll.rpcPollingTimeConfig = 9999;
 
+    /* Hexagon V75/V79: Dedicated HMX_V2 clock/voltage voting (force CLK_PERF_HIGH for matrix engine) */
+    QnnHtpPerfInfrastructure_PowerConfig_t hmx_cfg;
+    memset(&hmx_cfg, 0, sizeof(hmx_cfg));
+    hmx_cfg.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_HMX_V2;
+    hmx_cfg.hmxV2Config.hmxPickDefault = 0; /* Manual clock vote */
+    hmx_cfg.hmxV2Config.hmxVoltageCornerMin = DCVS_EXP_VCORNER_TUR;
+    hmx_cfg.hmxV2Config.hmxVoltageCornerTarget = DCVS_EXP_VCORNER_MAX;
+    hmx_cfg.hmxV2Config.hmxVoltageCornerMax = DCVS_EXP_VCORNER_MAX;
+    hmx_cfg.hmxV2Config.hmxPerfMode = QNN_HTP_PERF_INFRASTRUCTURE_CLK_PERF_HIGH;
+
+    /* Try with HMX_V2 turbo pin first */
+    const QnnHtpPerfInfrastructure_PowerConfig_t* configs_hmx[] = { &dcvs, &rpc_lat, &rpc_poll, &hmx_cfg, NULL };
+    err = htpInfra->perfInfra.setPowerConfig(g_powerConfigId, configs_hmx);
+    if (QNN_SUCCESS == err) {
+        fprintf(stderr, "[server] HTP performance mode set with HMX_V2 turbo (powerConfigId=%u)\n", g_powerConfigId);
+        return;
+    }
+
+    /* Fallback without HMX_V2 if device/firmware rejects option 5 */
     const QnnHtpPerfInfrastructure_PowerConfig_t* configs[] = { &dcvs, &rpc_lat, &rpc_poll, NULL };
     err = htpInfra->perfInfra.setPowerConfig(g_powerConfigId, configs);
     if (QNN_SUCCESS == err) {
-        fprintf(stderr, "[server] HTP performance mode set (powerConfigId=%u)\n", g_powerConfigId);
+        fprintf(stderr, "[server] HTP performance mode set (standard fallback, powerConfigId=%u)\n", g_powerConfigId);
     } else {
         fprintf(stderr, "[server] WARN: setPowerConfig failed: %d\n", (int)err);
     }
