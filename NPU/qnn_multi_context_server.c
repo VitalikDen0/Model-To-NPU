@@ -2021,6 +2021,7 @@ typedef struct {
 static PerfTelemetry       g_perf = {0};
 static Qnn_ProfileHandle_t g_profHandle = NULL;
 static int                 g_use_legacy_temb = 0;
+static int                 g_use_contrast_stretch = 0;
 
 static void record_qnn_profile_Node(QnnProfile_EventId_t evId, int is_vae) {
     QnnProfile_EventType_t ev_type = 0;
@@ -3763,6 +3764,25 @@ static int file_exists_nonempty(const char* path) {
  * Searches <base_dir>/context/ for the tightest compiled QNN context binary (Wg >= req_W, Hg >= req_H).
  * Falls back to the default 1024x1024 context binary if no resolution-specific binary is found.
  */
+static int find_unet_candidate(char* out_path, size_t max_len, const char* dir, int w, int h) {
+    char cand[MAX_PATH_LEN];
+    if (w > 0 && h > 0) {
+        snprintf(cand, sizeof(cand), "%s/unet_%dx%d.serialized.bin.bin", dir, w, h);
+        if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+        snprintf(cand, sizeof(cand), "%s/unet_base_%dx%d.serialized.bin.bin", dir, w, h);
+        if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+        snprintf(cand, sizeof(cand), "%s/unet_lightning8step_%dx%d.serialized.bin.bin", dir, w, h);
+        if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+    }
+    snprintf(cand, sizeof(cand), "%s/unet.serialized.bin.bin", dir);
+    if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+    snprintf(cand, sizeof(cand), "%s/unet_base.serialized.bin.bin", dir);
+    if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+    snprintf(cand, sizeof(cand), "%s/unet_lightning8step.serialized.bin.bin", dir);
+    if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+    return 0;
+}
+
 static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H, const char* lora_slot,
                                  char* out_unet_path, char* out_vae_path) {
     static const int buckets[][2] = {
@@ -3777,40 +3797,35 @@ static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H, con
     const int num_buckets = (int)(sizeof(buckets) / sizeof(buckets[0]));
     out_unet_path[0] = '\0';
     out_vae_path[0] = '\0';
+    char ctx_dir[MAX_PATH_LEN];
+    snprintf(ctx_dir, sizeof(ctx_dir), "%s/context", base_dir);
 
     /* Optional: Check LoRA slot context */
-    if (lora_slot && lora_slot[0] && strcmp(lora_slot, "None") != 0) {
-        char cand_l[MAX_PATH_LEN];
-        snprintf(cand_l, sizeof(cand_l), "%s/context/lora_slots/%s/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, lora_slot, req_W, req_H);
-        if (file_exists_nonempty(cand_l)) {
-            strcpy(out_unet_path, cand_l);
-            fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", cand_l);
+    if (lora_slot && lora_slot[0] && strcmp(lora_slot, "None") != 0 && strcmp(lora_slot, "Без LoRA") != 0) {
+        char slot_dir[MAX_PATH_LEN];
+        snprintf(slot_dir, sizeof(slot_dir), "%s/context/lora_slots/%s", base_dir, lora_slot);
+        if (find_unet_candidate(out_unet_path, MAX_PATH_LEN, slot_dir, req_W, req_H)) {
+            fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", out_unet_path);
         } else {
-            snprintf(cand_l, sizeof(cand_l), "%s/context/lora_slots/%s/unet_lightning8step.serialized.bin.bin", base_dir, lora_slot);
-            if (file_exists_nonempty(cand_l)) {
-                strcpy(out_unet_path, cand_l);
-                fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", cand_l);
+            snprintf(slot_dir, sizeof(slot_dir), "%s/context/%s", base_dir, lora_slot);
+            if (find_unet_candidate(out_unet_path, MAX_PATH_LEN, slot_dir, req_W, req_H)) {
+                fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", out_unet_path);
+            } else if (file_exists_nonempty(lora_slot)) {
+                strncpy(out_unet_path, lora_slot, MAX_PATH_LEN);
+                fprintf(stderr, "[server] LoRA: selected direct context '%s'\n", lora_slot);
             } else {
-                snprintf(cand_l, sizeof(cand_l), "%s/context/%s/unet_lightning8step.serialized.bin.bin", base_dir, lora_slot);
-                if (file_exists_nonempty(cand_l)) {
-                    strcpy(out_unet_path, cand_l);
-                    fprintf(stderr, "[server] LoRA: selected UNet context '%s'\n", cand_l);
-                } else if (file_exists_nonempty(lora_slot)) {
-                    strcpy(out_unet_path, lora_slot);
-                    fprintf(stderr, "[server] LoRA: selected direct context '%s'\n", lora_slot);
-                } else {
-                    fprintf(stderr, "[server] LoRA: slot '%s' context not found, using base model\n", lora_slot);
-                }
+                fprintf(stderr, "[server] LoRA: slot '%s' context not found, using base model\n", lora_slot);
             }
         }
     }
 
     /* 1. Check exact resolution match first */
     char cand_u[MAX_PATH_LEN], cand_v[MAX_PATH_LEN];
-    snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, req_W, req_H);
     snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder_%dx%d.serialized.bin.bin", base_dir, req_W, req_H);
-    if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
-        if (!out_unet_path[0]) strcpy(out_unet_path, cand_u);
+    if (!file_exists_nonempty(cand_v)) {
+        snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder.serialized.bin.bin", base_dir);
+    }
+    if (file_exists_nonempty(cand_v) && (!out_unet_path[0] ? find_unet_candidate(out_unet_path, MAX_PATH_LEN, ctx_dir, req_W, req_H) : 1)) {
         strcpy(out_vae_path, cand_v);
         return;
     }
@@ -3825,34 +3840,29 @@ static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H, con
         int area = bw * bh;
         if (area >= best_area) continue;
 
-        snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step_%dx%d.serialized.bin.bin", base_dir, bw, bh);
         snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder_%dx%d.serialized.bin.bin", base_dir, bw, bh);
-        if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
+        if (!file_exists_nonempty(cand_v) && bw == 1024 && bh == 1024) {
+            snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder.serialized.bin.bin", base_dir);
+        }
+
+        if (file_exists_nonempty(cand_v) && find_unet_candidate(cand_u, sizeof(cand_u), ctx_dir, bw, bh)) {
             best_area = area;
             strcpy(best_u, cand_u);
             strcpy(best_v, cand_v);
-            continue;
-        }
-        if (bw == 1024 && bh == 1024) {
-            snprintf(cand_u, sizeof(cand_u), "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
-            snprintf(cand_v, sizeof(cand_v), "%s/context/vae_decoder.serialized.bin.bin", base_dir);
-            if (file_exists_nonempty(cand_u) && file_exists_nonempty(cand_v)) {
-                best_area = area;
-                strcpy(best_u, cand_u);
-                strcpy(best_v, cand_v);
-            }
         }
     }
 
-    if (best_u[0] && best_v[0]) {
-        if (!out_unet_path[0]) strcpy(out_unet_path, best_u);
+    if (best_v[0]) {
+        if (!out_unet_path[0] && best_u[0]) strcpy(out_unet_path, best_u);
         strcpy(out_vae_path, best_v);
         return;
     }
 
     /* 3. Default fallback */
     if (!out_unet_path[0]) {
-        snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+        if (!find_unet_candidate(out_unet_path, MAX_PATH_LEN, ctx_dir, 0, 0)) {
+            snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+        }
     }
     snprintf(out_vae_path,  MAX_PATH_LEN, "%s/context/vae_decoder.serialized.bin.bin", base_dir);
 }
@@ -4391,42 +4401,52 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
     }
 
     size_t num_rgb = (size_t)width * (size_t)height * 3;
-
-    /* Normalize [-1, 1] -> [0, 1] and compute [0.5%, 99.5%] contrast stretch via 4096-bin histogram */
-    uint32_t hist[4096] = {0};
-    for (size_t i = 0; i < num_rgb; ++i) {
-        float v = img_f32[i] * 0.5f + 0.5f;
-        if (v < 0.0f) v = 0.0f;
-        else if (v > 1.0f) v = 1.0f;
-        img_f32[i] = v;
-        int bin = (int)(v * 4095.0f + 0.5f);
-        if (bin < 0) bin = 0; else if (bin > 4095) bin = 4095;
-        hist[bin]++;
-    }
-    uint32_t target_lo = (uint32_t)(num_rgb * 0.005);
-    uint32_t target_hi = (uint32_t)(num_rgb * 0.995);
-    uint32_t acc = 0;
-    int bin_lo = 0, bin_hi = 4095;
-    for (int b = 0; b < 4096; ++b) {
-        acc += hist[b];
-        if (acc >= target_lo) { bin_lo = b; break; }
-    }
-    acc = 0;
-    for (int b = 0; b < 4096; ++b) {
-        acc += hist[b];
-        if (acc >= target_hi) { bin_hi = b; break; }
-    }
-    float lo = (float)bin_lo / 4095.0f;
-    float hi = (float)bin_hi / 4095.0f;
-    float range = (hi - lo > 0.05f) ? (hi - lo) : 1.0f;
-    float base_lo = (hi - lo > 0.05f) ? lo : 0.0f;
-
     uint8_t* rgb_u8 = (uint8_t*)malloc(num_rgb);
-    for (size_t i = 0; i < num_rgb; ++i) {
-        float v = (img_f32[i] - base_lo) / range;
-        if (v < 0.0f) v = 0.0f;
-        else if (v > 1.0f) v = 1.0f;
-        rgb_u8[i] = (uint8_t)(v * 255.0f + 0.5f);
+
+    if (!g_use_contrast_stretch) {
+        /* Standard exact Diffusers VAE RGB mapping: (v * 0.5 + 0.5).clamp(0, 1) */
+        for (size_t i = 0; i < num_rgb; ++i) {
+            float v = img_f32[i] * 0.5f + 0.5f;
+            if (v < 0.0f) v = 0.0f;
+            else if (v > 1.0f) v = 1.0f;
+            rgb_u8[i] = (uint8_t)(v * 255.0f + 0.5f);
+        }
+    } else {
+        /* Optional [0.5%, 99.5%] contrast stretch via 4096-bin histogram */
+        uint32_t hist[4096] = {0};
+        for (size_t i = 0; i < num_rgb; ++i) {
+            float v = img_f32[i] * 0.5f + 0.5f;
+            if (v < 0.0f) v = 0.0f;
+            else if (v > 1.0f) v = 1.0f;
+            img_f32[i] = v;
+            int bin = (int)(v * 4095.0f + 0.5f);
+            if (bin < 0) bin = 0; else if (bin > 4095) bin = 4095;
+            hist[bin]++;
+        }
+        uint32_t target_lo = (uint32_t)(num_rgb * 0.005);
+        uint32_t target_hi = (uint32_t)(num_rgb * 0.995);
+        uint32_t acc = 0;
+        int bin_lo = 0, bin_hi = 4095;
+        for (int b = 0; b < 4096; ++b) {
+            acc += hist[b];
+            if (acc >= target_lo) { bin_lo = b; break; }
+        }
+        acc = 0;
+        for (int b = 0; b < 4096; ++b) {
+            acc += hist[b];
+            if (acc >= target_hi) { bin_hi = b; break; }
+        }
+        float lo = (float)bin_lo / 4095.0f;
+        float hi = (float)bin_hi / 4095.0f;
+        float range = (hi - lo > 0.05f) ? (hi - lo) : 1.0f;
+        float base_lo = (hi - lo > 0.05f) ? lo : 0.0f;
+
+        for (size_t i = 0; i < num_rgb; ++i) {
+            float v = (img_f32[i] - base_lo) / range;
+            if (v < 0.0f) v = 0.0f;
+            else if (v > 1.0f) v = 1.0f;
+            rgb_u8[i] = (uint8_t)(v * 255.0f + 0.5f);
+        }
     }
 
     if (save_rgb_png(out_png_path, rgb_u8, width, height) != 0) {
@@ -4489,6 +4509,8 @@ static void usage(const char* prog) {
         "  --full_cfg              Full CFG on all steps (default)\n"
         "  --profile               Print NPU hardware utilization & host bottleneck audit\n"
         "  --legacy_temb           Disable NEON + 64KB block-doubling RPCMEM optimization (for A/B test)\n"
+        "  --stretch               Enable [0.5%%, 99.5%%] contrast stretch (legacy, default: disabled)\n"
+        "  --no_stretch            Disable contrast stretch (default)\n"
         "  --mode <mono|split>     UNet mode: mono (W8A16 monolithic, default) or split\n"
         "  --lora <name|path>      LoRA slot name or direct context binary path\n"
         "  --lora_scale <float>    LoRA strength scale (default: 1.0)\n"
@@ -4577,6 +4599,10 @@ int main(int argc, char** argv) {
             g_perf.detailed = 1;
         } else if (strcmp(argv[i], "--legacy_temb") == 0) {
             g_use_legacy_temb = 1;
+        } else if (strcmp(argv[i], "--stretch") == 0 || strcmp(argv[i], "--contrast_stretch") == 0) {
+            g_use_contrast_stretch = 1;
+        } else if (strcmp(argv[i], "--no_stretch") == 0 || strcmp(argv[i], "--no-stretch") == 0 || strcmp(argv[i], "--no_contrast_stretch") == 0) {
+            g_use_contrast_stretch = 0;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             unet_mode = argv[++i];
         } else if ((strcmp(argv[i], "--lora") == 0 || strcmp(argv[i], "--lora_slot") == 0) && i + 1 < argc) {

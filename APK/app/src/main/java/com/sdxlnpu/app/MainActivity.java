@@ -656,7 +656,7 @@ public class MainActivity extends AppCompatActivity {
         String width = prefs.getString(prefKeyForFamily(PREF_PREFIX_WIDTH, modelFamily), null);
         String height = prefs.getString(prefKeyForFamily(PREF_PREFIX_HEIGHT, modelFamily), null);
         Boolean contrast = prefs.contains(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily))
-            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily), true)
+            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily), false)
             : null;
         Boolean preview = prefs.contains(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily))
             ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily), false)
@@ -694,7 +694,7 @@ public class MainActivity extends AppCompatActivity {
                 height = prefs.getString("last_height", defaultHeight);
             }
             if (contrast == null) {
-                contrast = prefs.getBoolean("last_contrast_stretch", true);
+                contrast = prefs.getBoolean("last_contrast_stretch", false);
             }
             if (preview == null) {
                 preview = prefs.getBoolean("last_live_preview", false);
@@ -713,7 +713,7 @@ public class MainActivity extends AppCompatActivity {
         cfgLabel.setText(String.format(Locale.US, "CFG: %.1f", cfgSeekBar.getProgress() / 10f));
         widthInput.setText(width != null ? width : defaultWidth);
         heightInput.setText(height != null ? height : defaultHeight);
-        contrastStretch.setChecked(contrast != null ? contrast : true);
+        contrastStretch.setChecked(contrast != null ? contrast : false);
         livePreview.setChecked(preview != null ? preview : false);
         progressiveCfg.setChecked(progCfg != null ? progCfg : true);
         if (framesSeekBar != null) {
@@ -1912,6 +1912,9 @@ public class MainActivity extends AppCompatActivity {
             }
             if (cfg > 1.0f && !neg.isEmpty()) {
                 script.append(" --neg \"").append(shellEscape(neg)).append("\"");
+            }
+            if (stretch) {
+                script.append(" --stretch");
             }
             if (loraSlot != null && !loraSlot.isEmpty() && !"None".equalsIgnoreCase(loraSlot) && !"Без LoRA".equalsIgnoreCase(loraSlot)) {
                 script.append(" --lora \"").append(shellEscape(loraSlot)).append("\"");

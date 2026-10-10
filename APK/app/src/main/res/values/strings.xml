@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SDXL NPU</string>
+    <string name="app_name">NPU ENGINE</string>
     <string name="generate">ГЕНЕРАЦИЯ (NPU)</string>
     <string name="stop">СТОП</string>
     <string name="prompt_hint">Промпт</string>

@@ -12,10 +12,8 @@
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="@color/bg_main"
-        app:title="SDXL NPU ENGINE"
+        app:title="NPU ENGINE"
         app:titleTextColor="@color/text_primary"
-        app:subtitle="Snapdragon 8 Elite • Zero-Root Direct DSP"
-        app:subtitleTextColor="@color/primary_light"
         app:elevation="0dp" />
 
     <ScrollView
