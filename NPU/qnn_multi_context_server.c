@@ -3861,7 +3861,8 @@ static void print_npu_utilization_report(int graph_W, int graph_H, int act_W, in
      * - Model weights read per pass: 2.44 GiB (2.618 GB) W8 + 96.99 MB U16 resnet_bias + intermediate
      *   activation DDR spill/fill across 362 layers (8 MB VTCM holds working tiles; ~13.8 GB activation traffic).
      * - Effective sustained LPDDR5X-4800MHz (9600 MT/s) NPU DMA ceiling: ~58.0 GB/s.
-     * - Practical hardware ceiling for monolithic 2.57B W8A16 UNet @ 1024x1024 is ~640 ms/pass (~9.81 TOPS).
+     * - Practical uncompressed memory bandwidth ceiling for monolithic 2.57B W8A16 UNet @ 1024x1024 is ~640 ms/pass (~9.81 TOPS).
+     *   Compute units (HMX tensor core + 1024-bit HVX vector units) retain additional headroom.
      */
     double scale_area = ((double)graph_W * (double)graph_H) / (1024.0 * 1024.0);
     double gflops_pass = 6280.0 * scale_area;
@@ -3905,11 +3906,11 @@ static void print_npu_utilization_report(int graph_W, int graph_H, int act_W, in
     fprintf(stderr, "  Total Per-Pass Wall Time:           %6.2f ms (100.0%%) [Total: %6.1f ms]\n",
             pass_wall_ms, total_unet_ms);
     fprintf(stderr, "----------------------------------------------------------------------\n");
-    fprintf(stderr, "[Hexagon V79 Hardware Roofline & Utilization]:\n");
+    fprintf(stderr, "[Hexagon V79 LPDDR5X Memory Roofline & Utilization]:\n");
     fprintf(stderr, "  • NPU Pipeline Duty Cycle (NPU Active / Step Wall):  %5.1f%%\n", pipeline_npu_duty_pct);
     fprintf(stderr, "  • Achieved Effective Math Throughput (W8A16):        %5.2f TOPS (%.1f TFLOPs/pass)\n",
             achieved_tops, gflops_pass / 1000.0);
-    fprintf(stderr, "  • Practical NPU Hardware Roof Achieved (vs ~%.0fms):  %5.1f%%\n",
+    fprintf(stderr, "  • Uncompressed Memory Bandwidth Roofline (vs ~%.0fms): %5.1f%%\n",
             hw_limit_ms, npu_roof_pct);
     if (g_perf.vae_device_us > 0.0) {
         fprintf(stderr, "  • VAE Decoder NPU Accel: %.1f ms device / %.1f ms wall\n",

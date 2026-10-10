@@ -1,6 +1,6 @@
 # PROJECT STATE: Model-To-NPU (SDXL on Qualcomm Snapdragon NPU)
 
-> **Status**: Monolithic W8A16 C-Engine Stabilized, NPU Hardware Roofline Audited (72.7% of limit), Dynamic Resolution Engine Implemented  
+> **Status**: Monolithic W8A16 C-Engine Stabilized, LPDDR5X Memory Roofline Audited (72.7% of memory limit), Dynamic Resolution Engine Implemented  
 > **Target Device**: OnePlus 13 — Snapdragon 8 Elite (`SM8750`), Hexagon V79 (`htp_v79`), 8 MB VTCM, 6–8 HVX threads  
 > **Repository**: `https://github.com/VitalikDen0/Model-To-NPU` (`V:\Model-To-NPU`, Standalone native C binary: `qnn-multi-context-server`)
 
@@ -46,7 +46,7 @@
 - **Слона на CPU/RPCMEM больше нет!** Накладные расходы хоста (ARM CPU + шина ION RPCMEM + квантизация) составляют суммарно лишь **`6.04 мс` (менее `0.7%` от времени прохода)**.
 - **NPU Pipeline Duty Cycle равен `98.7%`**: 99% времени ядро полностью занято аппаратными вычислениями внутри Hexagon V79.
 
-### 1.3 Аппаратный Roofline Hexagon V79 и процент от физического предела
+### 1.3 Анализ Roofline: утилизация пропускной способности памяти LPDDR5X
 
 SDXL UNet на `1024×1024` (`128×128` латент) — это гигантская модель (2.57B параметров), выполняющая **`6,280 GFLOPs` (`6.28 TFLOPs` / `3.14 TMACs`) за каждый проход**:
 - 60 блоков Transformer на `C=1280` (`N=1024` токена) = `4.00 TFLOPs`
@@ -55,14 +55,15 @@ SDXL UNet на `1024×1024` (`128×128` латент) — это гигантс�
 - Чтение статических весов: `2.62 GB` LPDDR5X
 - Прокачка промежуточных карт активаций через 8 MB VTCM и DDR: ~`13.8 GB` на проход
 
-**Физический предел Hexagon V79 на LPDDR5X (с учётом задержек Softmax/GroupNorm на HVX и пропускной способности памяти ~58 GB/s)** составляет **`~640 мс / проход` (`~9.8 TOPS`)**.
+**Предел пропускной способности памяти LPDDR5X (с учётом задержек Softmax/GroupNorm на HVX и скорости памяти ~58 GB/s без аппаратного сжатия)** составляет **`~640 мс / проход` (`~9.8 TOPS`)**.
 
-- В старой split-модели (AI Hub FP16) эффективная утилизация составляла лишь **~45–55%** из-за постоянной перекачки skip-тензоров и раздельного исполнения.
+- В старой split-модели (AI Hub FP16) эффективная утилизация шины памяти составляла лишь **~45–55%** из-за постоянной перекачки skip-тензоров и раздельного исполнения.
 - В монолитном W8A16 на дефолтных 4 потоках HVX было: `956.6 мс` (**66.9%**).
 - **После разблокировки 6 аппаратных потоков HVX (`QNN_HTP_GRAPH_CONFIG_OPTION_NUM_HVX_THREADS`) и оптимизации хоста**:
   - Чистое время NPU на проход упало до **`880.3 мс`**!
   - Достигнутая эффективная математическая производительность: **`7.13 TOPS`** (устойчиво на протяжении всего цикла).
-  - **Процент достижения физического предела NPU (Roofline): `72.7%`!**
+  - **Процент достижения предела памяти (Memory Roofline): `72.7%`!**
+  - *Важное уточнение*: это ограничение шины памяти (Memory Bandwidth Bound), а не предельная вычислительная мощность чипа. Тензорные ядра HMX и векторные 1024-битные конвейеры HVX в текущем профиле загружены не полностью и периодически простаивают в ожидании DMA-трансфера из LPDDR5X.
 
 ---
 
@@ -114,7 +115,7 @@ SDXL UNet на `1024×1024` (`128×128` латент) — это гигантс�
 
 1. **Монолитный W8A16 UNet полностью запущен и стабилен**: деление модели навсегда ликвидировано.
 2. **Zero Root & Zero Python**: автономный C-движок `qnn-multi-context-server` работает напрямую в userspace Android 15.
-3. **Утилизация NPU доведена до `72.7%` от физического предела чипа** (устойчивые `7.13 TOPS` на 2.57B параметрах).
+3. **Утилизация шины памяти доведена до `72.7%` от предела LPDDR5X (Memory Roofline)** (устойчивые `7.13 TOPS` на 2.57B параметрах).
 4. **Динамическое разрешение полностью решено и верифицировано** от `1024×768` до `1344×1728` без артефактов и без накладных расходов.
 5. **Android APK v0.6.4 (True Zero-Root Linker Unrestricted Staging & Industrial Dark UI)**:
    - **True Zero-Root FastRPC Fix**: Выявлена и устранена фундаментальная причина ошибок FastRPC 4000/14001 в Android — bionic linker namespace isolation (`[system]` sandbox для `/data/user/0/...`). Приложение автоматически разворачивает нативный C-движок в `/data/local/tmp/sdxl_app_engine/`, где действует правило `dir.unrestricted`. Это открывает прямой доступ к аппаратным FastRPC-символам и драйверам Hexagon DSP без root-прав.
