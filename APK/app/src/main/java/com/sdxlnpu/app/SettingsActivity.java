@@ -218,22 +218,64 @@ public class SettingsActivity extends AppCompatActivity {
             hasTok, "ГОТОВО", "НЕТ");
         if (!hasTok) allOk = false;
 
-        // 8. LoRA Directory
+        // 8. LoRA Verification: Separate ready .bin.bin from raw .safetensors
         File loraDir1 = new File(base, "lora");
         File loraDir2 = new File(base, "loras");
-        int loraCount = 0;
-        if (loraDir1.isDirectory()) {
-            File[] files = loraDir1.listFiles((d, name) -> name.endsWith(".safetensors") || name.endsWith(".bin"));
-            if (files != null) loraCount += files.length;
+        File loraSlots = new File(contextDir, "lora_slots");
+        java.util.List<String> compiledLoras = new java.util.ArrayList<>();
+        java.util.List<String> rawSafetensors = new java.util.ArrayList<>();
+
+        for (File ld : new File[]{loraDir1, loraDir2}) {
+            if (ld.isDirectory()) {
+                File[] files = ld.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        String fn = f.getName();
+                        if (f.isFile()) {
+                            if (fn.endsWith(".bin.bin") || fn.endsWith(".serialized.bin")) {
+                                compiledLoras.add(fn);
+                            } else if (fn.endsWith(".safetensors")) {
+                                rawSafetensors.add(fn);
+                            }
+                        }
+                    }
+                }
+            }
         }
-        if (loraDir2.isDirectory()) {
-            File[] files = loraDir2.listFiles((d, name) -> name.endsWith(".safetensors") || name.endsWith(".bin"));
-            if (files != null) loraCount += files.length;
+        if (loraSlots.isDirectory()) {
+            File[] slotDirs = loraSlots.listFiles(File::isDirectory);
+            if (slotDirs != null) {
+                for (File sd : slotDirs) {
+                    File[] sf = sd.listFiles((d, n) -> n.endsWith(".bin.bin") || n.endsWith(".serialized.bin"));
+                    if (sf != null && sf.length > 0) {
+                        compiledLoras.add(sd.getName() + " (слот)");
+                    }
+                }
+            }
         }
-        boolean loraDirExists = loraDir1.isDirectory() || loraDir2.isDirectory();
-        addVerificationRow(itemsContainer, inflater, "Папка LoRA Адаптеров",
-            loraDirExists ? String.format(java.util.Locale.US, "Папка активна (найдено адаптеров: %d)", loraCount) : "Папка /lora/ отсутствует (создайте для адаптеров)",
-            loraDirExists, loraCount > 0 ? String.format(java.util.Locale.US, "%d LORA", loraCount) : "СОЗДАНА", "НЕТ");
+
+        // Ready NPU LoRA Row (.bin.bin)
+        if (!compiledLoras.isEmpty()) {
+            addVerificationRow(itemsContainer, inflater, "LoRA Адаптеры (NPU .bin.bin)",
+                "Готовы к генерации: " + String.join(", ", compiledLoras),
+                0xFF10B981, String.format(java.util.Locale.US, "%d ГОТОВО", compiledLoras.size()));
+        } else {
+            addVerificationRow(itemsContainer, inflater, "LoRA Адаптеры (NPU .bin.bin)",
+                "Скомпилированные .bin.bin не найдены (в меню доступен 'None')",
+                0xFF94A3B8, "0");
+        }
+
+        // Raw .safetensors Row
+        if (!rawSafetensors.isEmpty()) {
+            addVerificationRow(itemsContainer, inflater, "Исходники LoRA (.safetensors)",
+                "Найдено: " + String.join(", ", rawSafetensors) + "\n⚠️ Не являются .bin.bin (требуют компиляции на ПК)",
+                0xFFF59E0B, String.format(java.util.Locale.US, "%d СЫРЫЕ", rawSafetensors.size()));
+        } else {
+            boolean loraDirExists = loraDir1.isDirectory() || loraDir2.isDirectory();
+            addVerificationRow(itemsContainer, inflater, "Исходники LoRA (.safetensors)",
+                loraDirExists ? "Файлы .safetensors не найдены" : "Папка /lora/ отсутствует",
+                0xFF94A3B8, "0");
+        }
 
         if (allOk) {
             overallBadge.setText("ГОТОВО К ГЕНЕРАЦИИ");
@@ -253,6 +295,11 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void addVerificationRow(android.widget.LinearLayout container, android.view.LayoutInflater inflater,
                                     String title, String detail, boolean ok, String okText, String failText) {
+        addVerificationRow(container, inflater, title, detail, ok ? 0xFF10B981 : 0xFFF43F5E, ok ? okText : failText);
+    }
+
+    private void addVerificationRow(android.widget.LinearLayout container, android.view.LayoutInflater inflater,
+                                    String title, String detail, int chipColor, String chipText) {
         android.view.View row = inflater.inflate(R.layout.item_verification_row, container, false);
         android.widget.TextView titleTv = row.findViewById(R.id.itemTitle);
         android.widget.TextView detailTv = row.findViewById(R.id.itemDetail);
@@ -260,13 +307,8 @@ public class SettingsActivity extends AppCompatActivity {
 
         titleTv.setText(title);
         detailTv.setText(detail);
-        if (ok) {
-            statusChip.setText(okText != null ? okText : "OK");
-            statusChip.setTextColor(0xFF10B981);
-        } else {
-            statusChip.setText(failText != null ? failText : "НЕТ");
-            statusChip.setTextColor(0xFFF43F5E);
-        }
+        statusChip.setText(chipText != null ? chipText : "OK");
+        statusChip.setTextColor(chipColor);
         container.addView(row);
     }
 

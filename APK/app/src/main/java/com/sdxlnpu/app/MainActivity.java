@@ -923,7 +923,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
             if (activeBaseDir != null && !activeBaseDir.isEmpty()) {
-                // 1. Scan lora/ and loras/ folders
+                // 1. Scan lora/ and loras/ folders for compiled NPU .bin.bin files
                 File[] loraDirs = new File[] {
                     new File(activeBaseDir, "lora"),
                     new File(activeBaseDir, "loras")
@@ -934,9 +934,8 @@ public class MainActivity extends AppCompatActivity {
                         if (loraFiles != null) {
                             for (File f : loraFiles) {
                                 String name = f.getName();
-                                if (f.isDirectory() && isValidLoraDirName(name)) {
-                                    if (!items.contains(name)) items.add(name);
-                                } else if (f.isFile() && (name.endsWith(".safetensors") || name.endsWith(".bin") || name.endsWith(".bin.bin"))) {
+                                // ONLY add compiled NPU binary files (.bin.bin or .serialized.bin)
+                                if (f.isFile() && (name.endsWith(".bin.bin") || name.endsWith(".serialized.bin"))) {
                                     if (!items.contains(name)) items.add(name);
                                 }
                             }
@@ -944,23 +943,9 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
 
-                // 2. Scan context/
+                // 2. Scan context/lora_slots/ for directories containing compiled .bin.bin
                 File contextDir = new File(activeBaseDir, "context");
                 if (contextDir.exists() && contextDir.isDirectory()) {
-                    File[] subDirs = contextDir.listFiles(File::isDirectory);
-                    if (subDirs != null) {
-                        for (File subDir : subDirs) {
-                            String name = subDir.getName();
-                            // Skip system directories and resolutions
-                            if (isValidLoraDirName(name)) {
-                                if (!items.contains(name)) {
-                                    items.add(name);
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. Scan context/lora_slots/
                     File loraSlotsDir = new File(contextDir, "lora_slots");
                     if (loraSlotsDir.exists() && loraSlotsDir.isDirectory()) {
                         File[] slotDirs = loraSlotsDir.listFiles(File::isDirectory);
@@ -968,8 +953,11 @@ public class MainActivity extends AppCompatActivity {
                             for (File loraDir : slotDirs) {
                                 String name = loraDir.getName();
                                 if (isValidLoraDirName(name)) {
-                                    if (!items.contains(name)) {
-                                        items.add(name);
+                                    File[] slotFiles = loraDir.listFiles((dir, fn) -> fn.endsWith(".bin.bin") || fn.endsWith(".serialized.bin"));
+                                    if (slotFiles != null && slotFiles.length > 0) {
+                                        if (!items.contains(name)) {
+                                            items.add(name);
+                                        }
                                     }
                                 }
                             }

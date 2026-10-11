@@ -33,7 +33,7 @@
     <string name="settings_verify">Проверить файлы</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_reset">Сброс</string>
-    <string name="settings_structure_info">Структура папки моделей:\n/context/\n  clip_l.serialized.bin.bin\n  clip_g.serialized.bin.bin\n  unet_base.serialized.bin.bin (Base SDXL)\n  unet_encoder_fp16.serialized.bin.bin (Lightning split)\n  unet_decoder_fp16.serialized.bin.bin (Lightning split)\n  vae_decoder.serialized.bin.bin\n/lora/ (или /loras/)\n  *.safetensors или *.bin\n/tokenizer/\n  vocab.json\n  merges.txt\n/lib/ (QNN runtime)\n/bin/ (qnn-multi-context-server)</string>
+    <string name="settings_structure_info">Структура папки моделей:\n/context/\n  clip_l.serialized.bin.bin\n  clip_g.serialized.bin.bin\n  unet_base.serialized.bin.bin (Base SDXL)\n  unet_encoder_fp16.serialized.bin.bin (Lightning split)\n  unet_decoder_fp16.serialized.bin.bin (Lightning split)\n  vae_decoder.serialized.bin.bin\n  lora_slots/&lt;слот&gt;/ (папки с .bin.bin)\n/lora/ (или /loras/)\n  *.bin.bin (готовые к NPU LoRA)\n  *.safetensors (исходники, требуют .bin.bin)\n/tokenizer/\n  vocab.json\n  merges.txt\n/lib/ (QNN runtime)\n/bin/ (qnn-multi-context-server)</string>
     <string name="size_preset_label">Пресет:</string>
     <string name="size_preset_custom">Свой размер</string>
     <string name="size_preset_format" formatted="false">%1$d×%2$d</string>
