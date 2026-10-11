@@ -146,6 +146,43 @@
 
 ---
 
+## Архив релизной линии 0.6.x
+
+### v0.6.0 — Native C-Engine, Zero-Root & Zero-Termux, Dynamic Resolution (72.7% Memory Roofline)
+- Полный отказ от Termux (удалено 60 `.deb` пакетов) и Python runtime.
+- Вся генерация реализована в автономном нативном C-бинарнике `qnn-multi-context-server`: BPE-токенизатор, проекции `temb` с NEON FP16/FP32, Box-Muller генератор шума MT19937, Euler Discrete Scheduler, VAE декодер, adaptive sharpening и PNG кодировщик.
+- Полный переход на монолитный W8A16 UNet (`2.44 GB`): шаг денойзинга ускорен до **880 мс** на Snapdragon 8 Elite (Duty cycle NPU = 98.7%, 72.7% от физического memory roofline).
+- Динамическое разрешение (Centered Spatial-CFG Framing): генерация любых пропорций (`1024×1024`, `832×1216`, `1344×1728`, `1024×768`) без артефактов зеркалирования.
+
+### v0.6.1 — Hotfix FastRPC cDSP Transport & Root Detection
+- Расширен поиск `libQnnHtpV79Skel.so` в `ADSP_LIBRARY_PATH` и вендорных путях cDSP.
+- Добавлено явное связывание с `/vendor/lib64/libcdsprpc.so` для инициализации `rpcmem` ION.
+
+### v0.6.2 — Zero-Root Standalone NPU Engine & Modern Material 3 UI
+- Ликвидирована зависимость от `su` / Magisk: нативный движок запускается в чистом Android Userspace.
+- Qualcomm FastRPC `libcdsprpc.so` упакована в payload APK и загружается глобально с `RTLD_GLOBAL`, решая ошибку `loadRemoteSymbols failed with err 4000`.
+- Progressive CFG dCache включён по умолчанию (~7.0 с на денойзинг 8 шагов).
+- Полный редизайн интерфейса в темный стиль Material 3: пресеты разрешений, кнопка рандомизации Seed (RND), карточная структура.
+
+### v0.6.3 — Динамическая LoRA & Индустриальный темный UI
+- Реализованы аргументы `--lora <slot|path>` и `--lora_scale <float>` в C-движке с автоматическим поиском слотов.
+- Сдержанная индустриальная тёмная тема (`#08090C`, `#111318`, акцент `#38BDF8`), строгие шрифты и радиусы.
+
+### v0.6.4 — True Zero-Root Linker Isolation Fix
+- Устранена изоляция Android Bionic Dynamic Linker: развертывание нативного C-движка в `/data/local/tmp/sdxl_app_engine/` (`dir.unrestricted`), открывая прямой доступ к `/dev/fastrpc-cdsp` без root.
+- Полный сквозной цикл генерации в Android userspace подтверждён: холостой старт ~20 с, денойзинг 10.59 с.
+
+### v0.6.5 — KSampler Expanded Controls, Dynamic dCache (70%), 30s Keep-Alive & Context Reuse (0 ms reload)
+- Расширенные параметры KSampler: выбор Шедулера (`Normal`, `Karras` EDM $\rho=7$, `Exponential`), Seed + RND, шаги 1–50 (дефолт 20), CFG 1.0–12.0 (дефолт 5.0).
+- Базовая модель по умолчанию — чистый base SDXL (`unet_base.serialized.bin.bin`, 2.44 GB).
+- Progressive CFG привязан к % шагов (`--dcache_pct 70`): первые 70% шагов (1–14) честный 2-проходный CFG, финишные 30% (15–20) — скоростное dCache кэширование дельты.
+- Цикл `--keep_alive 30` и протокол STDIN команд (`GENERATE`, `PRELOAD`, `UNLOAD`): контексты UNet и VAE удерживаются в cDSP 30 секунд; повторная генерация переиспользует загруженную модель мгновенно (**0 мс задержки на загрузку весов**).
+- Современный Material 3 диалог проверки файлов окружения с чипами статуса.
+- Поддержка папок `/sdcard/Download/sdxl_qnn/lora/` и `/loras/` с автопополнением выпадающего списка.
+- Вкладка WAN 2.1 деактивирована с отметкой `(доработка)`.
+
+---
+
 ## Архив экспериментов по оптимизации
 
 ### Zero-copy pointer swap (Ограничение QNN HTP & Решение)

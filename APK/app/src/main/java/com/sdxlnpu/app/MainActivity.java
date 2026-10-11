@@ -114,6 +114,8 @@ public class MainActivity extends AppCompatActivity {
     private CheckBox contrastStretch;
     private CheckBox livePreview;
     private CheckBox progressiveCfg;
+    private TextView progressiveCfgDesc;
+    private Spinner schedulerSpinner;
     private LinearLayout wanSettingsContainer;
     private SeekBar framesSeekBar;
     private TextView framesLabel;
@@ -134,6 +136,18 @@ public class MainActivity extends AppCompatActivity {
     private TextView statusText;
     private TextView timingText;
     private ImageView imagePreview;
+
+    private static class NativeSession {
+        Process process;
+        OutputStream stdinWriter;
+        BufferedReader stdoutReader;
+        int width;
+        int height;
+        String loraSlot;
+    }
+    private final Object nativeSessionLock = new Object();
+    private NativeSession currentNativeSession = null;
+    private static final String PREF_PREFIX_SCHEDULER = "last_scheduler_";
 
     private ExecutorService executor;
     private ExecutorService previewExecutor;
@@ -229,6 +243,8 @@ public class MainActivity extends AppCompatActivity {
         contrastStretch = findViewById(R.id.contrastStretch);
         livePreview     = findViewById(R.id.livePreview);
         progressiveCfg  = findViewById(R.id.progressiveCfg);
+        progressiveCfgDesc = findViewById(R.id.progressiveCfgDesc);
+        schedulerSpinner = findViewById(R.id.schedulerSpinner);
         wanSettingsContainer = findViewById(R.id.wanSettingsContainer);
         framesSeekBar = findViewById(R.id.framesSeekBar);
         framesLabel = findViewById(R.id.framesLabel);
@@ -299,6 +315,7 @@ public class MainActivity extends AppCompatActivity {
         configureModelFamilyTabs();
         configureSizePresetSpinner();
         configureLoraSpinner();
+        configureSchedulerSpinner();
         widthInput.addTextChangedListener(sizeInputWatcher);
         heightInput.addTextChangedListener(sizeInputWatcher);
         selectSizePresetForCurrentInputs();
@@ -307,10 +324,16 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 stepsLabel.setText(String.format(Locale.US, "Steps: %d", progress));
+                updateProgressiveCfgLabel();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+
+        if (progressiveCfg != null) {
+            progressiveCfg.setOnCheckedChangeListener((buttonView, isChecked) -> updateProgressiveCfgLabel());
+        }
+        updateProgressiveCfgLabel();
 
         cfgSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -349,8 +372,20 @@ public class MainActivity extends AppCompatActivity {
         }
         if (unloadButton != null) {
             unloadButton.setOnClickListener(v -> {
+                synchronized (nativeSessionLock) {
+                    if (currentNativeSession != null) {
+                        try {
+                            if (currentNativeSession.stdinWriter != null) {
+                                currentNativeSession.stdinWriter.write("UNLOAD\n".getBytes(StandardCharsets.UTF_8));
+                                currentNativeSession.stdinWriter.flush();
+                            }
+                        } catch (Exception ignored) {}
+                        try { currentNativeSession.process.destroyForcibly(); } catch (Exception ignored) {}
+                        currentNativeSession = null;
+                    }
+                }
                 killServerAndDaemons(false);
-                updateStatus("Пул памяти очищен", 0);
+                updateStatus("Пул памяти очищен (NPU выгружен)", 0);
             });
         }
         saveButton.setOnClickListener(v -> saveImage());
@@ -420,6 +455,19 @@ public class MainActivity extends AppCompatActivity {
     private void killServerAndDaemons(boolean synchronous) {
         // Kill the prewarmProcess first
         killPrewarmNow("killServerAndDaemons requested");
+
+        synchronized (nativeSessionLock) {
+            if (currentNativeSession != null) {
+                try {
+                    if (currentNativeSession.stdinWriter != null) {
+                        currentNativeSession.stdinWriter.write("UNLOAD\n".getBytes(StandardCharsets.UTF_8));
+                        currentNativeSession.stdinWriter.flush();
+                    }
+                } catch (Exception ignored) {}
+                try { currentNativeSession.process.destroyForcibly(); } catch (Exception ignored) {}
+                currentNativeSession = null;
+            }
+        }
 
         Runnable runKill = () -> {
             try {
@@ -630,6 +678,9 @@ public class MainActivity extends AppCompatActivity {
         editor.putBoolean(prefKeyForFamily(PREF_PREFIX_CONTRAST, modelFamily), contrastStretch.isChecked());
         editor.putBoolean(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily), livePreview.isChecked());
         editor.putBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), progressiveCfg.isChecked());
+        if (schedulerSpinner != null && schedulerSpinner.getSelectedItem() != null) {
+            editor.putString(prefKeyForFamily(PREF_PREFIX_SCHEDULER, modelFamily), schedulerSpinner.getSelectedItem().toString());
+        }
         if (framesSeekBar != null) editor.putInt(prefKeyForFamily(PREF_PREFIX_FRAMES, modelFamily), framesSeekBar.getProgress());
         if (fpsSeekBar != null) editor.putInt(prefKeyForFamily(PREF_PREFIX_FPS, modelFamily), fpsSeekBar.getProgress());
     }
@@ -639,8 +690,8 @@ public class MainActivity extends AppCompatActivity {
             String modelFamily,
             boolean allowLegacyFallback) {
         final boolean wanMode = MODEL_FAMILY_WAN21.equals(modelFamily);
-        final int defaultSteps = wanMode ? 30 : 8;
-        final int defaultCfgX10 = wanMode ? 10 : 35;
+        final int defaultSteps = wanMode ? 30 : 20;
+        final int defaultCfgX10 = wanMode ? 10 : 50;
         final String defaultWidth = wanMode ? "832" : "1024";
         final String defaultHeight = wanMode ? "480" : "1024";
 
@@ -662,8 +713,8 @@ public class MainActivity extends AppCompatActivity {
             ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_LIVE_PREVIEW, modelFamily), false)
             : null;
         Boolean progCfg = prefs.contains(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily))
-            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), false)
-            : null;
+            ? prefs.getBoolean(prefKeyForFamily(PREF_PREFIX_PROGRESSIVE_CFG, modelFamily), true)
+            : true;
         Integer frames = prefs.contains(prefKeyForFamily(PREF_PREFIX_FRAMES, modelFamily))
             ? prefs.getInt(prefKeyForFamily(PREF_PREFIX_FRAMES, modelFamily), 81)
             : null;
@@ -735,30 +786,43 @@ public class MainActivity extends AppCompatActivity {
         modelFamilyTabs.removeAllTabs();
         modelFamilyTabs.addTab(
             modelFamilyTabs.newTab().setText(getString(R.string.model_family_tab_sdxl)),
-            MODEL_FAMILY_SDXL.equals(selectedModelFamily)
+            true
         );
-        modelFamilyTabs.addTab(
-            modelFamilyTabs.newTab().setText(getString(R.string.model_family_tab_wan)),
-            MODEL_FAMILY_WAN21.equals(selectedModelFamily)
-        );
+        TabLayout.Tab wanTab = modelFamilyTabs.newTab().setText(getString(R.string.model_family_tab_wan));
+        modelFamilyTabs.addTab(wanTab, false);
+        if (wanTab.view != null) {
+            wanTab.view.setEnabled(false);
+            wanTab.view.setAlpha(0.45f);
+        }
+
         modelFamilyTabs.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
             @Override
             public void onTabSelected(TabLayout.Tab tab) {
                 if (tab == null) {
                     return;
                 }
-                String modelFamily = tab.getPosition() == 1
-                    ? MODEL_FAMILY_WAN21
-                    : MODEL_FAMILY_SDXL;
-                switchModelFamily(modelFamily);
+                if (tab.getPosition() == 1) {
+                    Toast.makeText(MainActivity.this, "Вкладка WAN 2.1 находится в доработке", Toast.LENGTH_SHORT).show();
+                    mainHandler.post(() -> {
+                        TabLayout.Tab sdxlTab = modelFamilyTabs.getTabAt(0);
+                        if (sdxlTab != null && !sdxlTab.isSelected()) sdxlTab.select();
+                    });
+                    return;
+                }
+                switchModelFamily(MODEL_FAMILY_SDXL);
             }
 
             @Override
             public void onTabUnselected(TabLayout.Tab tab) {}
 
             @Override
-            public void onTabReselected(TabLayout.Tab tab) {}
+            public void onTabReselected(TabLayout.Tab tab) {
+                if (tab != null && tab.getPosition() == 1) {
+                    Toast.makeText(MainActivity.this, "Вкладка WAN 2.1 находится в доработке", Toast.LENGTH_SHORT).show();
+                }
+            }
         });
+        selectedModelFamily = MODEL_FAMILY_SDXL;
         syncModelFamilyTabSelection();
     }
 
@@ -859,17 +923,22 @@ public class MainActivity extends AppCompatActivity {
         try {
             String activeBaseDir = resolveActiveBaseDir(MODEL_FAMILY_SDXL);
             if (activeBaseDir != null && !activeBaseDir.isEmpty()) {
-                // 1. Scan loras/ folder
-                File lorasDir = new File(activeBaseDir, "loras");
-                if (lorasDir.exists() && lorasDir.isDirectory()) {
-                    File[] loraFiles = lorasDir.listFiles();
-                    if (loraFiles != null) {
-                        for (File f : loraFiles) {
-                            String name = f.getName();
-                            if (f.isDirectory() && isValidLoraDirName(name)) {
-                                if (!items.contains(name)) items.add(name);
-                            } else if (f.isFile() && (name.endsWith(".safetensors") || name.endsWith(".bin") || name.endsWith(".bin.bin"))) {
-                                if (!items.contains(name)) items.add(name);
+                // 1. Scan lora/ and loras/ folders
+                File[] loraDirs = new File[] {
+                    new File(activeBaseDir, "lora"),
+                    new File(activeBaseDir, "loras")
+                };
+                for (File ldir : loraDirs) {
+                    if (ldir.exists() && ldir.isDirectory()) {
+                        File[] loraFiles = ldir.listFiles();
+                        if (loraFiles != null) {
+                            for (File f : loraFiles) {
+                                String name = f.getName();
+                                if (f.isDirectory() && isValidLoraDirName(name)) {
+                                    if (!items.contains(name)) items.add(name);
+                                } else if (f.isFile() && (name.endsWith(".safetensors") || name.endsWith(".bin") || name.endsWith(".bin.bin"))) {
+                                    if (!items.contains(name)) items.add(name);
+                                }
                             }
                         }
                     }
@@ -894,9 +963,9 @@ public class MainActivity extends AppCompatActivity {
                     // 3. Scan context/lora_slots/
                     File loraSlotsDir = new File(contextDir, "lora_slots");
                     if (loraSlotsDir.exists() && loraSlotsDir.isDirectory()) {
-                        File[] loraDirs = loraSlotsDir.listFiles(File::isDirectory);
-                        if (loraDirs != null) {
-                            for (File loraDir : loraDirs) {
+                        File[] slotDirs = loraSlotsDir.listFiles(File::isDirectory);
+                        if (slotDirs != null) {
+                            for (File loraDir : slotDirs) {
                                 String name = loraDir.getName();
                                 if (isValidLoraDirName(name)) {
                                     if (!items.contains(name)) {
@@ -952,6 +1021,45 @@ public class MainActivity extends AppCompatActivity {
             return false;
         }
         return true;
+    }
+
+    private void configureSchedulerSpinner() {
+        if (schedulerSpinner == null) return;
+        List<String> schedulers = new ArrayList<>();
+        schedulers.add("Normal");
+        schedulers.add("Karras");
+        schedulers.add("Exponential");
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, schedulers);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        schedulerSpinner.setAdapter(adapter);
+
+        SharedPreferences prefs = getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE);
+        String savedSched = prefs.getString(PREF_PREFIX_SCHEDULER + getSelectedModelFamily(), "Normal");
+        int idx = schedulers.indexOf(savedSched);
+        if (idx >= 0) schedulerSpinner.setSelection(idx);
+
+        schedulerSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                String selected = schedulers.get(position);
+                prefs.edit().putString(PREF_PREFIX_SCHEDULER + getSelectedModelFamily(), selected).apply();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+    }
+
+    private void updateProgressiveCfgLabel() {
+        if (progressiveCfgDesc == null || stepsSeekBar == null) return;
+        int steps = stepsSeekBar.getProgress();
+        int cutoff = (int) Math.ceil(steps * 0.70);
+        if (cutoff < 1) cutoff = 1;
+        if (cutoff > steps) cutoff = steps;
+        if (progressiveCfg != null && progressiveCfg.isChecked()) {
+            progressiveCfgDesc.setText(String.format(Locale.US,
+                "CFG активен первые 70%% шагов (шаги 1–%d), далее dCache кэширует дельту шума (1.6× ускорение)", cutoff));
+        } else {
+            progressiveCfgDesc.setText("Progressive CFG отключен (полный 2-проходный CFG на всех шагах)");
+        }
     }
 
     private static int parsePositiveInt(EditText input) {
@@ -1880,49 +1988,249 @@ public class MainActivity extends AppCompatActivity {
                 : new File(runtimeOutputDir, outName + ".png");
             String outPngPath = outPngFile.getAbsolutePath();
 
-            script.append("#!/system/bin/sh\n");
-            script.append("export LD_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
-                .append(":")
-                .append(shellEscape(activeBaseDir)).append("/lib")
-                .append(":/data/local/tmp/sdxl_app_engine/lib:/data/local/tmp/sdxl_test/lib\"\n");
-            script.append("export ADSP_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
-                .append(";")
-                .append(shellEscape(activeBaseDir)).append("/lib")
-                .append(";/data/local/tmp/sdxl_app_engine/lib;/data/local/tmp/sdxl_test/lib")
-                .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp\"\n");
-            script.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
-            script.append("exec \"").append(shellEscape(nativeServerBin.getAbsolutePath())).append("\"")
-                .append(" --backend \"").append(shellEscape(backendLib.getAbsolutePath())).append("\"")
-                .append(" --system_lib \"").append(shellEscape(systemLib.getAbsolutePath())).append("\"")
-                .append(" --base_dir \"").append(shellEscape(activeBaseDir)).append("\"");
-            if (rpcLib != null && rpcLib.isFile()) {
-                script.append(" --rpc_lib \"").append(shellEscape(rpcLib.getAbsolutePath())).append("\"");
+            String selectedScheduler = "normal";
+            if (schedulerSpinner != null && schedulerSpinner.getSelectedItem() != null) {
+                selectedScheduler = schedulerSpinner.getSelectedItem().toString().toLowerCase(Locale.US);
             }
-            if (tokenizerDir != null && tokenizerDir.exists()) {
-                script.append(" --tokenizer_dir \"").append(shellEscape(tokenizerDir.getAbsolutePath())).append("\"");
-            }
-            script.append(" --prompt \"").append(shellEscape(prompt)).append("\"")
-                .append(" --seed ").append(seed)
-                .append(" --steps ").append(steps)
-                .append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg))
-                .append(" --res ").append(imgWidth).append("x").append(imgHeight)
-                .append(" --out \"").append(shellEscape(outPngPath)).append("\"");
-            if (progCfg && cfg > 1.0f) {
-                script.append(" --prog_cfg");
-            }
-            if (cfg > 1.0f && !neg.isEmpty()) {
-                script.append(" --neg \"").append(shellEscape(neg)).append("\"");
-            }
-            if (stretch) {
-                script.append(" --stretch");
-            }
-            if (loraSlot != null && !loraSlot.isEmpty() && !"None".equalsIgnoreCase(loraSlot) && !"Без LoRA".equalsIgnoreCase(loraSlot)) {
-                script.append(" --lora \"").append(shellEscape(loraSlot)).append("\"");
-                if (Math.abs(loraScaleVal - 1.0f) > 0.01f) {
-                    script.append(" --lora_scale ").append(String.format(Locale.US, "%.2f", loraScaleVal));
+
+            NativeSession session = null;
+            boolean canReuse = false;
+            synchronized (nativeSessionLock) {
+                if (currentNativeSession != null && currentNativeSession.process.isAlive()
+                    && currentNativeSession.width == imgWidth
+                    && currentNativeSession.height == imgHeight
+                    && (currentNativeSession.loraSlot == null || currentNativeSession.loraSlot.equals(loraSlot))) {
+                    session = currentNativeSession;
+                    canReuse = true;
+                } else if (currentNativeSession != null) {
+                    try {
+                        if (currentNativeSession.stdinWriter != null) {
+                            currentNativeSession.stdinWriter.write("UNLOAD\n".getBytes(StandardCharsets.UTF_8));
+                            currentNativeSession.stdinWriter.flush();
+                        }
+                    } catch (Exception ignored) {}
+                    try { currentNativeSession.process.destroyForcibly(); } catch (Exception ignored) {}
+                    currentNativeSession = null;
                 }
             }
-            script.append(" 2>&1\n");
+
+            if (canReuse && session != null) {
+                Log.i(TAG, "Reusing existing Native QNN Server context (0ms load delay)!");
+                updateStatus(isPreloadOnly ? "Контекст уже в памяти NPU (Keep-Alive 30с)" : "Переиспользование NPU контекста (0ms)...", 10);
+            } else {
+                updateStatus(isPreloadOnly ? "Preload: Загрузка UNet и VAE в NPU..." : "Запуск NPU C-Engine (Keep-Alive)...", 5);
+                StringBuilder launchCmd = new StringBuilder();
+                launchCmd.append("export LD_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
+                    .append(":")
+                    .append(shellEscape(activeBaseDir)).append("/lib")
+                    .append(":/data/local/tmp/sdxl_app_engine/lib:/data/local/tmp/sdxl_test/lib\"\n");
+                launchCmd.append("export ADSP_LIBRARY_PATH=\"").append(shellEscape(libDirPath))
+                    .append(";")
+                    .append(shellEscape(activeBaseDir)).append("/lib")
+                    .append(";/data/local/tmp/sdxl_app_engine/lib;/data/local/tmp/sdxl_test/lib")
+                    .append(";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp\"\n");
+                launchCmd.append("cd \"").append(shellEscape(activeBaseDir)).append("\"\n");
+                launchCmd.append("exec \"").append(shellEscape(nativeServerBin.getAbsolutePath())).append("\"")
+                    .append(" --backend \"").append(shellEscape(backendLib.getAbsolutePath())).append("\"")
+                    .append(" --system_lib \"").append(shellEscape(systemLib.getAbsolutePath())).append("\"")
+                    .append(" --base_dir \"").append(shellEscape(activeBaseDir)).append("\"")
+                    .append(" --keep_alive 30");
+                if (rpcLib != null && rpcLib.isFile()) {
+                    launchCmd.append(" --rpc_lib \"").append(shellEscape(rpcLib.getAbsolutePath())).append("\"");
+                }
+                if (tokenizerDir != null && tokenizerDir.exists()) {
+                    launchCmd.append(" --tokenizer_dir \"").append(shellEscape(tokenizerDir.getAbsolutePath())).append("\"");
+                }
+                launchCmd.append(" --res ").append(imgWidth).append("x").append(imgHeight);
+
+                if (isPreloadOnly) {
+                    launchCmd.append(" --preload");
+                } else {
+                    launchCmd.append(" --prompt \"").append(shellEscape(prompt)).append("\"")
+                        .append(" --seed ").append(seed)
+                        .append(" --steps ").append(steps)
+                        .append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg))
+                        .append(" --schedule ").append(shellEscape(selectedScheduler))
+                        .append(" --dcache_pct 70")
+                        .append(" --out \"").append(shellEscape(outPngPath)).append("\"");
+                    if (progCfg && cfg > 1.0f) launchCmd.append(" --prog_cfg");
+                    if (cfg > 1.0f && !neg.isEmpty()) launchCmd.append(" --neg \"").append(shellEscape(neg)).append("\"");
+                    if (stretch) launchCmd.append(" --stretch");
+                    if (loraSlot != null && !loraSlot.isEmpty() && !"None".equalsIgnoreCase(loraSlot) && !"Без LoRA".equalsIgnoreCase(loraSlot)) {
+                        launchCmd.append(" --lora \"").append(shellEscape(loraSlot)).append("\"");
+                        if (Math.abs(loraScaleVal - 1.0f) > 0.01f) {
+                            launchCmd.append(" --lora_scale ").append(String.format(Locale.US, "%.2f", loraScaleVal));
+                        }
+                    }
+                }
+                launchCmd.append(" 2>&1\n");
+
+                ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c", launchCmd.toString());
+                pb.redirectErrorStream(true);
+                Process proc = pb.start();
+                currentProcess = proc;
+
+                session = new NativeSession();
+                session.process = proc;
+                session.stdinWriter = proc.getOutputStream();
+                session.stdoutReader = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+                session.width = imgWidth;
+                session.height = imgHeight;
+                session.loraSlot = loraSlot;
+
+                synchronized (nativeSessionLock) {
+                    currentNativeSession = session;
+                }
+            }
+
+            if (canReuse) {
+                if (isPreloadOnly) {
+                    try {
+                        session.stdinWriter.write("PING\n".getBytes(StandardCharsets.UTF_8));
+                        session.stdinWriter.flush();
+                    } catch (Exception e) {
+                        Log.w(TAG, "Ping failed on reused session", e);
+                    }
+                    mainHandler.post(() -> {
+                        updateStatus("Модели уже в памяти NPU (Keep-Alive 30с)", 100);
+                        generateButton.setEnabled(true);
+                        if (preloadButton != null) preloadButton.setEnabled(true);
+                        stopButton.setVisibility(View.GONE);
+                        progressBar.setVisibility(View.GONE);
+                    });
+                    return;
+                } else {
+                    StringBuilder cmd = new StringBuilder();
+                    cmd.append("GENERATE --prompt \"").append(shellEscape(prompt)).append("\"")
+                        .append(" --seed ").append(seed)
+                        .append(" --steps ").append(steps)
+                        .append(" --cfg ").append(String.format(Locale.US, "%.1f", cfg))
+                        .append(" --schedule ").append(shellEscape(selectedScheduler))
+                        .append(" --dcache_pct 70")
+                        .append(" --res ").append(imgWidth).append("x").append(imgHeight)
+                        .append(" --out \"").append(shellEscape(outPngPath)).append("\"");
+                    if (progCfg && cfg > 1.0f) cmd.append(" --prog_cfg");
+                    if (cfg > 1.0f && !neg.isEmpty()) cmd.append(" --neg \"").append(shellEscape(neg)).append("\"");
+                    if (stretch) cmd.append(" --stretch");
+                    if (loraSlot != null && !loraSlot.isEmpty() && !"None".equalsIgnoreCase(loraSlot) && !"Без LoRA".equalsIgnoreCase(loraSlot)) {
+                        cmd.append(" --lora \"").append(shellEscape(loraSlot)).append("\"");
+                        if (Math.abs(loraScaleVal - 1.0f) > 0.01f) {
+                            cmd.append(" --lora_scale ").append(String.format(Locale.US, "%.2f", loraScaleVal));
+                        }
+                    }
+                    cmd.append("\n");
+                    session.stdinWriter.write(cmd.toString().getBytes(StandardCharsets.UTF_8));
+                    session.stdinWriter.flush();
+                }
+            }
+
+            BufferedReader reader = session.stdoutReader;
+            StringBuilder timingLog = new StringBuilder();
+            StringBuilder rawLog = new StringBuilder();
+            String savedPath = null;
+            int clipDone = 0;
+            isGenerating = true;
+
+            String line;
+            while ((line = reader.readLine()) != null) {
+                Log.i(TAG, "native: " + line);
+                if (rawLog.length() < 16000) rawLog.append(line).append("\n");
+
+                if (line.contains("PRELOAD_READY") || line.contains("[PRELOAD] UNet and VAE loaded successfully")) {
+                    mainHandler.post(() -> {
+                        latestStageStatus = "Модели загружены в NPU (Keep-Alive 30с)!";
+                        renderStatus();
+                        generateButton.setEnabled(true);
+                        if (preloadButton != null) preloadButton.setEnabled(true);
+                        stopButton.setVisibility(View.GONE);
+                        progressBar.setVisibility(View.GONE);
+                    });
+                    if (isPreloadOnly) {
+                        return;
+                    }
+                }
+
+                Matcher m = PAT_UNET.matcher(line);
+                if (m.find()) {
+                    int step = Integer.parseInt(m.group(1));
+                    int total = Integer.parseInt(m.group(2));
+                    int ms = (int) Math.round(Double.parseDouble(m.group(3)));
+                    timingLog.append(String.format(Locale.US, "  UNet %d/%d: %dms\n", step, total, ms));
+                    int pct = 15 + step * 70 / total;
+                    updateStatus(String.format(Locale.US, "UNet %d/%d — %dms", step, total, ms), pct);
+                    continue;
+                }
+
+                m = PAT_CLIP.matcher(line);
+                if (m.find()) {
+                    clipDone++;
+                    String kind = m.group(1);
+                    int msL = (int) Math.round(Double.parseDouble(m.group(2)));
+                    int msG = (int) Math.round(Double.parseDouble(m.group(3)));
+                    timingLog.append(String.format(Locale.US, "CLIP %s: L=%dms G=%dms\n", kind, msL, msG));
+                    updateStatus("CLIP " + kind + "... " + (msL + msG) + "ms", 5 + clipDone * 4);
+                    continue;
+                }
+
+                m = PAT_VAE.matcher(line);
+                if (m.find()) {
+                    int ms = (int) Math.round(Double.parseDouble(m.group(1)));
+                    timingLog.append(String.format(Locale.US, "VAE: %dms\n", ms));
+                    updateStatus("VAE... " + ms + "ms", 88);
+                    continue;
+                }
+
+                m = PAT_SAVED.matcher(line);
+                if (m.find()) {
+                    savedPath = m.group(1).trim();
+                    continue;
+                }
+
+                m = PAT_TOTAL.matcher(line);
+                if (m.find()) {
+                    timingLog.append("Total: ").append(m.group(1)).append("s\n");
+                    continue;
+                }
+
+                if (line.contains("CLIP:") && line.contains("UNet") && line.contains("VAE:")) {
+                    timingLog.append(line.trim()).append("\n");
+                    continue;
+                }
+
+                if (line.contains("GENERATE_DONE") || line.contains("KEEP_ALIVE_READY")) {
+                    break;
+                }
+            }
+
+            isGenerating = false;
+
+            final String finalPath = (savedPath != null && !savedPath.isEmpty()) ? savedPath : outPngPath;
+            File pngFile = new File(finalPath);
+            if (!pngFile.exists()) {
+                throw new IOException("Файл не найден после генерации: " + finalPath + "\n\nЛог:\n" + rawLog);
+            }
+
+            Bitmap bitmap = decodeBitmapForDisplay(finalPath, false);
+            if (bitmap == null) {
+                throw new IOException("Не удалось загрузить сгенерированное изображение: " + finalPath);
+            }
+
+            final String finalTiming = timingLog.toString();
+            mainHandler.post(() -> {
+                clearErrorState();
+                latestTempStatus = "";
+                latestStageStatus = "Готово! (NPU контекст активен 30с)";
+                showFinalBitmap(bitmap);
+                saveButton.setVisibility(View.VISIBLE);
+                stopButton.setVisibility(View.GONE);
+                progressBar.setVisibility(View.GONE);
+                generateButton.setEnabled(true);
+                if (preloadButton != null) preloadButton.setEnabled(true);
+                renderStatus();
+                timingText.setText(finalTiming);
+                timingText.setVisibility(View.VISIBLE);
+            });
+            return;
         } else {
             appendShellEnvironment(script, pythonCommand, activeBaseDir);
             script.append("export MODEL_TO_NPU_MODEL_FAMILY=\"").append(shellEscape(modelFamily)).append("\"\n");

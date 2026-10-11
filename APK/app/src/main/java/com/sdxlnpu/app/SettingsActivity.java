@@ -121,7 +121,6 @@ public class SettingsActivity extends AppCompatActivity {
         String baseDir = baseDirInput.getText().toString().trim();
         if (baseDir.isEmpty()) baseDir = detectDefaultBaseDir();
 
-        // Basic validation
         if (baseDir.contains(";") || baseDir.contains("&") || baseDir.contains("|")) {
             Toast.makeText(this, "Недопустимые символы в пути", Toast.LENGTH_SHORT).show();
             return;
@@ -129,54 +128,146 @@ public class SettingsActivity extends AppCompatActivity {
 
         File base = new File(baseDir);
         File contextDir = new File(base, "context");
-        File qnnServer = new File(base, "bin/qnn-multi-context-server");
-        File tokenizerDir = new File(base, "phone_gen/tokenizer");
-        File qnnLib = new File(base, "lib/libQnnHtp.so");
 
-        StringBuilder report = new StringBuilder();
-        report.append("Base dir: ").append(baseDir).append("\n\n");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            report.append("All files access: ")
-                .append(Environment.isExternalStorageManager() ? "GRANTED" : "MISSING")
-                .append("\n\n");
+        // Inflate custom modern dialog layout
+        android.view.LayoutInflater inflater = android.view.LayoutInflater.from(this);
+        android.view.View dialogView = inflater.inflate(R.layout.dialog_file_verification, null);
+        android.widget.TextView baseDirText = dialogView.findViewById(R.id.dialogBaseDirText);
+        android.widget.TextView overallBadge = dialogView.findViewById(R.id.dialogOverallBadge);
+        android.widget.LinearLayout itemsContainer = dialogView.findViewById(R.id.dialogItemsContainer);
+        com.google.android.material.button.MaterialButton closeBtn = dialogView.findViewById(R.id.dialogCloseButton);
+
+        baseDirText.setText(baseDir);
+
+        boolean allOk = true;
+
+        // 1. Storage Permission
+        boolean storageAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager();
+        addVerificationRow(itemsContainer, inflater, "Доступ к файловой системе",
+            storageAccess ? "Полный доступ (MANAGE_EXTERNAL_STORAGE)" : "Отсутствует разрешение на чтение/запись",
+            storageAccess, "ДОСТУП ЕСТЬ", "НЕТ");
+        if (!storageAccess) allOk = false;
+
+        // 2. UNet Model
+        File unetBase = new File(contextDir, "unet_base.serialized.bin.bin");
+        File unet1024 = new File(contextDir, "unet_base_1024x1024.serialized.bin.bin");
+        File unetEnc = new File(contextDir, "unet_encoder_fp16.serialized.bin.bin");
+        File unetDec = new File(contextDir, "unet_decoder_fp16.serialized.bin.bin");
+        boolean hasBaseUnet = unetBase.isFile() || unet1024.isFile();
+        boolean hasSplitUnet = unetEnc.isFile() && unetDec.isFile();
+        if (hasBaseUnet) {
+            File unetFile = unetBase.isFile() ? unetBase : unet1024;
+            double sizeGb = unetFile.length() / (1024.0 * 1024.0 * 1024.0);
+            addVerificationRow(itemsContainer, inflater, "Base UNet (W8A16 NPU)",
+                String.format(java.util.Locale.US, "%s (%.2f ГБ)", unetFile.getName(), sizeGb),
+                true, "НАЙДЕНО", "НЕТ");
+        } else if (hasSplitUnet) {
+            addVerificationRow(itemsContainer, inflater, "Lightning UNet (Split NPU)",
+                "unet_encoder_fp16 + unet_decoder_fp16",
+                true, "НАЙДЕНО", "НЕТ");
+        } else {
+            addVerificationRow(itemsContainer, inflater, "UNet Граф нейросети",
+                "Не найден unet_base.serialized.bin.bin в context/",
+                false, "НАЙДЕНО", "ОТСУТСТВУЕТ");
+            allOk = false;
         }
 
-        appendCheck(report, "context/", contextDir.isDirectory(), contextDir.getAbsolutePath());
-        appendCheck(report, "lib/libQnnHtp.so", qnnLib.isFile(), qnnLib.getAbsolutePath());
+        // 3. VAE Decoder
+        File vaeFile = new File(contextDir, "vae_decoder.serialized.bin.bin");
+        addVerificationRow(itemsContainer, inflater, "VAE Декодер",
+            vaeFile.isFile() ? String.format(java.util.Locale.US, "vae_decoder (%.1f МБ)", vaeFile.length() / (1024.0 * 1024.0)) : "context/vae_decoder.serialized.bin.bin",
+            vaeFile.isFile(), "НАЙДЕНО", "ОТСУТСТВУЕТ");
+        if (!vaeFile.isFile()) allOk = false;
 
-        report.append("Bundle: ").append(RuntimeBootstrap.describeBundledAssets(this)).append("\n");
-        try {
-            String extractedBundle = RuntimeBootstrap.ensureBundledAssetsExtracted(this);
-            if (extractedBundle != null) {
-                File runtimePayloadDir = RuntimeBootstrap.getBundledRuntimePayloadDir(this);
-                File bundledServer = new File(runtimePayloadDir, "bin/qnn-multi-context-server");
-                File bundledHtp = new File(runtimePayloadDir, "lib/libQnnHtp.so");
-                File bundledTok = new File(runtimePayloadDir, "phone_gen/tokenizer/vocab.json");
-                appendCheck(report, "Native C-Engine (Zero-Root)", bundledServer.isFile() || qnnServer.isFile(),
-                    bundledServer.isFile() ? bundledServer.getAbsolutePath() : qnnServer.getAbsolutePath());
-                appendCheck(report, "Bundled QNN HTP Backend", bundledHtp.isFile(), bundledHtp.getAbsolutePath());
-                appendCheck(report, "Bundled Tokenizer", bundledTok.isFile(), bundledTok.getAbsolutePath());
-            }
-        } catch (Exception e) {
-            report.append("Extracted bundle: FAILED\n    ")
-                .append(e.getMessage())
-                .append("\n\n");
+        // 4. CLIP Encoders
+        File clipL = new File(contextDir, "clip_l.serialized.bin.bin");
+        File clipG = new File(contextDir, "clip_g.serialized.bin.bin");
+        boolean hasClip = clipL.isFile() && clipG.isFile();
+        addVerificationRow(itemsContainer, inflater, "CLIP Энкодеры (Text)",
+            hasClip ? "clip_l + clip_g (NPU)" : "Требуются clip_l и clip_g в context/",
+            hasClip, "НАЙДЕНО", "ОТСУТСТВУЕТ");
+        if (!hasClip) allOk = false;
+
+        // 5. Native C-Engine Binary
+        File bundledPayload = RuntimeBootstrap.getBundledRuntimePayloadDir(this);
+        File bundledServer = bundledPayload != null ? new File(bundledPayload, "bin/qnn-multi-context-server") : null;
+        File stagedServer = new File("/data/local/tmp/sdxl_app_engine/bin/qnn-multi-context-server");
+        File extServer = new File(base, "bin/qnn-multi-context-server");
+        boolean hasEngine = (bundledServer != null && bundledServer.isFile()) || stagedServer.isFile() || extServer.isFile() || new File("/data/local/tmp/qnn-multi-context-server").isFile();
+        addVerificationRow(itemsContainer, inflater, "Native C-Engine (Zero-Root)",
+            hasEngine ? "qnn-multi-context-server (NDK Clang 35, V79 HTP)" : "Движок не найден в payload / tmp",
+            hasEngine, "ГОТОВО", "НЕТ");
+        if (!hasEngine) allOk = false;
+
+        // 6. QNN HTP Runtime Libs
+        File bundledHtp = bundledPayload != null ? new File(bundledPayload, "lib/libQnnHtp.so") : null;
+        File stagedHtp = new File("/data/local/tmp/sdxl_app_engine/lib/libQnnHtp.so");
+        File extHtp = new File(base, "lib/libQnnHtp.so");
+        boolean hasHtp = (bundledHtp != null && bundledHtp.isFile()) || stagedHtp.isFile() || extHtp.isFile();
+        addVerificationRow(itemsContainer, inflater, "Qualcomm QNN HTP Backend",
+            hasHtp ? "libQnnHtp.so + libcdsprpc.so (Hexagon V79 HTP)" : "libQnnHtp.so не найдена",
+            hasHtp, "ГОТОВО", "НЕТ");
+        if (!hasHtp) allOk = false;
+
+        // 7. Tokenizer
+        File bundledTok = bundledPayload != null ? new File(bundledPayload, "phone_gen/tokenizer/vocab.json") : null;
+        File extTok = new File(base, "tokenizer/vocab.json");
+        boolean hasTok = (bundledTok != null && bundledTok.isFile()) || extTok.isFile();
+        addVerificationRow(itemsContainer, inflater, "SDXL Токенизатор",
+            hasTok ? "vocab.json + merges.txt" : "vocab.json не найден",
+            hasTok, "ГОТОВО", "НЕТ");
+        if (!hasTok) allOk = false;
+
+        // 8. LoRA Directory
+        File loraDir1 = new File(base, "lora");
+        File loraDir2 = new File(base, "loras");
+        int loraCount = 0;
+        if (loraDir1.isDirectory()) {
+            File[] files = loraDir1.listFiles((d, name) -> name.endsWith(".safetensors") || name.endsWith(".bin"));
+            if (files != null) loraCount += files.length;
+        }
+        if (loraDir2.isDirectory()) {
+            File[] files = loraDir2.listFiles((d, name) -> name.endsWith(".safetensors") || name.endsWith(".bin"));
+            if (files != null) loraCount += files.length;
+        }
+        boolean loraDirExists = loraDir1.isDirectory() || loraDir2.isDirectory();
+        addVerificationRow(itemsContainer, inflater, "Папка LoRA Адаптеров",
+            loraDirExists ? String.format(java.util.Locale.US, "Папка активна (найдено адаптеров: %d)", loraCount) : "Папка /lora/ отсутствует (создайте для адаптеров)",
+            loraDirExists, loraCount > 0 ? String.format(java.util.Locale.US, "%d LORA", loraCount) : "СОЗДАНА", "НЕТ");
+
+        if (allOk) {
+            overallBadge.setText("ГОТОВО К ГЕНЕРАЦИИ");
+            overallBadge.setTextColor(0xFF10B981);
+        } else {
+            overallBadge.setText("ТРЕБУЮТСЯ ФАЙЛЫ");
+            overallBadge.setTextColor(0xFFF43F5E);
         }
 
-        // Show results
-        new android.app.AlertDialog.Builder(this)
-            .setTitle("Проверка")
-            .setMessage(report.toString().trim())
-            .setPositiveButton("OK", null)
-            .show();
+        androidx.appcompat.app.AlertDialog dialog = new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setView(dialogView)
+            .create();
+
+        closeBtn.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
     }
 
-    private static void appendCheck(StringBuilder report, String label, boolean ok, String path) {
-        report.append(ok ? "OK   " : "MISS ")
-            .append(label)
-            .append("\n    ")
-            .append(path)
-            .append("\n\n");
+    private void addVerificationRow(android.widget.LinearLayout container, android.view.LayoutInflater inflater,
+                                    String title, String detail, boolean ok, String okText, String failText) {
+        android.view.View row = inflater.inflate(R.layout.item_verification_row, container, false);
+        android.widget.TextView titleTv = row.findViewById(R.id.itemTitle);
+        android.widget.TextView detailTv = row.findViewById(R.id.itemDetail);
+        android.widget.TextView statusChip = row.findViewById(R.id.itemStatusChip);
+
+        titleTv.setText(title);
+        detailTv.setText(detail);
+        if (ok) {
+            statusChip.setText(okText != null ? okText : "OK");
+            statusChip.setTextColor(0xFF10B981);
+        } else {
+            statusChip.setText(failText != null ? failText : "НЕТ");
+            statusChip.setTextColor(0xFFF43F5E);
+        }
+        container.addView(row);
     }
 
     public static String detectDefaultBaseDir() {

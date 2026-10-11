@@ -81,6 +81,7 @@ static rpcmem_to_fd_fn_t  g_rpcmem_to_fd  = NULL;
 static rpcmem_init_fn_t   g_rpcmem_init   = NULL;
 static rpcmem_deinit_fn_t g_rpcmem_deinit = NULL;
 static int g_rpcmem_available = 0;
+static int cmd_unload(const char* id);
 
 static void setup_dsp_environment(const char* backend_path, const char* base_dir) {
     char adsp_buf[4096];
@@ -815,10 +816,19 @@ static int register_tensor_mem(Qnn_ContextHandle_t ctx, Qnn_Tensor_t* tensor,
 }
 
 static int cmd_load(const char* id, const char* context_path) {
-    if (find_slot(id) >= 0) {
-        printf("ERR already_loaded %s\n", id);
-        fflush(stdout);
-        return -1;
+    int existing_idx = find_slot(id);
+    if (existing_idx >= 0) {
+        if (strcmp(g_slots[existing_idx].binaryPath, context_path) == 0) {
+            fprintf(stderr, "[server] Slot '%s' is already loaded with '%s', REUSING (0ms reload)\n",
+                    id, context_path);
+            printf("OK %s %u %u\n", g_slots[existing_idx].graphName,
+                   g_slots[existing_idx].numInputs, g_slots[existing_idx].numOutputs);
+            fflush(stdout);
+            return 0;
+        }
+        fprintf(stderr, "[server] Slot '%s' path changed from '%s' to '%s', reloading\n",
+                id, g_slots[existing_idx].binaryPath, context_path);
+        cmd_unload(id);
     }
     if (g_numSlots >= MAX_CONTEXTS) {
         printf("ERR max_contexts_reached\n");
@@ -3767,16 +3777,16 @@ static int file_exists_nonempty(const char* path) {
 static int find_unet_candidate(char* out_path, size_t max_len, const char* dir, int w, int h) {
     char cand[MAX_PATH_LEN];
     if (w > 0 && h > 0) {
-        snprintf(cand, sizeof(cand), "%s/unet_%dx%d.serialized.bin.bin", dir, w, h);
-        if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
         snprintf(cand, sizeof(cand), "%s/unet_base_%dx%d.serialized.bin.bin", dir, w, h);
+        if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+        snprintf(cand, sizeof(cand), "%s/unet_%dx%d.serialized.bin.bin", dir, w, h);
         if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
         snprintf(cand, sizeof(cand), "%s/unet_lightning8step_%dx%d.serialized.bin.bin", dir, w, h);
         if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
     }
-    snprintf(cand, sizeof(cand), "%s/unet.serialized.bin.bin", dir);
-    if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
     snprintf(cand, sizeof(cand), "%s/unet_base.serialized.bin.bin", dir);
+    if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
+    snprintf(cand, sizeof(cand), "%s/unet.serialized.bin.bin", dir);
     if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
     snprintf(cand, sizeof(cand), "%s/unet_lightning8step.serialized.bin.bin", dir);
     if (file_exists_nonempty(cand)) { strncpy(out_path, cand, max_len); return 1; }
@@ -3858,10 +3868,10 @@ static void resolve_bucket_paths(const char* base_dir, int req_W, int req_H, con
         return;
     }
 
-    /* 3. Default fallback */
+    /* 3. Default fallback: pure base SDXL model */
     if (!out_unet_path[0]) {
         if (!find_unet_candidate(out_unet_path, MAX_PATH_LEN, ctx_dir, 0, 0)) {
-            snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_lightning8step.serialized.bin.bin", base_dir);
+            snprintf(out_unet_path, MAX_PATH_LEN, "%s/context/unet_base.serialized.bin.bin", base_dir);
         }
     }
     snprintf(out_vae_path,  MAX_PATH_LEN, "%s/context/vae_decoder.serialized.bin.bin", base_dir);
@@ -3948,13 +3958,88 @@ static void print_npu_utilization_report(int graph_W, int graph_H, int act_W, in
     fprintf(stderr, "======================================================================\n");
 }
 
+static float sigma_to_timestep_f32(const double* all_sigmas, double sigma) {
+    if (sigma <= all_sigmas[0]) return 0.0f;
+    if (sigma >= all_sigmas[999]) return 999.0f;
+    int low = 0, high = 999;
+    while (low <= high) {
+        int mid = (low + high) / 2;
+        if (all_sigmas[mid] < sigma) low = mid + 1;
+        else high = mid - 1;
+    }
+    int k = high;
+    if (k < 0) k = 0;
+    if (k > 998) k = 998;
+    double frac = (sigma - all_sigmas[k]) / (all_sigmas[k + 1] - all_sigmas[k]);
+    if (frac < 0.0) frac = 0.0;
+    if (frac > 1.0) frac = 1.0;
+    return (float)(k + frac);
+}
+
+static void build_denoise_schedule(const char* schedule_type, int steps,
+                                   DenoiseScheduleStep* sched, float* out_sigmas, float* out_timesteps) {
+    double all_sigmas[1000];
+    double alpha_cumprod = 1.0;
+    double b0_sqrt = sqrt(0.00085), b1_sqrt = sqrt(0.012);
+    for (int i = 0; i < 1000; ++i) {
+        double bs = b0_sqrt + (b1_sqrt - b0_sqrt) * ((double)i / 999.0);
+        double beta = bs * bs;
+        alpha_cumprod *= (1.0 - beta);
+        all_sigmas[i] = sqrt((1.0 - alpha_cumprod) / alpha_cumprod);
+    }
+
+    if (schedule_type && (strcmp(schedule_type, "karras") == 0 || strcmp(schedule_type, "Karras") == 0)) {
+        double sigma_max = all_sigmas[999];
+        double sigma_min = all_sigmas[0];
+        double rho = 7.0;
+        double min_inv_rho = pow(sigma_min, 1.0 / rho);
+        double max_inv_rho = pow(sigma_max, 1.0 / rho);
+
+        for (int s = 0; s < steps; ++s) {
+            double r = (steps > 1) ? ((double)s / (double)(steps - 1)) : 0.0;
+            double sig = pow(max_inv_rho + r * (min_inv_rho - max_inv_rho), rho);
+            out_sigmas[s] = (float)sig;
+            out_timesteps[s] = sigma_to_timestep_f32(all_sigmas, sig);
+        }
+    } else if (schedule_type && (strcmp(schedule_type, "exponential") == 0 || strcmp(schedule_type, "Exponential") == 0)) {
+        double sigma_max = all_sigmas[999];
+        double sigma_min = all_sigmas[0];
+        for (int s = 0; s < steps; ++s) {
+            double r = (steps > 1) ? ((double)s / (double)(steps - 1)) : 0.0;
+            double sig = sigma_max * pow(sigma_min / sigma_max, r);
+            out_sigmas[s] = (float)sig;
+            out_timesteps[s] = sigma_to_timestep_f32(all_sigmas, sig);
+        }
+    } else {
+        /* Standard normal schedule (Euler discrete leading) */
+        int step_ratio = 1000 / steps;
+        for (int s = 0; s < steps; ++s) {
+            int t_val = (steps - 1 - s) * step_ratio + 1;
+            if (t_val < 0) t_val = 0;
+            if (t_val > 999) t_val = 999;
+            out_timesteps[s] = (float)t_val;
+            out_sigmas[s] = (float)all_sigmas[t_val];
+        }
+    }
+    out_sigmas[steps] = 0.0f;
+    for (int s = 0; s < steps; ++s) {
+        sched[s].step = s;
+        sched[s].timestep = out_timesteps[s];
+        sched[s].sigma = out_sigmas[s];
+        sched[s].sigma_next = out_sigmas[s + 1];
+    }
+}
+
 static int run_standalone_generate(const char* base_dir, const char* tokenizer_dir,
                                    const char* prompt, const char* neg_prompt,
                                    uint32_t seed, int steps, float cfg_scale, int cfg_cutoff_arg,
                                    int cfg_cache_mode, int req_width, int req_height, int pad_mode,
                                    const char* unet_mode, const char* lora_slot, float lora_scale,
+                                   const char* schedule_type, int dcache_pct,
                                    const char* out_png_path) {
     double t_total0 = now_ms();
+    if (!schedule_type || !schedule_type[0]) schedule_type = "normal";
+    if (dcache_pct <= 0) dcache_pct = 70;
 
     /* Validate & snap requested resolution to multiples of 8 within [512x512, 1536x1536] pixel budget */
     int width  = ((req_width  + 4) / 8) * 8;
@@ -3978,7 +4063,16 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
     }
 
     int use_cfg = (cfg_scale > 1.0f);
-    int cfg_cutoff = (use_cfg && cfg_cutoff_arg > 0 && cfg_cutoff_arg < steps) ? cfg_cutoff_arg : steps;
+    int cfg_cutoff = steps;
+    if (use_cfg) {
+        if (cfg_cutoff_arg > 0 && cfg_cutoff_arg <= steps) {
+            cfg_cutoff = cfg_cutoff_arg;
+        } else if (dcache_pct > 0 && dcache_pct <= 100) {
+            cfg_cutoff = (int)ceil((double)steps * ((double)dcache_pct / 100.0));
+            if (cfg_cutoff < 1) cfg_cutoff = 1;
+            if (cfg_cutoff > steps) cfg_cutoff = steps;
+        }
+    }
     if (!neg_prompt || !neg_prompt[0]) {
         neg_prompt = use_cfg ? "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, blurry" : "";
     }
@@ -4004,8 +4098,9 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
     if (lora_slot && lora_slot[0] && strcmp(lora_slot, "None") != 0) {
         fprintf(stderr, "LoRA:       %s (weight=%.2f)\n", lora_slot, lora_scale);
     }
-    fprintf(stderr, "Mode:       %s (steps=%d, cfg=%.2f, cutoff=%d/%d [%s], seed=%u)\n",
-            unet_mode, steps, cfg_scale, cfg_cutoff, steps, cache_name, seed);
+    fprintf(stderr, "Mode:       %s (steps=%d, cfg=%.2f, cutoff=%d/%d [%s %d%%], sched=%s, seed=%u)\n",
+            unet_mode, steps, cfg_scale, cfg_cutoff, steps, cache_name, dcache_pct,
+            schedule_type, seed);
     fprintf(stderr, "Target Res: %dx%d (%.2f MP, pad=%s)\n",
             width, height, ((double)width * height) / 1e6, pad_name);
     fprintf(stderr, "Output:     %s\n", out_png_path);
@@ -4169,35 +4264,12 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
         }
     }
 
-    /* 4. Euler Discrete Scheduler + NumPy-exact Initial Latent for [1, 4, latent_h, latent_w] */
-    double all_sigmas[1000];
-    double alpha_cumprod = 1.0;
-    double b0_sqrt = sqrt(0.00085), b1_sqrt = sqrt(0.012);
-    for (int i = 0; i < 1000; ++i) {
-        double bs = b0_sqrt + (b1_sqrt - b0_sqrt) * ((double)i / 999.0);
-        double beta = bs * bs;
-        alpha_cumprod *= (1.0 - beta);
-        all_sigmas[i] = sqrt((1.0 - alpha_cumprod) / alpha_cumprod);
-    }
-    DenoiseScheduleStep sched[64];
-    double step_ratio = 1000.0 / (double)steps;
-    float sigmas[65];
-    float timesteps[64];
-    for (int s = 0; s < steps; ++s) {
-        int t_idx = (int)llround(1000.0 - (double)s * step_ratio) - 1;
-        if (t_idx < 0) t_idx = 0;
-        if (t_idx > 999) t_idx = 999;
-        timesteps[s] = (float)t_idx;
-        sigmas[s] = (float)all_sigmas[t_idx];
-    }
-    sigmas[steps] = 0.0f;
-    for (int s = 0; s < steps; ++s) {
-        sched[s].step = s;
-        sched[s].timestep = timesteps[s];
-        sched[s].sigma = sigmas[s];
-        sched[s].sigma_next = sigmas[s + 1];
-    }
-    float init_noise_sigma = sigmas[0];
+    /* 4. Euler Sampler with Selected Schedule (normal, karras, exponential) */
+    DenoiseScheduleStep sched[128];
+    float sigmas[129];
+    float timesteps[128];
+    build_denoise_schedule(schedule_type, steps, sched, sigmas, timesteps);
+    float init_noise_sigma = sqrtf(sigmas[0] * sigmas[0] + 1.0f);
 
     NumpyRng rng;
     np_rng_seed(&rng, seed);
@@ -4486,8 +4558,194 @@ static int run_standalone_generate(const char* base_dir, const char* tokenizer_d
 }
 
 /* ========================================================================= */
-/*  Main                                                                     */
+/*  Keep-Alive Loop, Preload & Main                                         */
 /* ========================================================================= */
+
+static int parse_cmdline_args(char* cmdline, char* argv[], int max_args) {
+    int argc = 0;
+    char* p = cmdline;
+    while (*p && argc < max_args - 1) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (!*p) break;
+        if (*p == '"' || *p == '\'') {
+            char quote = *p++;
+            argv[argc++] = p;
+            while (*p && *p != quote) p++;
+            if (*p) *p++ = '\0';
+        } else {
+            argv[argc++] = p;
+            while (*p && !isspace((unsigned char)*p)) p++;
+            if (*p) *p++ = '\0';
+        }
+    }
+    argv[argc] = NULL;
+    return argc;
+}
+
+static int run_keep_alive_loop(int keep_alive_sec, const char* default_base_dir, const char* default_tok_dir) {
+    char line[MAX_LINE_LEN];
+    fprintf(stderr, "[server] Entering keep-alive loop (timeout=%ds). Waiting for commands on stdin...\n", keep_alive_sec);
+    while (1) {
+        if (keep_alive_sec > 0) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(STDIN_FILENO, &rfds);
+            struct timeval tv;
+            tv.tv_sec = keep_alive_sec;
+            tv.tv_usec = 0;
+            int sel = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+            if (sel < 0) {
+                if (errno == EINTR) continue;
+                fprintf(stderr, "[server] select error: %s\n", strerror(errno));
+                break;
+            }
+            if (sel == 0) {
+                fprintf(stderr, "[server] Keep-alive timeout (%ds) reached. Cleanly releasing cDSP memory and exiting.\n", keep_alive_sec);
+                printf("KEEP_ALIVE_TIMEOUT\n");
+                fflush(stdout);
+                break;
+            }
+        }
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            fprintf(stderr, "[server] Stdin closed (EOF). Cleanly releasing memory and exiting.\n");
+            break;
+        }
+
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len == 0) continue;
+
+        if (strncmp(line, "GENERATE", 8) == 0) {
+            char* args_str = line + 8;
+            while (*args_str == ' ') args_str++;
+            char* g_argv[64];
+            g_argv[0] = "generate";
+            int g_argc = 1 + parse_cmdline_args(args_str, g_argv + 1, 62);
+
+            const char* prompt = NULL;
+            const char* neg_prompt = NULL;
+            const char* base_dir = default_base_dir;
+            const char* tokenizer_dir = default_tok_dir;
+            const char* unet_mode = "mono";
+            const char* lora_slot = NULL;
+            float lora_scale = 1.0f;
+            const char* out_png = "/sdcard/Download/sdxl_qnn/outputs/standalone_out.png";
+            const char* schedule_type = "normal";
+            uint32_t seed = 42;
+            int steps = 20;
+            float cfg_scale = 5.0f;
+            int cfg_cutoff = 0;
+            int cfg_cache_mode = 0;
+            int dcache_pct = 70;
+            int req_width = 1024;
+            int req_height = 1024;
+            int pad_mode = 0;
+
+            for (int i = 1; i < g_argc; ++i) {
+                if (strcmp(g_argv[i], "--prompt") == 0 && i + 1 < g_argc) {
+                    prompt = g_argv[++i];
+                } else if (strcmp(g_argv[i], "--neg") == 0 && i + 1 < g_argc) {
+                    neg_prompt = g_argv[++i];
+                } else if (strcmp(g_argv[i], "--width") == 0 && i + 1 < g_argc) {
+                    req_width = atoi(g_argv[++i]);
+                } else if (strcmp(g_argv[i], "--height") == 0 && i + 1 < g_argc) {
+                    req_height = atoi(g_argv[++i]);
+                } else if (strcmp(g_argv[i], "--res") == 0 && i + 1 < g_argc) {
+                    const char* rstr = g_argv[++i];
+                    int rw = 0, rh = 0;
+                    if (sscanf(rstr, "%dx%d", &rw, &rh) == 2 || sscanf(rstr, "%dX%d", &rw, &rh) == 2) {
+                        req_width = rw; req_height = rh;
+                    }
+                } else if (strcmp(g_argv[i], "--pad_mode") == 0 && i + 1 < g_argc) {
+                    const char* pm = g_argv[++i];
+                    if (strcmp(pm, "tile") == 0) pad_mode = 1;
+                    else if (strcmp(pm, "zero") == 0) pad_mode = 2;
+                    else pad_mode = 0;
+                } else if (strcmp(g_argv[i], "--seed") == 0 && i + 1 < g_argc) {
+                    seed = (uint32_t)strtoul(g_argv[++i], NULL, 10);
+                } else if (strcmp(g_argv[i], "--steps") == 0 && i + 1 < g_argc) {
+                    steps = atoi(g_argv[++i]);
+                } else if (strcmp(g_argv[i], "--cfg") == 0 && i + 1 < g_argc) {
+                    cfg_scale = (float)atof(g_argv[++i]);
+                } else if (strcmp(g_argv[i], "--prog_cfg") == 0 || strcmp(g_argv[i], "--prog-cfg") == 0) {
+                    cfg_cutoff = -1;
+                    if (cfg_cache_mode == 0) cfg_cache_mode = 1;
+                } else if (strcmp(g_argv[i], "--cfg_cutoff") == 0 && i + 1 < g_argc) {
+                    cfg_cutoff = atoi(g_argv[++i]);
+                } else if (strcmp(g_argv[i], "--dcache_pct") == 0 && i + 1 < g_argc) {
+                    dcache_pct = atoi(g_argv[++i]);
+                } else if ((strcmp(g_argv[i], "--schedule") == 0 || strcmp(g_argv[i], "--scheduler") == 0) && i + 1 < g_argc) {
+                    schedule_type = g_argv[++i];
+                } else if (strcmp(g_argv[i], "--cfg_cache") == 0 && i + 1 < g_argc) {
+                    const char* cm = g_argv[++i];
+                    if (strcmp(cm, "delta") == 0) cfg_cache_mode = 1;
+                    else if (strcmp(cm, "uncond") == 0) cfg_cache_mode = 2;
+                    else cfg_cache_mode = 0;
+                } else if (strcmp(g_argv[i], "--full_cfg") == 0 || strcmp(g_argv[i], "--no_prog_cfg") == 0) {
+                    cfg_cutoff = 0;
+                    cfg_cache_mode = 0;
+                } else if (strcmp(g_argv[i], "--stretch") == 0) {
+                    g_use_contrast_stretch = 1;
+                } else if (strcmp(g_argv[i], "--no_stretch") == 0) {
+                    g_use_contrast_stretch = 0;
+                } else if (strcmp(g_argv[i], "--lora") == 0 && i + 1 < g_argc) {
+                    lora_slot = g_argv[++i];
+                } else if (strcmp(g_argv[i], "--lora_scale") == 0 && i + 1 < g_argc) {
+                    lora_scale = (float)atof(g_argv[++i]);
+                } else if (strcmp(g_argv[i], "--base_dir") == 0 && i + 1 < g_argc) {
+                    base_dir = g_argv[++i];
+                } else if (strcmp(g_argv[i], "--tokenizer_dir") == 0 && i + 1 < g_argc) {
+                    tokenizer_dir = g_argv[++i];
+                } else if (strcmp(g_argv[i], "--out") == 0 && i + 1 < g_argc) {
+                    out_png = g_argv[++i];
+                }
+            }
+            if (cfg_cutoff == -1 && cfg_cache_mode > 0) {
+                cfg_cutoff = (int)ceil((double)steps * ((double)dcache_pct / 100.0));
+                if (cfg_cutoff < 1) cfg_cutoff = 1;
+                if (cfg_cutoff > steps) cfg_cutoff = steps;
+            }
+
+            if (prompt) {
+                int rc = run_standalone_generate(base_dir, tokenizer_dir, prompt, neg_prompt, seed, steps,
+                                                 cfg_scale, cfg_cutoff, cfg_cache_mode, req_width, req_height,
+                                                 pad_mode, unet_mode, lora_slot, lora_scale, schedule_type,
+                                                 dcache_pct, out_png);
+                printf("GENERATE_DONE %d\n", rc);
+                printf("KEEP_ALIVE_READY\n");
+                fflush(stdout);
+            } else {
+                printf("ERR missing_prompt\n");
+                fflush(stdout);
+            }
+        } else if (strcmp(line, "UNLOAD") == 0) {
+            fprintf(stderr, "[server] Received UNLOAD: cleaning up cDSP memory\n");
+            for (int i = g_numSlots - 1; i >= 0; --i) {
+                cleanup_slot(&g_slots[i]);
+            }
+            g_numSlots = 0;
+            g_totalLoadedBytes = 0;
+            printf("UNLOAD_OK\n");
+            fflush(stdout);
+            break;
+        } else if (strcmp(line, "QUIT") == 0 || strcmp(line, "EXIT") == 0) {
+            printf("QUIT_OK\n");
+            fflush(stdout);
+            break;
+        } else if (strcmp(line, "PING") == 0) {
+            printf("PONG %d\n", g_numSlots);
+            fflush(stdout);
+        } else {
+            if (dispatch_command_line(line)) {
+                break;
+            }
+        }
+    }
+    return 0;
+}
 
 static void usage(const char* prog) {
     fprintf(stderr,
@@ -4503,10 +4761,14 @@ static void usage(const char* prog) {
         "  --seed <uint>           Random seed (default: 42)\n"
         "  --steps <int>           Denoising steps (default: 8)\n"
         "  --cfg <float>           CFG guidance scale (default: 3.5, 1.0 = no CFG)\n"
-        "  --prog_cfg              Progressive CFG (5/8 steps + sigma-damped delta-cache)\n"
-        "  --cfg_cutoff <int>      Number of initial steps with full 2-pass CFG (1..steps)\n"
+        "  --schedule <type>       Scheduler type: normal (default), karras, exponential\n"
+        "  --prog_cfg              Progressive CFG (cutoff based on --dcache_pct)\n"
+        "  --dcache_pct <int>      Percentage of steps for full CFG before dCache kicks in (default: 70)\n"
+        "  --cfg_cutoff <int>      Override number of initial steps with full 2-pass CFG (1..steps)\n"
         "  --cfg_cache <mode>      After cutoff: none (CFG=1), delta (reuse cond-uncond), uncond (reuse uncond)\n"
         "  --full_cfg              Full CFG on all steps (default)\n"
+        "  --keep_alive <sec>      Keep server alive in memory for N seconds after generation/preload\n"
+        "  --preload               Preload UNet and VAE into cDSP memory immediately\n"
         "  --profile               Print NPU hardware utilization & host bottleneck audit\n"
         "  --legacy_temb           Disable NEON + 64KB block-doubling RPCMEM optimization (for A/B test)\n"
         "  --stretch               Enable [0.5%%, 99.5%%] contrast stretch (legacy, default: disabled)\n"
@@ -4535,14 +4797,18 @@ int main(int argc, char** argv) {
     float lora_scale = 1.0f;
     const char* base_dir = "/sdcard/Download/sdxl_qnn";
     const char* out_png = "/sdcard/Download/sdxl_qnn/outputs/standalone_out.png";
+    const char* schedule_type = "normal";
     uint32_t seed = 42;
     int steps = 8;
     float cfg_scale = 3.5f;
     int cfg_cutoff = 0; /* 0 = full CFG (all steps) */
     int cfg_cache_mode = 0; /* 0 = none (CFG=1 after cutoff), 1 = delta, 2 = uncond */
+    int dcache_pct = 70;
     int req_width = 1024;
     int req_height = 1024;
     int pad_mode = 0; /* 0 = reflect, 1 = tile, 2 = zero */
+    int keep_alive_sec = 0;
+    int do_preload = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
@@ -4579,9 +4845,13 @@ int main(int argc, char** argv) {
             steps = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cfg") == 0 && i + 1 < argc) {
             cfg_scale = (float)atof(argv[++i]);
+        } else if ((strcmp(argv[i], "--schedule") == 0 || strcmp(argv[i], "--scheduler") == 0) && i + 1 < argc) {
+            schedule_type = argv[++i];
         } else if (strcmp(argv[i], "--prog_cfg") == 0 || strcmp(argv[i], "--prog-cfg") == 0) {
-            cfg_cutoff = -1; /* resolve to 5/8 steps + sigma-damped delta-cache after parsing */
+            cfg_cutoff = -1; /* resolve to 70% steps (or --dcache_pct) + sigma-damped delta-cache after parsing */
             if (cfg_cache_mode == 0) cfg_cache_mode = 1;
+        } else if (strcmp(argv[i], "--dcache_pct") == 0 && i + 1 < argc) {
+            dcache_pct = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cfg_cutoff") == 0 && i + 1 < argc) {
             cfg_cutoff = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cfg_cache") == 0 && i + 1 < argc) {
@@ -4592,6 +4862,10 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--full_cfg") == 0 || strcmp(argv[i], "--no_prog_cfg") == 0) {
             cfg_cutoff = 0;
             cfg_cache_mode = 0;
+        } else if (strcmp(argv[i], "--keep_alive") == 0 && i + 1 < argc) {
+            keep_alive_sec = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--preload") == 0) {
+            do_preload = 1;
         } else if (strcmp(argv[i], "--profile") == 0) {
             g_perf.enabled = 1;
         } else if (strcmp(argv[i], "--profile_detailed") == 0) {
@@ -4622,7 +4896,11 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
-    if (cfg_cutoff == -1) cfg_cutoff = (steps * 5 + 4) / 8;
+    if (cfg_cutoff == -1) {
+        cfg_cutoff = (int)ceil((double)steps * ((double)dcache_pct / 100.0));
+        if (cfg_cutoff < 1) cfg_cutoff = 1;
+        if (cfg_cutoff > steps) cfg_cutoff = steps;
+    }
 
     if (!backend_path || !system_path) {
         usage(argv[0]);
@@ -4651,11 +4929,44 @@ int main(int argc, char** argv) {
     /* Set HTP performance mode */
     set_perf_mode();
 
+    /* Preload Mode */
+    if (do_preload) {
+        char unet_path[MAX_PATH_LEN], vae_path[MAX_PATH_LEN];
+        resolve_bucket_paths(base_dir, req_width, req_height, lora_slot, unet_path, vae_path);
+        fprintf(stderr, "[preload] Loading UNet into cDSP: %s\n", unet_path);
+        if (cmd_load("unet", unet_path) != 0) {
+            fprintf(stderr, "[preload] Failed to load UNet\n");
+            cleanup_all();
+            return 1;
+        }
+        fprintf(stderr, "[preload] Loading VAE into cDSP: %s\n", vae_path);
+        if (cmd_load("vae", vae_path) != 0) {
+            fprintf(stderr, "[preload] Failed to load VAE\n");
+            cleanup_all();
+            return 1;
+        }
+        ensure_temb_loaded(unet_path);
+        fprintf(stderr, "[preload] Preload ready. UNet and VAE loaded in cDSP.\n");
+        printf("PRELOAD_READY\n");
+        printf("KEEP_ALIVE_READY\n");
+        fflush(stdout);
+        run_keep_alive_loop(keep_alive_sec > 0 ? keep_alive_sec : 30, base_dir, tokenizer_dir);
+        cleanup_all();
+        return 0;
+    }
+
     /* Standalone CLI Generation Mode */
     if (prompt != NULL) {
         int rc = run_standalone_generate(base_dir, tokenizer_dir, prompt, neg_prompt, seed, steps, cfg_scale,
                                          cfg_cutoff, cfg_cache_mode, req_width, req_height,
-                                         pad_mode, unet_mode, lora_slot, lora_scale, out_png);
+                                         pad_mode, unet_mode, lora_slot, lora_scale, schedule_type,
+                                         dcache_pct, out_png);
+        if (keep_alive_sec > 0 && rc == 0) {
+            printf("GENERATE_DONE %d\n", rc);
+            printf("KEEP_ALIVE_READY\n");
+            fflush(stdout);
+            run_keep_alive_loop(keep_alive_sec, base_dir, tokenizer_dir);
+        }
         cleanup_all();
         return rc;
     }

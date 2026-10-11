@@ -146,6 +146,43 @@ The `0.4.x` line was the period where the repository shifted from a single fixed
 
 ---
 
+## 0.6.x release archive
+
+### v0.6.0 — Native C-Engine, Zero-Root & Zero-Termux, Dynamic Resolution (72.7% Memory Roofline)
+- Complete removal of Termux (60 `.deb` packages deleted) and Python runtime.
+- Full pipeline implemented in standalone native C binary `qnn-multi-context-server`: BPE tokenizer, `temb` projection with NEON FP16/FP32, NumPy-exact MT19937 Box-Muller RNG, Euler Discrete Scheduler, VAE decoder, adaptive sharpening, and PNG encoder.
+- Monolithic W8A16 UNet (`2.44 GB`): step latency dropped to **880 ms** on Snapdragon 8 Elite (NPU duty cycle = 98.7%, 72.7% of physical memory roofline limit).
+- Dynamic resolution (Centered Spatial-CFG Framing): arbitrary aspect ratios (`1024×1024`, `832×1216`, `1344×1728`, `1024×768`) without mirror artifacts.
+
+### v0.6.1 — Hotfix FastRPC cDSP Transport & Root Detection
+- Extended search paths for `libQnnHtpV79Skel.so` in `ADSP_LIBRARY_PATH` and vendor cDSP paths.
+- Explicit linking against `/vendor/lib64/libcdsprpc.so` for `rpcmem` ION buffer initialization.
+
+### v0.6.2 — Zero-Root Standalone NPU Engine & Modern Material 3 UI
+- Removed `su`/Magisk requirements: native engine runs in unprivileged Android Userspace.
+- Qualcomm FastRPC `libcdsprpc.so` packaged into APK payload and loaded globally with `RTLD_GLOBAL`, resolving `loadRemoteSymbols failed with err 4000`.
+- Progressive CFG dCache enabled by default (~7.0s for 8-step denoising).
+- Full Material 3 dark redesign: quick resolution preset chips, Seed randomizer (RND), card-based layout.
+
+### v0.6.3 — Dynamic LoRA & Tactical Dark UI
+- Added `--lora <slot|path>` and `--lora_scale <float>` arguments in C engine with automatic slot discovery.
+- Strict industrial dark theme (`#08090C`, `#111318`, accent `#38BDF8`), clean typography, and disciplined card radiuses.
+
+### v0.6.4 — True Zero-Root Linker Isolation Fix
+- Resolved Android Bionic Dynamic Linker isolation by deploying native engine to `/data/local/tmp/sdxl_app_engine/` (`dir.unrestricted`), granting direct userspace access to `/dev/fastrpc-cdsp` without root.
+- Full end-to-end userspace generation verified: cold start ~20s, denoising 10.59s.
+
+### v0.6.5 — KSampler Expanded Controls, Dynamic dCache (70%), 30s Keep-Alive & Context Reuse (0 ms reload)
+- Expanded KSampler parameters: Scheduler dropdown (`Normal`, `Karras` EDM $\rho=7$, `Exponential`), Seed + RND button, steps slider 1–50 (default 20), CFG slider 1.0–12.0 (default 5.0).
+- Pure base SDXL default (`unet_base.serialized.bin.bin`, 2.44 GB).
+- Progressive CFG tied to % of steps (`--dcache_pct 70`): steps 1–14 run 2-pass CFG, steps 15–20 run 1-pass reusing dCache delta.
+- Server `--keep_alive 30` loop and STDIN protocol (`GENERATE`, `PRELOAD`, `UNLOAD`): UNet and VAE contexts kept in cDSP memory for 30s; subsequent generation reuses loaded model with **0 ms reload delay**.
+- Material 3 environment verification dialog with status chips.
+- Scanning for LoRA files in `/sdcard/Download/sdxl_qnn/lora/` and `/loras/`.
+- Inactive WAN 2.1 tab with notice `(доработка)`.
+
+---
+
 ## Optimization experiments archive
 
 ### Zero-copy pointer swap (QNN HTP Limit & Architecture Fix)

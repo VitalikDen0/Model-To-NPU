@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/bg_main"
+    android:padding="20dp">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Проверка окружения и моделей"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary" />
+
+        <TextView
+            android:id="@+id/dialogOverallBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="ГОТОВО"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/status_green"
+            android:background="@color/surface_card_secondary"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/dialogBaseDirText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="/sdcard/Download/sdxl_qnn"
+        android:textSize="12sp"
+        android:fontFamily="monospace"
+        android:textColor="@color/text_secondary"
+        android:layout_marginBottom="14dp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:maxHeight="420dp"
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:id="@+id/dialogItemsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <!-- Programmatically populated item rows -->
+        </LinearLayout>
+    </ScrollView>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/dialogCloseButton"
+        style="@style/Widget.Material3.Button.TonalButton"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="16dp"
+        android:text="ЗАКРЫТЬ"
+        android:textStyle="bold"
+        android:textSize="13sp"
+        android:textColor="@color/primary_light"
+        app:cornerRadius="8dp" />
+
+</LinearLayout>
